@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Run files, simulated or real, and session logs, at the top level only:
+# tests/data holds the bench fixtures the suite reads
+/data/
+/logs/
+
+# Local reference copies of the old DAQ, the bench tool and the data viewer,
+# each its own repository and not ORACLE's to publish
+ORIGINAL_DAQ_STUFF/
+
+# User settings (the defaults live in cls_acquisition/settings.py), and the
+# window's last inputs
+settings/settings.yaml
+settings/inputs.yaml
+
+# IDE / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# The tagger wrapper, built on the rack PC (cls_acquisition/hardware/timetagger4_wrapper)
+cls_acquisition/hardware/timetagger4_wrapper/*.pyd
+cls_acquisition/hardware/timetagger4_wrapper/*.dll
+cls_acquisition/hardware/timetagger4_wrapper/build/

@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: >-
+  If you use ORACLE in your work, please cite it as below.
+title: "ORACLE: Online Readout & Acquisition for Collinear Laser spectroscopy Experiments"
+type: software
+version: 0.1.0
+authors:
+  - family-names: Barnes
+    given-names: Ethan
+    email: ethan.barnes@postgrad.manchester.ac.uk
+    affiliation: The University of Manchester
+abstract: >-
+  The data acquisition for collinear laser spectroscopy at IGISOL:
+  voltage scans recorded through a time tagger, with a step-and-confirm
+  calibration of the voltage axis and a quality gate before every run.
+keywords:
+  - collinear laser spectroscopy
+  - data acquisition
+  - IGISOL
+license: MIT

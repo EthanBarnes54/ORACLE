@@ -1,0 +1,44 @@
+[project]
+name = "oracle"
+version = "0.1.0"
+description = "Online Readout & Acquisition for Collinear Laser spectroscopy Experiments"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # Essentials holds every Qt module ORACLE uses (Widgets, Network, Svg)
+    # without the WebEngine and add-on wheels the full PySide6 pulls in.
+    "PySide6-Essentials",
+    "pyqtgraph",
+    "numpy",
+    "PyYAML",
+    # Below 6: a reader warns on every file written by a newer asdf than its
+    # own, and DENIS locks 5.3.
+    "asdf<6",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+# The instrument and facility libraries, needed only where ORACLE drives
+# the real rack:  uv sync --group rack
+# The time tagger's compiled wrapper (timetagger4) is not on any index; its
+# folder is set in settings.yaml (instruments: tagger_driver).
+rack = [
+    "pyvisa",
+    "pyepics",
+    "py-elog",
+    "spinapi",
+    "mcculw; sys_platform == 'win32'",
+]
+
+[tool.uv]
+# ORACLE is an application, not an installable library: resolve its
+# dependencies into .venv and run it with  uv run python gui.py
+package = false
+
+[tool.uv.sources]
+# PyPI's "elog" is an unrelated Elasticsearch package. The ELOG client the
+# facility's server speaks to is PSI's py_elog, which is not on PyPI.
+py-elog = { git = "https://github.com/paulscherrerinstitute/py_elog.git", rev = "14062756ce06cff032d04a42e9fffeb8f4ba5aba" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
