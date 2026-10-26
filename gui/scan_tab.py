@@ -1,7 +1,7 @@
 """The Scan tab: scan and buncher parameters, run control, the ELOG panel and the live plots.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's layout, control for control: parameters, buncher controls,
@@ -9,11 +9,12 @@ scan controls and the ELOG panel down the left, and the HFS spectrum
 over the TOF spectrum and the TOF-HFS map on the right. The tab reads
 its own widgets into what the acquisition process needs (the plan, the
 trigger timing, bunches per step) and draws from a Live_Data; starting
-and stopping belong to the main window.
+and stopping belong to the main window. Its voltages are bounded by the
+platform's limit, and its gate by the tagger's timestamp range.
 
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
-cls_acquisition.scan_plan, cls_acquisition.triggers, gui.plots,
-gui.shared_widgets.
+cls_acquisition.hardware.timetagger, cls_acquisition.scan_plan,
+cls_acquisition.triggers, gui.plots, gui.shared_widgets.
 """
 
 import numpy as np
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHB
 
 from cls_acquisition import triggers
 from cls_acquisition.acquisition import SCAN_TYPES
+from cls_acquisition.hardware.timetagger import MAX_WINDOW_US, Check_Window
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots
 from gui.shared_widgets import Spin
@@ -43,8 +45,9 @@ def _Row(*widgets):
 
 class Scan_Tab(QWidget):
 
-    def __init__(self, parent=None):
+    def __init__(self, limit_v, parent=None):
         super().__init__(parent)
+        self._Limit_V = limit_v
         layout = QGridLayout(self)
         layout.addWidget(self._Build_Parameters(), 0, 0)
         layout.addWidget(self._Build_Buncher(), 1, 0)
@@ -77,7 +80,8 @@ class Scan_Tab(QWidget):
         self.Range_Checks, self.From_Boxes, self.To_Boxes = [], [], []
         for i in range(RANGES):
             check = QCheckBox(checked=i == 0)
-            low, high = Spin(0.0, -4000.0, 4000.0), Spin(100.0, -4000.0, 4000.0)
+            low = Spin(0.0, -self._Limit_V, self._Limit_V)
+            high = Spin(100.0, -self._Limit_V, self._Limit_V)
             for column, widget in enumerate((check, low, high)):
                 grid.addWidget(widget, 6 + i, column)
             self.Range_Checks.append(check)
@@ -103,8 +107,8 @@ class Scan_Tab(QWidget):
         self.Beamgate_Box.setToolTip("Not wired: the beamgate output is not in the trigger "
                                      "pattern, as in the old DAQ.")
         self.Tagger_Delay_Box = Spin(0, 0, 1000000, 0)
-        self.Gate_Start_Box = Spin(0.0, 0.0, 999999.0)
-        self.Gate_Length_Box = Spin(200.0, 0.0, 999999.0)
+        self.Gate_Start_Box = Spin(0.0, 0.0, MAX_WINDOW_US)
+        self.Gate_Length_Box = Spin(200.0, 0.0, MAX_WINDOW_US)
         self._Timing_Boxes = (self.Dwell_Box, self.Release_Box, self.Tagger_Delay_Box,
                               self.Gate_Start_Box, self.Gate_Length_Box)
         grid = QGridLayout()
@@ -205,7 +209,10 @@ class Scan_Tab(QWidget):
         return 1000.0 / self.Dwell_Box.value() if self.Bunched() else DC_TRIGGER_HZ
 
     def Timing(self):
+        """The trigger timing; raises ValueError for a gate past the tagger's
+        timestamp range."""
         start = self.Gate_Start_Box.value()
+        Check_Window(start, start + self.Gate_Length_Box.value())
         return {'bunched': self.Bunched(), 'rep_rate_hz': self.Trigger_Hz(),
                 'release_us': self.Release_Box.value(),
                 'tagger_delay_us': self.Tagger_Delay_Box.value(),

@@ -1,11 +1,17 @@
 """Settings and the facility services' offline behaviour."""
 
 import logging
+import multiprocessing
 import os
+import sys
+import time
+import types
 
+import pytest
 import yaml
 
 from cls_acquisition import facility, settings
+from cls_acquisition.hardware import Rack
 
 
 def test_Update_Rewrites_Only_Its_Keys(monkeypatch, tmp_path):
@@ -44,3 +50,52 @@ def test_Simulated_Pvs_Answer_Without_Epics():
     assert pvs.Value('wavenumber') == facility.SIMULATED_PVS['wavenumber']
     assert pvs.Value('unknown') is None
     pvs.Close()
+
+
+def test_The_Coolers_Pvs_Come_From_The_Poll_And_Mark_A_Lost_Reading(monkeypatch):
+
+    class Driver():
+        Params, Status, Updates = {}, {}, 0
+
+        def setParam(self, reason, value):
+            Driver.Params[reason] = value
+
+        def setParamStatus(self, reason, alarm, severity):
+            Driver.Status[reason] = severity
+
+        def updatePVs(self):
+            Driver.Updates += 1
+
+    class Server():
+        Made = []
+
+        def __init__(self):
+            Server.Made.append(self)
+
+        def createPV(self, prefix, pvdb):
+            self.Names = [prefix + reason for reason in pvdb]
+
+        def process(self, timeout):
+            time.sleep(timeout)
+
+    monkeypatch.setitem(sys.modules, 'pcaspy', types.SimpleNamespace(
+        SimpleServer=Server, Driver=Driver,
+        Alarm=types.SimpleNamespace(NO_ALARM=0, READ_ALARM=1),
+        Severity=types.SimpleNamespace(NO_ALARM=0, INVALID_ALARM=3)))
+    monkeypatch.setattr(facility, 'COOLER_PUBLISH_S', 0.0)
+    readings = iter([29884.0, 29886.0] + [float('nan')] * 1000)
+    server = facility.Cooler_Pv_Server('FURIOS:Cooler:', lambda: next(readings))
+    deadline = time.monotonic() + 5.0
+    while Driver.Status.get('Readback') != 3 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    server.Close()
+    assert Server.Made[0].Names == ['FURIOS:Cooler:Readback', 'FURIOS:Cooler:InstantValue']
+    assert Driver.Params == {'Readback': 29885.0, 'InstantValue': 29886.0}
+    assert Driver.Status == {'Readback': 3, 'InstantValue': 3}     # invalid, not a stale value
+
+
+def test_A_Limit_Above_The_Amplifiers_Rating_Is_Refused():
+    config = settings._Merged(settings.DEFAULTS, {'instruments': {'hv_limit_v': 6000.0}})
+    with pytest.raises(ValueError, match="rating of 4000 V"):
+        Rack(config, multiprocessing.get_context('spawn'))
+    assert settings.DEFAULTS['instruments']['hv_limit_v'] == 4000.0

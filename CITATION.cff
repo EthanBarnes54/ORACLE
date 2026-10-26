@@ -3,7 +3,7 @@ message: >-
   If you use ORACLE in your work, please cite it as below.
 title: "ORACLE: Online Readout & Acquisition for Collinear Laser spectroscopy Experiments"
 type: software
-version: 0.1.0
+version: 0.2.0
 authors:
   - family-names: Barnes
     given-names: Ethan

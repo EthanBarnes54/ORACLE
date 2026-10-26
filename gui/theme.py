@@ -21,7 +21,7 @@ import os
 import sys
 
 from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtGui import QColor, QIcon, QPalette
+from PySide6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PySide6.QtWidgets import (QAbstractSpinBox, QComboBox, QDial, QSlider, QTabBar,
                                QWidget)
 
@@ -66,7 +66,12 @@ def Icon(name):
 
 
 def App_Icon():
-    return QIcon(os.path.join(ICON_DIR, 'oracle_512.png'))
+    return QIcon(os.path.join(ICON_DIR, 'oracle.ico'))
+
+
+def Logo():
+    """The logo at 512 px, for the splash and the About box, as DENIS has them."""
+    return QPixmap(os.path.join(ICON_DIR, 'oracle_512.png'))
 
 
 def _Icon_Url(name):

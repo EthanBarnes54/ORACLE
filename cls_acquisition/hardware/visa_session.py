@@ -1,7 +1,7 @@
 """One owner thread per instrument: every command to a meter goes through it.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 A VISA query is a write and a read, two bus transactions, and in the old
@@ -13,10 +13,14 @@ result, so command sequences cannot interleave. There is one session per
 resource however many objects open it (the old DAQ had two classes on
 the cooler meter), and the last to close it closes the instrument.
 
-An instrument here is anything with ``write``, ``query``, ``clear`` and
-``close``: a pyvisa resource through :func:`Pyvisa_Connect`, or the
-simulated meter. Its I/O failures are Instrument_IO_Error, a
-RuntimeError naming the instrument.
+Within ORACLE that settles who may speak to a meter; between programs,
+:func:`Pyvisa_Connect` takes VISA's exclusive lock, so the bench tool or
+the old DAQ cannot open a meter ORACLE holds, nor ORACLE one of theirs.
+
+An instrument here is anything with ``write``, ``query``, ``clear``,
+``close`` and a ``timeout`` in milliseconds: a pyvisa resource through
+:func:`Pyvisa_Connect`, or the simulated meter. Its I/O failures are
+Instrument_IO_Error, a RuntimeError naming the instrument.
 
 Depends on: pyvisa, imported by :func:`Pyvisa_Connect` alone.
 """
@@ -25,6 +29,7 @@ import queue
 import threading
 
 ERROR_QUEUE_DEPTH = 16              # SYST:ERR? reads before giving up on a drain
+LOCK_TIMEOUT_MS = 2000              # for the exclusive lock, held by another program
 
 
 class Scpi_Error(RuntimeError):
@@ -55,6 +60,15 @@ class Instrument_Proxy():
 
     def Query(self, command):
         return self._Inst.query(command).strip()
+
+    def Query_Slow(self, command, timeout_s):
+        """A query the instrument takes longer than its I/O timeout to answer."""
+        previous = self._Inst.timeout
+        self._Inst.timeout = round(timeout_s * 1000)
+        try:
+            return self.Query(command)
+        finally:
+            self._Inst.timeout = previous
 
     def Clear(self):
         self._Inst.clear()
@@ -152,12 +166,21 @@ def Pyvisa_Connect(resource, timeout_ms=5000):
     except pyvisa.errors.VisaIOError as e:
         raise Instrument_IO_Error(f"The instrument at {resource} could not be opened: "
                                   f"{e}") from e
+    try:
+        inst.lock_excl(timeout=LOCK_TIMEOUT_MS)
+    except pyvisa.errors.VisaIOError as e:
+        inst.close()
+        raise Instrument_IO_Error(f"The instrument at {resource} is held by another program "
+                                  f"(the bench calibration tool or the old DAQ?); close it "
+                                  f"first: {e}") from e
     inst.timeout = timeout_ms
+    inst.read_termination = inst.write_termination = '\n'
     return _Pyvisa_Instrument(inst, resource, pyvisa.errors.VisaIOError)
 
 
 class _Pyvisa_Instrument():
-    """A pyvisa resource whose I/O errors are Instrument_IO_Error."""
+    """A pyvisa resource whose I/O errors are Instrument_IO_Error, and
+    whose lock is let go when it is closed."""
 
     def __init__(self, inst, resource, io_error):
         self._Inst, self._Resource, self._Io_Error = inst, resource, io_error
@@ -169,6 +192,14 @@ class _Pyvisa_Instrument():
             raise Instrument_IO_Error(f"The instrument at {self._Resource} did not answer: "
                                       f"{e}") from e
 
+    @property
+    def timeout(self):
+        return self._Inst.timeout
+
+    @timeout.setter
+    def timeout(self, ms):
+        self._Inst.timeout = ms
+
     def write(self, command):
         return self._Call(self._Inst.write, command)
 
@@ -179,4 +210,8 @@ class _Pyvisa_Instrument():
         return self._Call(self._Inst.clear)
 
     def close(self):
+        try:
+            self._Inst.unlock()
+        except self._Io_Error:
+            pass                        # closing lets the lock go in any case
         return self._Call(self._Inst.close)

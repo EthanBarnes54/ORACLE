@@ -1,7 +1,7 @@
 """The plots: their dark style, how they are handled, and the TOF plot that carries the gate.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 pyqtgraph, as in the old DAQ, because the plots redraw several times a
@@ -12,16 +12,16 @@ box. A plot handled by hand stops following its data, so a live update
 never pulls the view away; the autoscale button in its corner, or a
 double-click on it, puts it back to the full view and following again.
 
-Ctrl-drag on the TOF plot (Cmd-drag on macOS)
-sets the gate, dragging its edges moves it, and a double-click removes
-it; the spectrum, the TOF-HFS map and the time graph count only hits
-inside it.
+Ctrl-drag on a gate plot (Cmd-drag on macOS) sets its gate, dragging
+its edges moves it, and a double-click removes it; on the Scan tab's TOF
+plot the spectrum, the TOF-HFS map and the time graph count only hits
+inside it, and the run viewer gates its runs the same way.
 
 Depends on: pyqtgraph, PySide6; gui.theme.
 """
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from gui import theme
@@ -114,10 +114,12 @@ def Dots(colour=theme.TRACE):
 
 
 class _Gate_View(_View):
+    """``On_Change()`` is called once a gate is set, moved or removed."""
 
     def __init__(self):
         super().__init__()
         self.Region = None
+        self.On_Change = lambda: None
 
     def mouseClickEvent(self, event):
         # a double-click on the gate removes it; only one elsewhere autoscales
@@ -138,25 +140,34 @@ class _Gate_View(_View):
                        self.mapSceneToView(event.scenePos()).x()))
         if self.Region is None:
             self.Region = pg.LinearRegionItem(values=span, brush=pg.mkBrush(*theme.GATE_FILL))
+            self.Region.sigRegionChangeFinished.connect(lambda: self.On_Change())
             self.addItem(self.Region)
         else:
             self.Region.setRegion(span)
+        if event.isFinish():
+            self.On_Change()
 
     def _Remove(self):
         self.removeItem(self.Region)
         self.Region = None
+        self.On_Change()
 
 
 class Gate_Plot(Plot_Widget):
-    """The TOF spectrum and its gate."""
+    """A histogram and its gate: the TOF spectrum, unless told otherwise.
+    ``Gate_Changed`` fires once a gate is set, moved or removed."""
 
-    def __init__(self, parent=None):
+    Gate_Changed = Signal()
+
+    def __init__(self, parent=None, title='TOF spectrum', x_axis=('Time of flight (µs)', None),
+                 what='TOF'):
         view = _Gate_View()
         super().__init__(parent, view)
         self._View = view
-        _Style(self, 'TOF spectrum', ('Time of flight (µs)', None), ('Counts', None))
-        self.setToolTip("Ctrl-drag (Cmd-drag on macOS) to set the TOF gate, drag its "
-                        "edges to move it, double-click it to remove it.")
+        view.On_Change = self.Gate_Changed.emit
+        _Style(self, title, x_axis, ('Counts', None))
+        self.setToolTip(f"Ctrl-drag (Cmd-drag on macOS) to set the {what} gate, drag its "
+                        f"edges to move it, double-click it to remove it.")
         self.Curve = pg.PlotCurveItem(pen=Pen())
         self.addItem(self.Curve)
 

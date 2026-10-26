@@ -116,14 +116,18 @@ def test_The_Hardware_Calibrations_Run_Save_And_Correct_The_Dac(qapp, window):
     assert linearity.Use_Button.isEnabled()
     linearity.Use_Button.click()
     assert settings.Load()['dac_correction']['measured'] is not None
-    assert 'in force now' in linearity.Report_Label.text()
+    assert 'corrects gain and offset; in force now' in linearity.Report_Label.text()
 
     cooler = hardware.Cooler
     cooler.Duration_Box.setValue(1.0)
-    cooler.Block_Box.setValue(0.5)
+    cooler.Interval_Box.setValue(2.0)
     cooler.Start_Button.click()
     assert _Pump(qapp, lambda: window._Worker is None)
+    assert cooler.Peak_Table.rowCount() > 0
     records = glob.glob(os.path.join(window._Data_Dir, 'hardware_calibration', '*.csv'))
     assert {os.path.basename(r).split('_2')[0] for r in records} == {
         'settle', 'settle_traces', 'linearity', 'cooler'}
+    for record in records:
+        with open(record) as fh:
+            assert '# status: completed' in fh.read()
     assert window.Dialogs == []

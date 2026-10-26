@@ -1,13 +1,13 @@
 """ORACLE's main window and entry point.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
 with the bench tool's Hardware Calibration and the Scan Performance
-analysis between them, above the quick-tune controls and the experiment
-information. The window
+analysis between them and the data viewer's Run viewer after them,
+above the quick-tune controls and the experiment information. The window
 composes the pieces and owns the run: Start scan calibrates the scan's
 own plan, puts the calibration through the gate, and only then writes
 the run file's header and starts the scan; a REJECT writes nothing and
@@ -20,14 +20,14 @@ says so, and into the settings with it. Each run is analysed for its
 performance as it ends, off the GUI thread.
 
 ``main()`` sets up the session log, one instance per user (two would
-fight over the instruments), the theme, and the rack: the acquisition
-process, the meters and the facility services, all closed again if any
-one of them fails to open.
+fight over the instruments), the theme and splash, and the rack: the
+acquisition process, the meters and the facility services, all closed
+again if any one of them fails to open.
 
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 import contextlib
 import getpass
@@ -44,16 +44,17 @@ from functools import partial
 
 import numpy as np
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QFontDatabase,
+                           QKeySequence, QPainter, QPixmap)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel,
-                               QMainWindow, QMessageBox, QPushButton, QSlider, QTabWidget,
-                               QWidget)
+                               QMainWindow, QMessageBox, QPushButton, QSlider, QSplashScreen,
+                               QTabWidget, QWidget)
 
 from cls_acquisition import (calibration, hardware_calibration, run_file, scan_performance,
                              settings)
 from cls_acquisition.acquisition import Acquisition_Error, Rack_Link
-from cls_acquisition.facility import Elog, Pv_Monitors
+from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.hardware import Rack
 from cls_acquisition.hardware import mcc_dac
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER
@@ -66,6 +67,7 @@ from gui.performance_tab import Performance_Tab
 from gui.scan_tab import Scan_Tab
 from gui.shared_widgets import Job_Worker, Spin, Verdict_Html
 from gui.time_tab import Time_Tab
+from gui.viewer_tab import Viewer_Tab
 
 TICK_MS = 100
 MONITOR_FLUSH_TICKS = 10            # the monitor record is written once a second
@@ -81,7 +83,7 @@ def _Number(value, fmt):
 
 class Main_Window(QMainWindow):
 
-    def __init__(self, config, rack, link, line_meter, cooler_meter, pvs, elog):
+    def __init__(self, config, rack, link, line_meter, cooler_meter, pvs, elog, warnings=()):
         super().__init__()
         self._Rack, self._Link = rack, link
         self._Line, self._Cooler = line_meter, cooler_meter
@@ -107,14 +109,18 @@ class Main_Window(QMainWindow):
         self.Tabs = QTabWidget(objectName='MainTabs', documentMode=True)
         self.Tabs.tabBar().setDrawBase(False)
         self.Tabs.setStyleSheet(theme.Main_Tabs_Qss())
-        self.Scan, self.Calibration, self.Time = Scan_Tab(), Calibration_Tab(), Time_Tab()
-        self.Hardware = Hardware_Tab(config['instruments']['hv_limit_v'])
+        self._Limit_V = config['instruments']['hv_limit_v']
+        self.Scan, self.Time = Scan_Tab(self._Limit_V), Time_Tab()
+        self.Calibration = Calibration_Tab(self._Limit_V)
+        self.Hardware = Hardware_Tab(self._Limit_V)
         self.Performance = Performance_Tab()
+        self.Viewer = Viewer_Tab(self._Data_Dir, config['laser'])
         for tab, icon, name in ((self.Scan, 'atom', 'Scan controls'),
                                 (self.Calibration, 'crosshair', 'Scan Calibration'),
                                 (self.Hardware, 'zap', 'Hardware Calibration'),
                                 (self.Performance, 'stethoscope', 'Scan Performance'),
-                                (self.Time, 'hourglass', 'Time graphs')):
+                                (self.Time, 'hourglass', 'Time graphs'),
+                                (self.Viewer, 'bar-chart-2', 'Run viewer')):
             self.Tabs.addTab(tab, theme.Icon(icon), name)
         self.Scan.Experiment_Edit.setText(config['experiment'])
 
@@ -131,6 +137,16 @@ class Main_Window(QMainWindow):
             rack_label.setStyleSheet(f"color: {theme.TRACE_ALT}; font-weight: bold;")
         self.statusBar().addPermanentWidget(rack_label)
         self.statusBar().showMessage(f"Run files go to {self._Data_Dir}")
+        if warnings:
+            # a fault of the rack's own that ORACLE cannot mend: shown for the
+            # whole session, not once, and its sentences in the tooltip
+            warning_label = QLabel("  Rack warning  ")
+            warning_label.setStyleSheet(f"color: {theme.VERDICT_COLOURS['WARN']}; "
+                                        f"font-weight: bold;")
+            warning_label.setToolTip('\n\n'.join(warnings))
+            self.statusBar().addPermanentWidget(warning_label)
+            for warning in warnings:
+                log.warning("Rack: %s", warning)
 
         self.Scan.Start_Button.clicked.connect(self._Toggle_Scan)
         self.Scan.Stop_Button.clicked.connect(self._Stop_Now)
@@ -177,9 +193,10 @@ class Main_Window(QMainWindow):
         grid = QGridLayout(self.Quick_Group)
         self.Trigger_Button = QPushButton('Enable triggers', clicked=self._Toggle_Triggers)
         self.Volt_Button = QPushButton('Enable voltage', clicked=self._Toggle_Voltage)
-        self.Voltage_Box = Spin(0.0, -10000.0, 10000.0, 1, ' V')
-        self.Sweep_From = Spin(-3000.0, -10000.0, 10000.0, 1)
-        self.Sweep_To = Spin(3000.0, -10000.0, 10000.0, 1)
+        limit = self._Limit_V
+        self.Voltage_Box = Spin(0.0, -limit, limit, 1, ' V')
+        self.Sweep_From = Spin(-min(3000.0, limit), -limit, limit, 1)
+        self.Sweep_To = Spin(min(3000.0, limit), -limit, limit, 1)
         self.Slider = QSlider(Qt.Orientation.Horizontal, maximum=SLIDER_STEPS)
         for column, widget in enumerate((self.Trigger_Button, self.Volt_Button,
                                          QLabel('Set voltage:'), self.Voltage_Box,
@@ -217,6 +234,10 @@ class Main_Window(QMainWindow):
             action.triggered.connect(lambda _=False, f=folder: QDesktopServices.openUrl(
                 QUrl.fromLocalFile(f)))
             file_menu.addAction(action)
+        view_runs = QAction(theme.Icon('bar-chart-2'), 'Open runs in the viewer...', self)
+        view_runs.triggered.connect(lambda: (self.Tabs.setCurrentWidget(self.Viewer),
+                                             self.Viewer.Browse()))
+        file_menu.addAction(view_runs)
         file_menu.addSeparator()
         file_menu.addAction('Quit', self.close)
         view_menu = self.menuBar().addMenu('&View')
@@ -231,12 +252,16 @@ class Main_Window(QMainWindow):
             plot.Autoscale()
 
     def _About(self):
-        QMessageBox.about(
-            self, 'About ORACLE',
+        box = QMessageBox(
+            QMessageBox.Icon.NoIcon, 'About ORACLE',
             f"<b>ORACLE v{__version__}</b><br>Online Readout &amp; Acquisition for Collinear "
             f"Laser spectroscopy Experiments<br><br>"
             f"Rack: {'simulated' if self._Rack.Simulated else 'hardware'}<br>"
-            f"Run files: {self._Data_Dir}<br>Settings: {settings.Settings_Path()}")
+            f"Run files: {self._Data_Dir}<br>Settings: {settings.Settings_Path()}",
+            QMessageBox.StandardButton.Ok, self)
+        box.setIconPixmap(theme.Logo().scaled(180, 180, Qt.AspectRatioMode.KeepAspectRatio,
+                                              Qt.TransformationMode.SmoothTransformation))
+        box.exec()
 
     # ── The run ──────────────────────────────────────────────────
 
@@ -275,8 +300,9 @@ class Main_Window(QMainWindow):
             return                      # a second click before the controls caught up
         try:
             plan = self.Scan.Plan()
+            timing = self.Scan.Timing()
             run = self._Next_Run()
-        except (Scan_Plan_Error, OSError) as e:
+        except (ValueError, OSError) as e:
             QMessageBox.warning(self, 'Scan not started', str(e))
             return
 
@@ -296,7 +322,7 @@ class Main_Window(QMainWindow):
                 f"Mass [amu]:          {_Number(pvs['mass'], '.4f')}\n"
                 f"Mass setpoint [A or amu]:          {_Number(pvs['mass_setpoint'], '.4f')}\n")
         self._Pending = {'plan': plan, 'run': run, 'when': when, 'pvs': pvs, 'text': text,
-                         'bunches': bunches, 'timing': self.Scan.Timing(),
+                         'bunches': bunches, 'timing': timing,
                          'scan_type': self.Scan.Type_Combo.currentText()}
         self._Calibrate(plan)
 
@@ -367,11 +393,16 @@ class Main_Window(QMainWindow):
             self._Send('Stop_Triggering')
             return
         try:
+            timing = self.Scan.Timing()
+        except ValueError as e:
+            QMessageBox.warning(self, 'Triggers not started', str(e))
+            return
+        try:
             plan = self.Scan.Plan()
         except Scan_Plan_Error:
             plan = None             # the TOF still shows; the spectrum has no axis
         self._Start_Live(plan)
-        self._Send('Start_Triggering', timing=self.Scan.Timing())
+        self._Send('Start_Triggering', timing=timing)
 
     def _Toggle_Voltage(self):
         on = not self._State.Outputting.is_set()
@@ -439,15 +470,16 @@ class Main_Window(QMainWindow):
         QMessageBox.critical(self, 'Calibration failed', message)
 
     def _Worker_Finished(self):
-        self._Worker.deleteLater()
+        self._Worker.Retire()
         self._Worker = None
         self._Show_State()              # the controls back now, as they went
 
     # ── Hardware calibration ─────────────────────────────────────
 
     def _Run_Bench(self, panel, measure):
-        """Run ``panel``'s measurement, ``measure(progress=, stopped=, **its
-        parameters)``, on the worker; save its records and show its result."""
+        """Run ``panel``'s measurement, ``measure(progress=, stopped=, records=,
+        **its parameters)``, on the worker, its records written as it goes;
+        on the rack, only once the operator has armed the high voltage."""
         if self._Worker is not None:
             return
         try:
@@ -455,42 +487,67 @@ class Main_Window(QMainWindow):
         except ValueError as e:
             QMessageBox.warning(self, f"{panel.Title} not started", str(e))
             return
+        peak = panel.Max_Volts(params)
+        if peak is not None and not self._Rack.Simulated and not self._Arm_Hv(panel.Title, peak):
+            return
+        header = {'ORACLE': __version__, 'Rack': 'simulated' if self._Rack.Simulated else
+                  'hardware', 'Date': f"{datetime.now():%Y-%m-%d %H:%M:%S}", **params}
+        records = {}
+        try:
+            for kind, columns in panel.RECORDS.items():
+                records[kind] = hardware_calibration.Record(self._Data_Dir, kind, header,
+                                                            columns)
+        except OSError as e:
+            self._Close_Records(records, "not started: a record could not be written")
+            QMessageBox.warning(self, f"{panel.Title} not started",
+                                f"Its record could not be written, so it was not started: {e}")
+            return
+        worker = Job_Worker(lambda progress, stopped: measure(
+            progress=progress, stopped=stopped, records=records, **params), self)
 
         def done(result):
-            paths = [self._Save(*record) for record in panel.Records(result, params)]
-            panel.Show_Result(result, paths[0])
+            self._Close_Records(records, 'stopped' if worker.Stopped() else 'completed',
+                                panel.Results(result))
+            panel.Show_Result(result, [record.Path for record in records.values()])
 
-        self._Worker = Job_Worker(
-            lambda progress, stopped: measure(progress=progress, stopped=stopped, **params), self)
-        self._Worker.Progress.connect(panel.Show_Progress)
-        self._Worker.Done.connect(done)
-        self._Worker.Failed.connect(lambda message: self._Bench_Failed(panel, message))
-        self._Worker.finished.connect(lambda: panel.Running(False))
-        self._Worker.finished.connect(self._Worker_Finished)
+        def failed(message):
+            self._Close_Records(records, f"failed: {message}")
+            panel.Show_Failure(message)
+            QMessageBox.critical(self, f"{panel.Title} failed",
+                                 f"{message}\n\nWhat it took is in "
+                                 f"{', '.join(r.Path for r in records.values())}.")
+
+        self._Worker = worker
+        worker.Progress.connect(panel.Show_Progress)
+        worker.Done.connect(done)
+        worker.Failed.connect(failed)
+        worker.finished.connect(lambda: panel.Running(False))
+        worker.finished.connect(self._Worker_Finished)
         panel.Begin()
-        self._Worker.start()
+        worker.start()
         self._Show_State()
+
+    def _Arm_Hv(self, title, peak):
+        """True if the operator confirms the rack is ready for the platform
+        to go to ``+-peak`` volts."""
+        return QMessageBox.question(
+            self, 'Arm high voltage',
+            f"The {title.lower()} will drive the platform up to ±{peak:g} V.\n\n"
+            f"• The HV area is safe and interlocked.\n"
+            f"• The divider is connected to the line and to the line meter.\n\n"
+            f"Arm the high voltage and start?") == QMessageBox.StandardButton.Yes
+
+    def _Close_Records(self, records, status, results=None):
+        for kind, record in records.items():
+            try:
+                record.Close(status, (results or {}).get(kind))
+            except OSError:
+                log.exception("Closing the %s record failed", kind)
+            log.info("Hardware calibration record (%s): %s", status, record.Path)
 
     def _Stop_Bench(self):
         if self._Worker is not None:
             self._Worker.Stop()
-
-    def _Bench_Failed(self, panel, message):
-        panel.Show_Failure(message)
-        QMessageBox.critical(self, f"{panel.Title} failed", message)
-
-    def _Save(self, kind, header, columns, rows):
-        """A measurement's record; its path, or why it could not be written."""
-        header = {'ORACLE': __version__, 'Rack': 'simulated' if self._Rack.Simulated else
-                  'hardware', 'Date': f"{datetime.now():%Y-%m-%d %H:%M:%S}", **header}
-        try:
-            path = hardware_calibration.Save(self._Data_Dir, kind, header, columns, rows)
-        except OSError as e:
-            QMessageBox.warning(self, 'Record not saved', f"The {kind} record could not be "
-                                                          f"written: {e}")
-            return "nowhere: the record could not be written"
-        log.info("Hardware calibration %s saved: %s", kind, path)
-        return path
 
     def _Set_Settle_Model(self, model):
         """Scans settle by ``model`` (None: SETTLE for every step) from the next one."""
@@ -501,7 +558,7 @@ class Main_Window(QMainWindow):
         log.info("Scan settle model: %s", model)
 
     def _Use_Correction(self):
-        result, path = self.Hardware.Linearity.Result
+        result, paths = self.Hardware.Linearity.Result
         if result['Dac']['Correction'] != self._Correction:
             QMessageBox.warning(self, 'Correction not changed',
                                 "The DAC correction has changed since this sweep, so its "
@@ -510,7 +567,7 @@ class Main_Window(QMainWindow):
         try:
             correction = hardware_calibration.Corrected(
                 self._Correction, result['Fits'], self.Hardware.Linearity.Valid_Box.value(),
-                f"linearity sweep, {os.path.basename(path)}")
+                f"linearity sweep, {os.path.basename(paths[0])}", result['Inl'])
         except calibration.Calibration_Error as e:
             QMessageBox.warning(self, 'Correction not changed', str(e))
             return
@@ -526,8 +583,11 @@ class Main_Window(QMainWindow):
         self.Hardware.Linearity.Use_Button.setEnabled(False)
         verdict, message = reply['Dac_Status']
         log.info("DAC correction: %s", reply['Dac_Correction'][1])
+        which = ("gain, offset and non-linearity" if (correction or {}).get('inl')
+                 else "gain and offset" if correction else "nothing")
         self.Hardware.Linearity.Report_Label.setText(
-            Verdict_Html(verdict, f"{message}; in force now and saved in the settings."))
+            Verdict_Html(verdict, f"{message}; corrects {which}; in force now and saved in the "
+                                  f"settings."))
 
     # ── Scan performance ─────────────────────────────────────────
 
@@ -557,7 +617,7 @@ class Main_Window(QMainWindow):
         self._Analysis.start()
 
     def _Analysis_Finished(self):
-        self._Analysis.deleteLater()
+        self._Analysis.Retire()
         self._Analysis = None
 
     def _Export_Performance(self):
@@ -711,6 +771,7 @@ class Main_Window(QMainWindow):
         self._Timer.stop()
         if self._Analysis is not None:
             self._Analysis.wait()       # a thread cannot outlive its window
+        self.Viewer.Close()
         self._Take_Data()
         self._Link.Close()              # stops any scan and leaves the platform at 0 V
         self._Take_Data()
@@ -738,6 +799,31 @@ def _Single_Instance(app):
     return True
 
 
+def _Splash():
+    """DENIS's splash: the logo on a dark canvas, the name and version below.
+    It stays up while the rack opens, which can take STARTUP_TIMEOUT_S."""
+    logo = theme.Logo()
+    canvas = QPixmap(540, 600)
+    canvas.fill(QColor(24, 24, 30))
+    painter = QPainter(canvas)
+    painter.drawPixmap((540 - logo.width()) // 2, 20, logo)
+    # the platform's UI font, sized for 96 dpi because the canvas is laid out in pixels
+    family = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont).family()
+    pt_scale = 96 / canvas.logicalDpiY()
+    painter.setPen(QColor(220, 220, 220))
+    painter.setFont(QFont(family, round(18 * pt_scale), QFont.Weight.Bold))
+    painter.drawText(0, 545, 540, 30, Qt.AlignmentFlag.AlignCenter, 'ORACLE')
+    painter.setPen(QColor(160, 160, 170))
+    painter.setFont(QFont(family, round(10 * pt_scale)))
+    painter.drawText(0, 572, 540, 20, Qt.AlignmentFlag.AlignCenter,
+                     f"v{__version__} — Online Readout & Acquisition for Collinear Laser "
+                     f"spectroscopy Experiments")
+    painter.end()
+    splash = QSplashScreen(canvas)
+    splash.show()
+    return splash
+
+
 def main():
     log_path = session_log.Install(settings.APP_ROOT)
     session_log.Install_Qt_Handler()
@@ -761,13 +847,15 @@ def main():
         return 0
     theme.Apply_Theme(app)
     app.setWindowIcon(theme.App_Icon())
+    splash = _Splash()
+    app.processEvents()
 
     try:
         with contextlib.ExitStack() as opened:
             rack = Rack(config, multiprocessing.get_context('spawn'))
             link = Rack_Link(rack.Loop_Spec())
             opened.callback(link.Close)
-            link.Send('Ping', timeout=STARTUP_TIMEOUT_S)
+            warnings = link.Send('Ping', timeout=STARTUP_TIMEOUT_S)['Warnings']
             line_meter, cooler_meter = rack.Open_Meters()
             opened.callback(line_meter.Close)
             opened.callback(cooler_meter.Close)
@@ -777,15 +865,29 @@ def main():
             elog = Elog(elog_cfg['url'], elog_cfg['author'],
                         elog_cfg['enabled'] and not rack.Simulated)
             opened.callback(elog.Close)
+            cooler_pv, server = config['cooler_pv'], None
+            if cooler_pv['enabled'] and not rack.Simulated:
+                try:
+                    server = Cooler_Pv_Server(cooler_pv['prefix'], lambda: (
+                        cooler_meter.Voltage * COOLER_DIVIDER))
+                    opened.callback(server.Close)
+                except Exception as e:
+                    # the facility's copy of the cooler is not worth refusing a run for
+                    log.exception("The cooler's PVs are not published")
+                    warnings = [*warnings, f"The cooler's PVs are not published: {e}"]
             opened.pop_all()                    # the window owns them from here
     except Exception as e:
         log.exception("ORACLE could not start")
+        splash.close()                          # it stays on top and would hide the error
         QMessageBox.critical(None, 'ORACLE could not start',
                              f"{e}\n\nThe session log has the details:\n{log_path}")
         return 1
 
-    window = Main_Window(config, rack, link, line_meter, cooler_meter, pvs, elog)
+    window = Main_Window(config, rack, link, line_meter, cooler_meter, pvs, elog, warnings)
+    if server is not None:
+        app.aboutToQuit.connect(server.Close)
     window.showMaximized()
+    splash.finish(window)
 
     def raise_window():
         # a second launch knocked: bring this one forward instead

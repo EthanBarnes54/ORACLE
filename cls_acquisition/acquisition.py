@@ -1,7 +1,7 @@
 """The acquisition process: the loop that drives the DAC, the triggers and the tagger.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The loop runs in its own process, so the tagger is read on time however
@@ -43,7 +43,8 @@ Data leave on their own queue as ``('scan' | 'stream', rows)`` packets in
 the run file's columns, and a scan's end is marked ``('scan_end', None)``
 after its last rows, so the GUI closes the run file only once all of
 them are in it. If the loop dies, its last word is a reply with id 0
-saying why.
+saying why. 'Ping' answers with what the devices found wrong as they
+opened (the tagger's wrapper, say), for the window to show.
 
 Depends on: numpy; cls_acquisition.calibration, .triggers, and
 cls_acquisition.hardware inside the process.
@@ -118,8 +119,11 @@ class Acquisition_Loop():
         self._Accepted = 0                  # bunches taken since the scan or stream began
         self._Tagger_Ref = None             # (tagger's bunch, ours) at the last hits
         self._Running = True
+        # what the devices found wrong when they opened, for the window to show
+        self._Warnings = [warning for device in (dac, pulses, tagger, gate)
+                          for warning in getattr(device, 'Warnings', ())]
         self._Handlers = {
-            'Ping': lambda: {},
+            'Ping': lambda: {'Warnings': self._Warnings},
             'Start_Scan': self._Start_Scan,
             'Stop_After_Scan': self._Stop_After_Scan,
             'Stop_Now': self._Stop_Now,

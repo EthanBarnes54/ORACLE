@@ -1,7 +1,7 @@
 """The Scan Calibration tab: a stand-alone calibration and the gate's verdict on it.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's layout: the parameters and the start button on the left,
@@ -30,14 +30,14 @@ from gui.shared_widgets import REPORT_WIDTH, Form, Spin, Verdict_Html
 
 class Calibration_Tab(QWidget):
 
-    def __init__(self, parent=None):
+    def __init__(self, limit_v, parent=None):
         super().__init__(parent)
         layout = QGridLayout(self)
 
         self.Params_Group = QGroupBox('Calibration parameters')
-        self.From_Box = Spin(0.0, -10000.0, 10000.0)
-        self.To_Box = Spin(3000.0, -10000.0, 10000.0)
-        self.Step_Box = Spin(10.0, 0.0, 10000.0)
+        self.From_Box = Spin(0.0, -limit_v, limit_v)
+        self.To_Box = Spin(min(3000.0, limit_v), -limit_v, limit_v)
+        self.Step_Box = Spin(10.0, 0.0, 2 * limit_v)
         Form(self.Params_Group, (('From (V)', self.From_Box), ('To (V)', self.To_Box),
                                  ('Stepsize (V)', self.Step_Box)))
 
