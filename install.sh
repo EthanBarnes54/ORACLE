@@ -134,7 +134,7 @@ EOF
 Type=Application
 Name=ORACLE
 Comment=Online Readout & Acquisition for Collinear Laser spectroscopy Experiments
-Exec=$PYTHON $GUI_PY
+Exec="$PYTHON" "$GUI_PY"
 Path=$APP_DIR
 Icon=$ICON
 Terminal=false

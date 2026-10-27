@@ -1,7 +1,7 @@
 """Shared GUI building blocks: spin boxes, form layouts, verdicts and the worker thread.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 What more than one tab builds the same way. :class:`Job_Worker` keeps a
@@ -68,6 +68,17 @@ class Job_Worker(QThread):
 
     def Stop(self):
         self._Stop.set()
+
+    def Stopped(self):
+        return self._Stop.is_set()
+
+    def Retire(self):
+        """Let a finished job's thread go now: wait out the moment between its
+        finished signal and its end, then leave it to its last reference,
+        rather than post a deferred delete that its parent's own deletion
+        could race."""
+        self.wait()
+        self.setParent(None)
 
     def run(self):
         try:

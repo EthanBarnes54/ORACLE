@@ -158,9 +158,15 @@ _Manager = None
 
 def Pyvisa_Connect(resource, timeout_ms=5000):
     global _Manager
-    import pyvisa
-    if _Manager is None:
-        _Manager = pyvisa.ResourceManager()
+    try:
+        import pyvisa
+        if _Manager is None:
+            _Manager = pyvisa.ResourceManager()
+    except (ImportError, OSError, ValueError) as e:
+        # ValueError is pyvisa's "Could not locate a VISA implementation"
+        raise Instrument_IO_Error(f"The meters need pyvisa and a VISA library (NI-VISA or "
+                                  f"Keysight IO Libraries on Windows, NI-VISA on macOS); "
+                                  f"install them, or set rack: simulated ({e}).") from e
     try:
         inst = _Manager.open_resource(resource)
     except pyvisa.errors.VisaIOError as e:

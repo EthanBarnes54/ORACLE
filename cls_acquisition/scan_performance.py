@@ -1,7 +1,7 @@
 """Scan performance: how far the rack's behaviour during a run shaped its data.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-29
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 A spectrum is counts against the scanning voltage, and every part of the
@@ -239,7 +239,7 @@ def _Calibration(report, header, step):
     if seam is not None:
         report.Add(VOLTAGE, 'Seam at 0 V',
                    WARN if abs(seam) > THRESHOLDS['MaxPolarityStepV'] else PASS, seam,
-                   f"The converter branches meet {seam:+.3f} V apart; DAC correction "
+                   f"The converter branches' lines meet 0 V {seam:+.3f} V apart; DAC correction "
                    f"{'applied' if header.get('DacCorrectionApplied') else 'not applied'}.")
     return gain, offset
 

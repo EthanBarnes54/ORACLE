@@ -1,6 +1,6 @@
 """The hardware calibrations: the amplifier's settling, the converters' linearity, the cooler.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -38,6 +38,11 @@ The cooler monitor streams the cooler's voltage off the meter's timer
 for as long as asked, with no gaps, and finds its level, its drift, its
 noise by frequency band, the oscillations in it (mains harmonics named)
 and its spectrum.
+
+As in the bench tool, a settle test recommends the linearity sweep's
+wait after each step (:func:`Recommended_Wait`), and the platform can be
+read precisely at any time (:func:`Precise_Reading`, its 'Read DMM') to
+check the wiring and polarity against the setpoint.
 
 The DAC is driven as in calibration, by step and confirm through the
 acquisition process ('Calibrate', 'Calibration_Step', 'Stop_Calibration'),
@@ -81,6 +86,8 @@ MIN_SPECTRUM_READINGS = 64
 PEAK_SNR = 6.0                      # above the spectrum's local median, for an oscillation
 PEAKS = 10
 NOISE_BANDS_HZ = (0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0)
+WAIT_FACTOR, MIN_WAIT_S = 3.0, 0.2  # the bench tool's linearity wait: 3x the slowest step
+PRECISE_READINGS, PRECISE_NPLC = 5, 10.0    # the bench tool's 'Read DMM'
 
 
 def _Today(today=None):
@@ -295,7 +302,8 @@ SETTLE_COLUMNS = (('Step', 'step'), ('Mode', 'mode'), ('Rep', 'rep'), ('From_V',
                   ('To_V', 'to_v'), ('Lag_S', 'lag_s'), ('Settle_S', 'settle_s'),
                   ('Rise_S', 'rise_s'), ('Overshoot_Pct', 'overshoot_pct'),
                   ('Noise_V', 'noise_v'), ('Band_V', 'band_v'),
-                  ('Tail_Shift_V', 'tail_shift_v'), ('Tail_Drift_V', 'tail_drift_v'))
+                  ('Tail_Shift_V', 'tail_shift_v'), ('Tail_Drift_V', 'tail_drift_v'),
+                  ('Final_V', 'final_v'))
 SETTLE_TRACE_COLUMNS = ('step', 'mode', 'rep', 'time_from_10pct_s', 'deviation_v')
 
 
@@ -333,6 +341,13 @@ def Settle_Summary(results):
                 f"a {max(worst['Lag_S'], 0.0) * 1e3:.1f} ms lag, {needed * 1e3:.1f} ms from "
                 f"the command against ORACLE's SETTLE of {settle * 1e3:.0f} ms.")
     return (PASS if needed <= settle else WARN), sentence
+
+
+def Recommended_Wait(results):
+    """The wait after each step a linearity sweep should take, as the bench
+    tool recommends it: WAIT_FACTOR times the slowest step from its command,
+    and at least MIN_WAIT_S."""
+    return max(MIN_WAIT_S, WAIT_FACTOR * max(_From_Command(r) for r in results))
 
 
 def Settle_Model(results, today=None):
@@ -533,9 +548,29 @@ def Corrected(correction, fits, valid_days, method, inl=None, today=None):
             'valid_days': int(valid_days), 'method': method, 'poly': poly, 'inl': tables}
 
 
+def Precise_Reading(meter, divider, readings=PRECISE_READINGS, nplc=PRECISE_NPLC):
+    """``(mean, sigma)`` of ``readings`` readings at ``nplc`` with autozero,
+    times ``divider``, the first SETTLE after the call, since quick tune may
+    have moved the platform just before it; the meter is back on its live
+    poll however it ends."""
+    try:
+        meter.Capture(readings, nplc=nplc, autozero=True)
+        time.sleep(THRESHOLDS['SettleS'])
+        meter.Arm()
+        # autozero doubles every reading's time
+        volts = meter.Fetch_When_Done(readings, readings * 2 * nplc / POWER_LINE_HZ
+                                      + FETCH_MARGIN_S) * divider
+    except BaseException:
+        _Quietly(meter.Release)
+        raise
+    meter.Release()
+    return float(np.mean(volts)), float(np.std(volts, ddof=1)) if len(volts) > 1 else 0.0
+
+
 # ── Cooler ──────────────────────────────────────────────────────
 
 COOLER_COLUMNS = ('time_s', 'cooler_v')
+SPECTRUM_COLUMNS = ('frequency_hz', 'asd_v_rt_hz')
 
 
 def Cooler_Monitor(meter, divider, duration_s, interval_s, aperture_s, nplc, progress, stopped,
@@ -732,3 +767,107 @@ class Record():
         for key, value in (results or {}).items():
             self._File.write(f"# {key}: {value}\n")
         self._File.close()
+
+
+# ── Reading records back ────────────────────────────────────────
+
+def Read_Record(path):
+    """``(header, columns, footer)`` of a record: the settings above its
+    columns and the status and results below its rows, each as {key: text},
+    and its rows as {column: [text, ...]}."""
+    header, footer, names, rows = {}, {}, None, []
+    with open(path, encoding='utf-8', newline='') as fh:
+        for line in fh:
+            line = line.rstrip('\r\n')
+            if line.startswith('# '):
+                key, _, value = line[2:].partition(': ')
+                (header if names is None else footer)[key] = value
+            elif names is None:
+                names = line.split(',')
+            elif line:
+                rows.append(line.split(','))
+    if names is None:
+        raise Calibration_Error(f"{os.path.basename(path)} holds no columns, so it is not a "
+                                f"hardware calibration record.")
+    return header, {name: [row[i] for row in rows] for i, name in enumerate(names)}, footer
+
+
+def _Numbers(values):
+    return np.array([float(v) if v else np.nan for v in values])
+
+
+def _Need(columns, wanted, path):
+    missing = [name for name in wanted if name not in columns]
+    if missing:
+        raise Calibration_Error(f"{os.path.basename(path)} lacks the columns "
+                                f"{', '.join(missing)}, so it is not that kind of record.")
+
+
+def _Beside(path, kind):
+    """The ``kind`` record started with the one at ``path``: the same time,
+    or the nearest within two seconds; None if there is none."""
+    folder, name = os.path.split(path)
+    stamp = name[name.index('_2') + 1:-len('.csv')]
+    when = datetime.strptime(stamp, '%Y-%m-%d_%H%M%S')
+    nearest = None
+    for other in os.listdir(folder):
+        if not (other.startswith(f"{kind}_2") and other.endswith('.csv')):
+            continue
+        try:
+            apart = abs((datetime.strptime(other[len(kind) + 1:-len('.csv')],
+                                           '%Y-%m-%d_%H%M%S') - when).total_seconds())
+        except ValueError:
+            continue
+        if apart <= 2 and (nearest is None or apart < nearest[0]):
+            nearest = (apart, os.path.join(folder, other))
+    return nearest[1] if nearest else None
+
+
+def Read_Settle(path):
+    """The results a settle record holds, as Settle_Test returned them, with
+    each step's trace from the settle_traces record written beside it (empty
+    where there is none)."""
+    _, columns, _ = Read_Record(path)
+    _Need(columns, [column for _, column in SETTLE_COLUMNS[:-1]], path)
+    results = []
+    for i in range(len(columns['step'])):
+        result = {key: (columns[column][i] if key == 'Mode' else
+                        int(columns[column][i]) if key in ('Step', 'Rep') else
+                        float(columns[column][i] or 'nan'))
+                  for key, column in SETTLE_COLUMNS if column in columns}
+        result.setdefault('Final_V', np.nan)
+        result['Times_S'] = result['Deviation_V'] = np.zeros(0)
+        results.append(result)
+    traces = _Beside(path, 'settle_traces')
+    if traces is not None:
+        _, rows, _ = Read_Record(traces)
+        keys = list(zip(rows['step'], rows['mode'], rows['rep']))
+        times, deviations = _Numbers(rows['time_from_10pct_s']), _Numbers(rows['deviation_v'])
+        for result in results:
+            mine = np.array([key == (str(result['Step']), result['Mode'], str(result['Rep']))
+                             for key in keys], dtype=bool)
+            result['Times_S'], result['Deviation_V'] = times[mine], deviations[mine]
+    return results
+
+
+def Read_Linearity(path):
+    """The points a linearity record holds, as Linearity_Sweep took them."""
+    _, columns, _ = Read_Record(path)
+    _Need(columns, LINEARITY_COLUMNS, path)
+    numbers = {name: _Numbers(columns[name]) for name in LINEARITY_COLUMNS[2:]}
+    return [{'Kind': columns['kind'][i], 'Direction': columns['direction'][i],
+             'Set_V': float(numbers['set_v'][i]), 'Read_V': float(numbers['read_v'][i]),
+             'Sigma_V': float(numbers['sigma_v'][i]), 'Channel': int(numbers['channel'][i]),
+             'Dac_V': float(numbers['dac_v'][i]), 'Time_S': float(numbers['time_s'][i])}
+            for i in range(len(columns['kind']))]
+
+
+def Read_Cooler(path):
+    """``(times, volts, integration_s)`` of a cooler record: the integration
+    from its settings, the NPLC's if it was set, else the aperture's."""
+    header, columns, _ = Read_Record(path)
+    _Need(columns, COOLER_COLUMNS, path)
+    nplc = header.get('nplc', 'None')
+    integration = (float(nplc) / POWER_LINE_HZ if nplc not in ('None', '')
+                   else float(header.get('aperture_s', 0.0)))
+    return _Numbers(columns['time_s']), _Numbers(columns['cooler_v']), integration

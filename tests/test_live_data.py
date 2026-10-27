@@ -51,3 +51,35 @@ def test_Counts_In_Time_Bin_By_Bunch_At_The_Trigger_Rate():
     edges, counts = live.Counts_In_Time(1.0, 10.0, (1, 2, 3, 4), None)
     assert counts.sum() == 500
     assert np.allclose(np.diff(edges), 1.0)         # 10 bunches a bin at 10 Hz
+
+
+def test_A_Fine_Tof_Bin_Is_Widened_Rather_Than_Ask_For_Gigabytes(qapp):
+    from gui.scan_tab import MAX_TOF_BINS, Scan_Tab
+    tab = Scan_Tab(4000.0)
+    tab.Gate_Length_Box.setValue(8000.0)
+    tab.Bin_Box.setValue(0.0005)
+    edges = tab.Tof_Edges()
+    assert len(edges) - 1 <= MAX_TOF_BINS + 1
+    assert edges[0] < 0.0 < 8000.0 < edges[-1]               # the whole gate is still covered
+    tab.Gate_Length_Box.setValue(200.0)
+    tab.Bin_Box.setValue(1.0)
+    assert np.allclose(np.diff(tab.Tof_Edges()), 1.0)        # a bin that fits is kept
+    tab.deleteLater()
+
+
+def test_The_Map_Is_Held_Only_While_Shown_And_At_A_Screens_Resolution():
+    from gui.live_data import MAX_MAP_BINS
+    live = Live_Data()
+    fine_volts = np.arange(-3000.5, 3001.0, 0.1)             # 60001 setpoints
+    fine_tof = np.arange(-0.25, 8000.0, 0.5)
+    live.Configure(fine_volts, fine_tof, None, (1, 2, 3, 4), False)
+    assert live.Tof_Map.size == 0
+    live.Configure(fine_volts, fine_tof, None, (1, 2, 3, 4), True)
+    assert max(live.Tof_Map.shape) <= MAX_MAP_BINS
+    assert live.Map_Volt_Edges[[0, -1]].tolist() == fine_volts[[0, -1]].tolist()
+    assert live.Map_Tof_Edges[[0, -1]].tolist() == fine_tof[[0, -1]].tolist()
+    rows = _Rows(2000, 4)
+    rows[:, 1] = np.random.default_rng(5).uniform(-3000, 3000, len(rows))
+    live.Add(rows)
+    live.Update()
+    assert live.Tof_Map.sum() == len(rows) == live.Spectrum.sum()

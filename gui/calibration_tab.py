@@ -1,6 +1,6 @@
 """The Scan Calibration tab: a stand-alone calibration and the gate's verdict on it.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -18,6 +18,8 @@ keeps every control that could interfere disabled until it has finished.
 Depends on: numpy, PySide6; cls_acquisition.calibration,
 cls_acquisition.scan_plan, gui.plots, gui.shared_widgets.
 """
+
+import html
 
 import numpy as np
 from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel, QPushButton, QVBoxLayout, QWidget
@@ -100,3 +102,26 @@ class Calibration_Tab(QWidget):
 
     def Show_Failure(self, message):
         self.Report_Label.setText(Verdict_Html('FAIL', message))
+
+    def Show_Run(self, name, commanded, readings):
+        """A run file's own calibration: the voltages commanded and the meter's
+        readings, as written. Its line and where its branches meet 0 V are
+        given; the gate is not run again, since a file keeps no stamps."""
+        commanded = np.asarray(commanded, dtype=float)
+        readback = np.asarray(readings, dtype=float) * calibration.DIVIDER
+        if len(commanded) != len(readback) or len(commanded) < 2:
+            self._Set, self._Readback = [], []
+            self._Draw()
+            self.Report_Label.setText(html.escape(
+                f"{name} holds no usable calibration: {len(readback)} readings for "
+                f"{len(commanded)} setpoints.", quote=False))
+            return
+        self._Set, self._Readback = list(commanded), list(readback)
+        self._Draw()
+        gain, offset, rms = calibration.Line_Fit(commanded, readback)
+        seam = calibration.Step_At_Zero(commanded, readback)
+        self.Report_Label.setText(html.escape(
+            f"{name}'s calibration, {len(commanded)} points: readback = {gain:.6f} × set "
+            f"{offset:+.3f} V, residual {rms:.3f} V rms"
+            + (f"; its branches' lines meet 0 V {seam:+.3f} V apart" if seam is not None
+               else "") + ".", quote=False))

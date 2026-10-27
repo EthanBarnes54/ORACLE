@@ -1,5 +1,6 @@
 """The run file keeps the archive's format, and its numbering survives anything."""
 
+import os
 from datetime import datetime
 
 import asdf
@@ -19,7 +20,7 @@ def _Header(run=7, when=datetime(2026, 10, 25, 12, 0)):
 
 def test_Header_And_Rows_Read_Back_As_The_Archive_Has_Them(tmp_path):
     path = run_file.Create(str(tmp_path), _Header())
-    assert path.endswith('2026/10/25/run_0007.asdf')
+    assert path.endswith(os.path.join('2026', '10', '25', 'run_0007.asdf'))
     rows = np.arange(12.0).reshape(2, 6)
     run_file.Append(path, rows)
     run_file.Append(path, rows + 12)

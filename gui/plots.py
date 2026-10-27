@@ -15,7 +15,7 @@ double-click on it, puts it back to the full view and following again.
 Ctrl-drag on a gate plot (Cmd-drag on macOS) sets its gate, dragging
 its edges moves it, and a double-click removes it; on the Scan tab's TOF
 plot the spectrum, the TOF-HFS map and the time graph count only hits
-inside it, and the run viewer gates its runs the same way.
+inside it.
 
 Depends on: pyqtgraph, PySide6; gui.theme.
 """

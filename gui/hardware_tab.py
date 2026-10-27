@@ -1,6 +1,12 @@
+def _Duration(seconds):
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60:.0f} min" if seconds < 5400 else f"{seconds / 3600:.1f} h"
+
+
 """The Hardware Calibration tab: settle time, linearity and the cooler monitor.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -14,10 +20,18 @@ Each page reads its own widgets into its measurement's parameters
 (``Params``, which refuses what cannot run with a sentence), says the
 most it will put on the platform (``Max_Volts``, which the window asks
 the operator to arm on the rack), names the records it writes as it
-runs (``RECORDS``: kind to columns) and what of its result closes them
-(``Results``). The main window runs every page's measurement the same
-way, off the GUI thread, keeping everything that could drive the DAC or
-the meters disabled until it has finished.
+runs (``RECORDS``: kind to columns), the rows its result adds once it
+ends (``Rows``: the cooler's spectrum) and what of its result closes
+them (``Results``). A measurement that fails part way is still analysed
+as far as it went (``Partial``), as the bench tool's results_partial
+was. The main window runs every page's measurement the same way, off
+the GUI thread, keeping everything that could drive the DAC or the
+meters disabled until it has finished.
+
+Above the pages, beside the ramp, the line meter can be read precisely
+(the bench tool's 'Read DMM') to check the wiring and polarity against
+whatever quick tune holds; and the settle page hands its recommended
+wait to the linearity page, as the bench tool's did.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.calibration,
 cls_acquisition.hardware_calibration, cls_acquisition.hardware.mcc_dac,
@@ -51,12 +65,6 @@ CSV_BYTES_PER_READING = 30
 DEVIATION_SPAN = 10                 # tolerances either side, the deviation plot's view
 
 
-def _Duration(seconds):
-    if seconds < 90:
-        return f"{seconds:.0f} s"
-    return f"{seconds / 60:.0f} min" if seconds < 5400 else f"{seconds / 3600:.1f} h"
-
-
 def _Table(columns):
     table = QTableWidget(0, len(columns))
     table.setHorizontalHeaderLabels(columns)
@@ -88,8 +96,11 @@ class _Panel(QWidget):
         buttons = QHBoxLayout()
         self.Start_Button = QPushButton(f'Run {title.lower()}')
         self.Stop_Button = QPushButton('Stop', enabled=False)
-        buttons.addWidget(self.Start_Button)
-        buttons.addWidget(self.Stop_Button)
+        self.Open_Button = QPushButton(theme.Icon('folder-open'), 'Open record...')
+        self.Open_Button.setToolTip(f"Show a {title.lower()} record saved earlier, here or "
+                                    f"by the rack: its plots, its table and its analysis.")
+        for button in (self.Start_Button, self.Stop_Button, self.Open_Button):
+            buttons.addWidget(button)
         column.addLayout(buttons)
         self.Report_Label = QLabel('Not run yet in this session.')
         self.Report_Label.setWordWrap(True)
@@ -117,6 +128,27 @@ class _Panel(QWidget):
         """``{record kind: {name: value}}``, written as each record closes."""
         return {}
 
+    def Rows(self, result):
+        """``{record kind: columns}`` the result adds once it ends."""
+        return {}
+
+    def Partial(self):
+        """What has been shown so far, as a result ``Results`` and ``Rows``
+        take, or None if it is too little to analyse."""
+        return None
+
+    def Show_Record(self, path):
+        """The record at ``path`` drawn and analysed as when it was taken;
+        raises Calibration_Error naming what it lacks."""
+        raise NotImplementedError
+
+    def _Replay(self, items, path):
+        """Clear the page as a measurement would, then show ``items``."""
+        self.Begin()
+        self.Running(False)
+        for item in items:
+            self.Show_Progress(item)
+
     def Begin(self):
         self.Report_Label.setText("Measuring...")
         self.Stop_Button.setEnabled(True)
@@ -131,6 +163,9 @@ class _Panel(QWidget):
 
     def Show_Failure(self, message):
         self.Report_Label.setText(Verdict_Html('FAIL', message))
+
+    def Show_Stopped(self, message):
+        self.Report_Label.setText(Verdict_Html('WARN', f"Stopped: {message}"))
 
 
 class Settle_Panel(_Panel):
@@ -204,9 +239,14 @@ class Settle_Panel(_Panel):
         self.Model_Label.setWordWrap(True)
         self.Use_Button = QPushButton('Use as scan settle model', enabled=False)
         self.Clear_Button = QPushButton('Clear scan settle model')
-        for widget in (self.Model_Label, self.Use_Button, self.Clear_Button):
+        self.Wait_Button = QPushButton('Use recommended wait for linearity', enabled=False)
+        self.Wait_Button.setToolTip(f"Set the linearity sweep's settle after each step to "
+                                    f"{hc.WAIT_FACTOR:g} times the slowest step here, from "
+                                    f"its command, and at least {hc.MIN_WAIT_S:g} s.")
+        for widget in (self.Model_Label, self.Use_Button, self.Clear_Button, self.Wait_Button):
             model.addWidget(widget)
         self._Control_Column.insertWidget(1, self.Model_Group)
+        self._Results = []
 
     def _Tail_Changed(self):
         for widget in (self.Tail_Box, self.Tail_Nplc_Combo):
@@ -247,20 +287,37 @@ class Settle_Panel(_Panel):
         verdict, sentence = hc.Settle_Summary(results)
         return {'settle': {'Verdict': f"{verdict}: {sentence}"}}
 
+    def Partial(self):
+        return list(self._Results) or None
+
     def Begin(self):
         super().Begin()
+        self._Results = []
+        self.Wait_Button.setEnabled(False)
         for plot in (self.Response_Plot, self.Deviation_Plot):
             for item in plot.listDataItems():
                 plot.removeItem(item)
-        # the settling, not the step: the jump itself runs far off this view
-        tolerance = self.Tolerance_Box.value()
-        for line, sign in zip(self._Band, (1, -1)):
-            line.setValue(sign * tolerance)
-        self.Deviation_Plot.setYRange(-DEVIATION_SPAN * tolerance, DEVIATION_SPAN * tolerance)
+        self._Show_Band(self.Tolerance_Box.value())
         self.Table.setRowCount(0)
         self.Use_Button.setEnabled(False)
 
+    def _Show_Band(self, tolerance):
+        """The band a step must stay inside, on a view of the settling, not
+        the step: the jump itself runs far off it."""
+        for line, sign in zip(self._Band, (1, -1)):
+            line.setValue(sign * tolerance)
+        self.Deviation_Plot.setYRange(-DEVIATION_SPAN * tolerance, DEVIATION_SPAN * tolerance)
+
+    def Show_Record(self, path):
+        results = hc.Read_Settle(path)
+        if not results:
+            raise hc.Calibration_Error(f"{path} holds no step.")
+        self._Replay(results, path)
+        self._Show_Band(min(r['Band_V'] for r in results))
+        self.Show_Result(results, [path])
+
     def Show_Progress(self, result):
+        self._Results.append(result)
         pen = plots.Pen(MODE_COLOURS[result['Mode']])
         times = result['Times_S']
         self.Response_Plot.plot(times, result['Deviation_V'] + result['Final_V'], pen=pen)
@@ -284,6 +341,7 @@ class Settle_Panel(_Panel):
                 f"over {step['Reps']}, overshoot {step['Overshoot_Pct']:.2f} %{tail}"))
         super().Show_Result(results, paths, '<br>'.join(lines))
         self.Use_Button.setEnabled(bool(results))
+        self.Wait_Button.setEnabled(bool(results))
 
 
 class Linearity_Panel(_Panel):
@@ -407,14 +465,35 @@ class Linearity_Panel(_Panel):
                  'QuadraticVPerKv2': result['Quadratic_V_Per_Kv2'],
                  'Fits': result['Fits'], 'SeamV': result['Seam_V'],
                  'GainMismatchPpm': result['Gain_Mismatch_Ppm'],
-                 'Hysteresis': result['Hysteresis'], 'ZeroDrift': result['Zero_Drift'],
-                 'DacCorrection': result['Dac']['Dac_Correction'][1]}
+                 'Hysteresis': result['Hysteresis'], 'ZeroDrift': result['Zero_Drift']}
+        if 'Dac' in result:             # a partial result never heard the 'Calibrate' reply
+            lines['DacCorrection'] = result['Dac']['Dac_Correction'][1]
         for channel, name in hc.BRANCHES:
             table = (result['Inl'] or {}).get(channel)
             if table is not None:
                 lines[f"Inl_{name}"] = {'knots_v': [round(v, 3) for v in table['Knots_V']],
                                         'error_v': [round(v, 4) for v in table['Error_V']]}
         return {'linearity': lines}
+
+    def Partial(self):
+        try:
+            return hc.Linearity_Analysis(self._Points)
+        except hc.Calibration_Error:
+            return None
+
+    def Show_Record(self, path):
+        points = hc.Read_Linearity(path)
+        result = hc.Linearity_Analysis(points)
+        # all the points at once, drawn once: a 1 V sweep holds ten thousand
+        self._Replay([], path)
+        self._Points = points[:-1]
+        self.Show_Progress(points[-1])
+        self.Show_Result(result, [path])
+        # the correction in force when it was swept is not in the record, so its
+        # own cannot be composed onto it
+        self.Use_Button.setEnabled(False)
+        self.Report_Label.setText(self.Report_Label.text() + "<br>" + html.escape(
+            "Opened from its record: sweep again to put a correction in force."))
 
     def Begin(self):
         super().Begin()
@@ -492,7 +571,7 @@ class Linearity_Panel(_Panel):
 class Cooler_Panel(_Panel):
 
     PEAK_COLUMNS = ('Hz', 'amplitude V', 'SNR', 'mains', 'meter gain')
-    RECORDS = {'cooler': hc.COOLER_COLUMNS}
+    RECORDS = {'cooler': hc.COOLER_COLUMNS, 'cooler_spectrum': hc.SPECTRUM_COLUMNS}
 
     def __init__(self, parent=None):
         self.Voltage_Plot = plots.Plot('Cooler voltage', ('Time', 's'), ('Cooler - mean', 'V'))
@@ -520,7 +599,8 @@ class Cooler_Panel(_Panel):
         for box in (self.Duration_Box, self.Interval_Box):
             box.valueChanged.connect(self._Estimate)
         self.Integration_Combo.currentIndexChanged.connect(self._Integration_Changed)
-        self._Curve = self.Voltage_Plot.plot(pen=plots.Pen())
+        self._Curve = plots.Dense_Curve(pen=plots.Pen())
+        self.Voltage_Plot.addItem(self._Curve)
         self._Asd_Curve = self.Asd_Plot.plot(pen=plots.Pen())
         self._Times, self._Volts = [], []
         self._Integration_Changed()
@@ -554,6 +634,27 @@ class Cooler_Panel(_Panel):
         lines['Peaks'] = [{k: round(v, 5) for k, v in peak.items()} for peak in result['Peaks']]
         lines['Bands'] = [{k: round(v, 5) for k, v in band.items()} for band in result['Bands']]
         return {'cooler': lines}
+
+    def Rows(self, result):
+        return {'cooler_spectrum': (result['Frequency_Hz'], result['Asd'])}
+
+    def Show_Record(self, path):
+        times, volts, integration = hc.Read_Cooler(path)
+        if len(times) < hc.MIN_SPECTRUM_READINGS:
+            raise hc.Calibration_Error(f"{path} holds {len(times)} readings; a spectrum needs "
+                                       f"{hc.MIN_SPECTRUM_READINGS}.")
+        result = hc.Noise_Analysis(volts, times[1] - times[0], integration)
+        self._Replay([(times, volts)], path)
+        self.Show_Result(dict(result, Times_S=times, Volts=volts), [path])
+
+    def Partial(self):
+        times = np.concatenate(self._Times) if self._Times else np.zeros(0)
+        if len(times) < hc.MIN_SPECTRUM_READINGS:
+            return None
+        params = self.Params()
+        integration = (params['nplc'] / hc.POWER_LINE_HZ if params['nplc']
+                       else params['aperture_s'])
+        return hc.Noise_Analysis(np.concatenate(self._Volts), times[1] - times[0], integration)
 
     def Begin(self):
         super().Begin()
@@ -602,6 +703,18 @@ class Hardware_Tab(QWidget):
         row.addStretch(1)
         row.addWidget(QLabel(f"Every setpoint is held to ±{limit_v:g} V (settings: "
                              f"instruments, hv_limit_v)."))
+        self.Read_Group = QGroupBox('Line meter')
+        self.Read_Button = QPushButton(f"Read ({hc.PRECISE_READINGS} × NPLC "
+                                       f"{hc.PRECISE_NPLC:g})")
+        self.Read_Button.setToolTip("Read the platform precisely, to check the wiring and "
+                                    "polarity against what quick tune holds on it.")
+        self.Read_Label = QLabel('–')
+        read = QHBoxLayout(self.Read_Group)
+        read.addWidget(self.Read_Button)
+        read.addWidget(self.Read_Label, 1)
+        header = QHBoxLayout()
+        header.addWidget(self.Ramp_Group, 1)
+        header.addWidget(self.Read_Group, 1)
         self.Settle = Settle_Panel(self.Ramp, limit_v)
         self.Linearity = Linearity_Panel(self.Ramp, limit_v)
         self.Cooler = Cooler_Panel()
@@ -610,9 +723,19 @@ class Hardware_Tab(QWidget):
         for page, name in zip(self.Panels, ('Settle time', 'Linearity', 'Cooler monitor')):
             self.Pages.addTab(page, name)
         column = QVBoxLayout(self)
-        column.addWidget(self.Ramp_Group)
+        column.addLayout(header)
         column.addWidget(self.Pages, 1)
+        self.Settle.Wait_Button.clicked.connect(self._Use_Wait)
 
     def Ramp(self):
         """``(step V, rate V/s)`` of every unmeasured move."""
         return self.Ramp_Step_Box.value(), self.Ramp_Rate_Box.value()
+
+    def _Use_Wait(self):
+        """The settle test's recommended wait into the linearity sweep."""
+        self.Linearity.Settle_Box.setValue(hc.Recommended_Wait(self.Settle.Result[0]))
+        self.Pages.setCurrentWidget(self.Linearity)
+
+    def Show_Reading(self, mean_v, sigma_v, setpoint_v):
+        self.Read_Label.setText(f"{mean_v:+.3f} V, σ {sigma_v:.3f} V; readback − setpoint "
+                                f"{mean_v - setpoint_v:+.3f} V (setpoint {setpoint_v:g} V)")

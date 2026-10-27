@@ -1,7 +1,7 @@
 """The run file, in the ASDF format the archive and its readers expect.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-29
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The header's keys and their meaning are frozen: cls_tools and DENIS read

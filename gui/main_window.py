@@ -6,8 +6,8 @@ Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
 with the bench tool's Hardware Calibration and the Scan Performance
-analysis between them and the data viewer's Run viewer after them,
-above the quick-tune controls and the experiment information. The window
+analysis between them, above the quick-tune controls and the experiment
+information. Finished runs are viewed and fitted in DENIS. The window
 composes the pieces and owns the run: Start scan calibrates the scan's
 own plan, puts the calibration through the gate, and only then writes
 the run file's header and starts the scan; a REJECT writes nothing and
@@ -16,8 +16,14 @@ is closed when the acquisition process marks the scan's end. A hardware
 calibration runs on the same worker slot as a calibration, so it locks
 the same controls; its record is saved beside the run files, and a
 linearity sweep's DAC correction goes into force only when the operator
-says so, and into the settings with it. Each run is analysed for its
-performance as it ends, off the GUI thread.
+says so, and into the settings with it. Every tab shows one run at a
+time, named on the Shown line: the latest as ORACLE opens, any opened
+(File ▸ Open run, or Scan Performance), or the one being taken, which a
+scan or the triggers start by clearing them all for, and which stays on
+them, saved and analysed, once it ends. Analysis runs off the GUI
+thread. If the acquisition process
+dies, the window clears the flags it left set, closes a run it was
+taking on what it recorded, and says so.
 
 ``main()`` sets up the session log, one instance per user (two would
 fight over the instruments), the theme and splash, and the rack: the
@@ -27,9 +33,10 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.2.0'
+__version__ = '0.2.1'
 
 import contextlib
+import ctypes
 import getpass
 import logging
 import math
@@ -55,10 +62,11 @@ from cls_acquisition import (calibration, hardware_calibration, run_file, scan_p
                              settings)
 from cls_acquisition.acquisition import Acquisition_Error, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
+from cls_acquisition.keep_awake import Keep_Awake
 from cls_acquisition.hardware import Rack
 from cls_acquisition.hardware import mcc_dac
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER
-from cls_acquisition.scan_plan import Scan_Plan_Error
+from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 from gui import plots, session_log, theme
 from gui.calibration_tab import Calibration_Tab
 from gui.hardware_tab import Hardware_Tab
@@ -67,12 +75,12 @@ from gui.performance_tab import Performance_Tab
 from gui.scan_tab import Scan_Tab
 from gui.shared_widgets import Job_Worker, Spin, Verdict_Html
 from gui.time_tab import Time_Tab
-from gui.viewer_tab import Viewer_Tab
 
 TICK_MS = 100
 MONITOR_FLUSH_TICKS = 10            # the monitor record is written once a second
 SLIDER_STEPS = 10000
 STARTUP_TIMEOUT_S = 30.0            # the acquisition process opens its devices first
+APP_ID = 'io.github.ethanbarnes54.oracle'   # as the macOS bundle's CFBundleIdentifier
 
 log = logging.getLogger('oracle.gui')
 
@@ -98,9 +106,12 @@ class Main_Window(QMainWindow):
         self._Correction = config['dac_correction'] or mcc_dac.CORRECTION
         self._Settle_Model = config['settle_model']
         self._Analysis = None           # the performance analysis in progress
+        self._Analysing = None          # the run it is of
+        self._Wanted = None             # the run Scan Performance is to show
         self._Laser = config['laser']
         self._Monitor = []              # monitor rows of the run, not yet written
         self._Death_Shown = False
+        self._Awake = Keep_Awake()      # no sleep while anything runs
 
         rack_name = 'simulated rack' if rack.Simulated else 'rack'
         self.setWindowTitle(f"ORACLE v{__version__} ({rack_name})")
@@ -114,13 +125,11 @@ class Main_Window(QMainWindow):
         self.Calibration = Calibration_Tab(self._Limit_V)
         self.Hardware = Hardware_Tab(self._Limit_V)
         self.Performance = Performance_Tab()
-        self.Viewer = Viewer_Tab(self._Data_Dir, config['laser'])
         for tab, icon, name in ((self.Scan, 'atom', 'Scan controls'),
                                 (self.Calibration, 'crosshair', 'Scan Calibration'),
                                 (self.Hardware, 'zap', 'Hardware Calibration'),
                                 (self.Performance, 'stethoscope', 'Scan Performance'),
-                                (self.Time, 'hourglass', 'Time graphs'),
-                                (self.Viewer, 'bar-chart-2', 'Run viewer')):
+                                (self.Time, 'hourglass', 'Time graphs')):
             self.Tabs.addTab(tab, theme.Icon(icon), name)
         self.Scan.Experiment_Edit.setText(config['experiment'])
 
@@ -167,6 +176,9 @@ class Main_Window(QMainWindow):
             panel.Start_Button.clicked.connect(
                 lambda _=False, panel=panel, measure=measure: self._Run_Bench(panel, measure))
             panel.Stop_Button.clicked.connect(self._Stop_Bench)
+            panel.Open_Button.clicked.connect(
+                lambda _=False, panel=panel: self._Open_Record(panel))
+        hardware.Read_Button.clicked.connect(self._Read_Line)
         hardware.Linearity.Use_Button.clicked.connect(self._Use_Correction)
         hardware.Linearity.Clear_Button.clicked.connect(lambda: self._Set_Correction(None))
         hardware.Settle.Use_Button.clicked.connect(lambda: self._Set_Settle_Model(
@@ -175,15 +187,17 @@ class Main_Window(QMainWindow):
         hardware.Settle.Show_Model(self._Settle_Model)
         performance = self.Performance
         performance.Refresh_Button.clicked.connect(self._Refresh_Runs)
-        performance.Browse_Button.clicked.connect(self._Browse_Run)
+        performance.Browse_Button.clicked.connect(self._Open_Run)
         performance.Analyse_Button.clicked.connect(
-            lambda: performance.Selected() and self._Analyse(performance.Selected()))
+            lambda: performance.Selected() and self._Open_Run(performance.Selected()))
         performance.Export_Button.clicked.connect(self._Export_Performance)
         self._Refresh_Runs()
-        if performance.Follow_Check.isChecked() and performance.Selected():
-            self._Analyse(performance.Selected())
+        if performance.Selected():
+            # the latest run, on every tab
+            self.Show_Run(performance.Selected(), quiet=True)
 
         self._Timer = QTimer(self, interval=TICK_MS, timeout=self._Tick)
+        self._Show_State()              # the controls as the rack stands, from the start
         self._Timer.start()
 
     # ── Layout ───────────────────────────────────────────────────
@@ -224,20 +238,23 @@ class Main_Window(QMainWindow):
             grid.addWidget(QLabel(text), row, 2 * (i % 3))
             grid.addWidget(label, row, 2 * (i % 3) + 1)
             grid.setColumnStretch(2 * (i % 3) + 1, 1)
+        # the one run every tab shows, and whether it is live, saved or from a file
+        self.Shown_Label = QLabel('nothing yet')
+        grid.addWidget(QLabel('Shown:'), 2, 0)
+        grid.addWidget(self.Shown_Label, 2, 1, 1, 5)
         return group
 
     def _Build_Menus(self):
         file_menu = self.menuBar().addMenu('&File')
+        open_run = QAction(theme.Icon('file-down'), 'Open run...', self,
+                           shortcut=QKeySequence.StandardKey.Open)
+        open_run.triggered.connect(self._Open_Run)
+        file_menu.addAction(open_run)
         for text, folder in (('Open data folder', self._Data_Dir),
                              ('Open log folder', os.path.join(settings.APP_ROOT, 'logs'))):
             action = QAction(theme.Icon('folder-open'), text, self)
-            action.triggered.connect(lambda _=False, f=folder: QDesktopServices.openUrl(
-                QUrl.fromLocalFile(f)))
+            action.triggered.connect(lambda _=False, f=folder: self._Open_Folder(f))
             file_menu.addAction(action)
-        view_runs = QAction(theme.Icon('bar-chart-2'), 'Open runs in the viewer...', self)
-        view_runs.triggered.connect(lambda: (self.Tabs.setCurrentWidget(self.Viewer),
-                                             self.Viewer.Browse()))
-        file_menu.addAction(view_runs)
         file_menu.addSeparator()
         file_menu.addAction('Quit', self.close)
         view_menu = self.menuBar().addMenu('&View')
@@ -246,6 +263,69 @@ class Main_Window(QMainWindow):
         autoscale.triggered.connect(self._Autoscale_All)
         view_menu.addAction(autoscale)
         self.menuBar().addMenu('&Help').addAction('About ORACLE', self._About)
+
+    def _Open_Run(self, path=None):
+        """The run at ``path``, or one chosen from the data folder or anywhere,
+        shown on every tab; only while nothing runs, since the live plots are
+        the same plots."""
+        state = self._State
+        if state.Scanning.is_set() or state.Triggering.is_set() or self._Worker is not None:
+            QMessageBox.warning(self, 'Run not opened', "A scan, the triggers or a calibration "
+                                                        "is running, and the plots are theirs; "
+                                                        "open the run once it has finished.")
+            return
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, 'Open a run', self._Data_Dir,
+                                                  'Run files (run_*.asdf)')
+        if path:
+            self.Show_Run(path)
+
+    def Show_Run(self, path, quiet=False):
+        """The run at ``path`` on every tab at once, as the DAQ saw it: its hits
+        on the Scan tab and the Time graphs, through the tab's own gate,
+        channels and bin size, its calibration on the Scan Calibration tab, and
+        its analysis on the Scan Performance tab. It stays there until a scan,
+        the triggers or another run take the tabs. Fitting it is DENIS's.
+        ``quiet``: a run that cannot be read is said in the log and the Shown
+        line alone, as at start-up."""
+        name = os.path.basename(path)
+        try:
+            header, raw, _ = run_file.Read(path)
+            plan = Scan_Plan(*zip(*header['ScanningRanges']), header['StepSize'])
+        except Exception as e:
+            log.exception("Opening %s failed", path)
+            self.Shown_Label.setText(f"nothing: {name} could not be read")
+            if not quiet:
+                QMessageBox.warning(self, 'Run not opened', f"{name} could not be read as a "
+                                                            f"run file: {e}")
+            return
+        self._Start_Live(plan)
+        self._Live.Add(raw)
+        self.Calibration.Show_Run(name, header.get('CalSet', []), header.get('CalReadback', []))
+        self._Refresh_Runs(keep=path)
+        self._Analyse(path)
+        self.Tabs.setCurrentWidget(self.Scan)
+        self.Shown_Label.setText(
+            f"{name}, from its file: {len(raw)} hits, {len(plan)} setpoints of {plan.Step:g} V, "
+            f"{header.get('BunchesPerChannel')} bunches each "
+            f"({header.get('Experiment') or 'no experiment named'})")
+        log.info("Showing %s", path)
+
+    def _Clear_Shown(self, shown, waiting):
+        """Every tab given over to what starts now (``shown``): the scan plots
+        are cleared by _Start_Live, and Scan Performance waits, saying why."""
+        self._Wanted = None             # an analysis still running is not shown
+        self.Performance.Clear(waiting)
+        self.Shown_Label.setText(shown)
+
+    def _Open_Folder(self, folder):
+        """Show ``folder`` in Explorer or the Finder, made first if this
+        ORACLE owns it; the rack's data folder is only ever looked for."""
+        if self._Rack.Simulated or folder != self._Data_Dir:
+            os.makedirs(folder, exist_ok=True)
+        if not os.path.isdir(folder) or not QDesktopServices.openUrl(QUrl.fromLocalFile(folder)):
+            QMessageBox.warning(self, 'Folder not opened', f"The folder {folder} could not be "
+                                                           f"opened; is it reachable?")
 
     def _Autoscale_All(self):
         for plot in self.findChildren(plots.Plot_Widget):
@@ -307,6 +387,8 @@ class Main_Window(QMainWindow):
             return
 
         self._Start_Live(plan)
+        self._Clear_Shown(f"run_{run:04d}, being calibrated",
+                          f"Run {run} is being taken: it is analysed as it ends.")
         self.Sweep_From.setValue(plan.Setpoints.min())
         self.Sweep_To.setValue(plan.Setpoints.max())
         when = datetime.now()
@@ -336,6 +418,8 @@ class Main_Window(QMainWindow):
         if report['Verdict'] == calibration.REJECT:
             self._Elog.Append(text + "RUN REJECTED: no file written, no scan started.\n",
                               self._Experiment())
+            self.Shown_Label.setText(f"run_{pending['run']:04d}'s calibration, refused by "
+                                     f"the gate: nothing written")
             QMessageBox.critical(self, 'Run rejected', f"{calibration.Rejections(report)}\n\n"
                                                        f"No file written, no scan started.")
             return
@@ -357,6 +441,7 @@ class Main_Window(QMainWindow):
         try:
             self._Run = run_file.Create(self._Data_Dir, header)
         except (OSError, ValueError) as e:
+            self.Shown_Label.setText(f"nothing: run {pending['run']}'s file was not written")
             QMessageBox.critical(self, 'Run file not written', str(e))
             return
         started = self._Send('Start_Scan', setpoints=plan.Setpoints.tolist(),
@@ -367,8 +452,11 @@ class Main_Window(QMainWindow):
             with contextlib.suppress(OSError):
                 os.remove(self._Run)    # a header with no scan behind it is not a run
             self._Run = None
+            self.Shown_Label.setText(f"nothing: run {pending['run']} did not start")
             return
         self.Run_Label.setText(str(pending['run']))
+        self.Shown_Label.setText(f"{os.path.basename(self._Run)}, live: written to its file "
+                                 f"as it comes in")
         log.info("Run %d started: %s", pending['run'], self._Run)
 
     def _End_Run(self):
@@ -380,9 +468,14 @@ class Main_Window(QMainWindow):
         self._Run = None
         self._Monitor = []
         if finished is not None:
+            # kept on every tab, as taken, until a scan or another run takes them
+            name = os.path.basename(finished)
+            self.Shown_Label.setText(f"{name}, as taken: saved to its file")
             self._Refresh_Runs(keep=finished)
             if self.Performance.Follow_Check.isChecked():
                 self._Analyse(finished)
+            else:
+                self.Performance.Clear(f"{name} is saved; Show and analyse puts it here.")
 
     def _Stop_Now(self):
         if self._Send('Stop_Now') is not None:
@@ -402,6 +495,8 @@ class Main_Window(QMainWindow):
         except Scan_Plan_Error:
             plan = None             # the TOF still shows; the spectrum has no axis
         self._Start_Live(plan)
+        self._Clear_Shown("the triggers' stream, live: not saved",
+                          "The triggers are streaming; nothing of theirs is saved or analysed.")
         self._Send('Start_Triggering', timing=timing)
 
     def _Toggle_Voltage(self):
@@ -467,6 +562,8 @@ class Main_Window(QMainWindow):
         if pending is not None:
             self._Elog.Append(pending['text'] + f"Calibration failed: {message}\n"
                               f"No file written, no scan started.\n", self._Experiment())
+            self.Shown_Label.setText(f"run_{pending['run']:04d}'s calibration, which failed: "
+                                     f"nothing written")
         QMessageBox.critical(self, 'Calibration failed', message)
 
     def _Worker_Finished(self):
@@ -506,12 +603,17 @@ class Main_Window(QMainWindow):
             progress=progress, stopped=stopped, records=records, **params), self)
 
         def done(result):
-            self._Close_Records(records, 'stopped' if worker.Stopped() else 'completed',
-                                panel.Results(result))
+            self._Finish_Records(records, 'stopped' if worker.Stopped() else 'completed',
+                                 panel, result)
             panel.Show_Result(result, [record.Path for record in records.values()])
 
         def failed(message):
-            self._Close_Records(records, f"failed: {message}")
+            # analysed as far as it went, as the bench tool's results_partial was
+            status = 'stopped' if worker.Stopped() else 'failed'
+            self._Finish_Records(records, f"{status}: {message}", panel, panel.Partial())
+            if worker.Stopped():
+                panel.Show_Stopped(message)
+                return
             panel.Show_Failure(message)
             QMessageBox.critical(self, f"{panel.Title} failed",
                                  f"{message}\n\nWhat it took is in "
@@ -537,6 +639,19 @@ class Main_Window(QMainWindow):
             f"• The divider is connected to the line and to the line meter.\n\n"
             f"Arm the high voltage and start?") == QMessageBox.StandardButton.Yes
 
+    def _Finish_Records(self, records, status, panel, result):
+        """Add ``result``'s closing rows to ``records`` and close them with its
+        results; with no result, close them with the status alone."""
+        if result is None:
+            self._Close_Records(records, status)
+            return
+        for kind, columns in panel.Rows(result).items():
+            try:
+                records[kind].Add(*columns)
+            except OSError:
+                log.exception("Writing the %s record failed", kind)
+        self._Close_Records(records, status, panel.Results(result))
+
     def _Close_Records(self, records, status, results=None):
         for kind, record in records.items():
             try:
@@ -545,9 +660,51 @@ class Main_Window(QMainWindow):
                 log.exception("Closing the %s record failed", kind)
             log.info("Hardware calibration record (%s): %s", status, record.Path)
 
+    def _Read_Line(self):
+        """The line meter read precisely (the bench tool's 'Read DMM'), on the
+        worker, against the setpoint on the platform as it starts."""
+        if self._Worker is not None:
+            return
+        setpoint = self._State.Voltage.value
+
+        def job(progress, stopped):
+            return hardware_calibration.Precise_Reading(self._Line, calibration.DIVIDER)
+
+        self._Worker = Job_Worker(job, self)
+        self._Worker.Done.connect(lambda reading: self.Hardware.Show_Reading(*reading, setpoint))
+        self._Worker.Failed.connect(lambda message: (
+            self.Hardware.Read_Label.setText(Verdict_Html('FAIL', message)),
+            QMessageBox.warning(self, 'Line meter not read', message)))
+        self._Worker.finished.connect(self._Worker_Finished)
+        self.Hardware.Read_Label.setText('Reading...')
+        self._Worker.start()
+        self._Show_State()
+
     def _Stop_Bench(self):
         if self._Worker is not None:
             self._Worker.Stop()
+
+    def _Open_Record(self, panel):
+        """A record of ``panel``'s measurement, chosen from the data folder's
+        hardware_calibration or anywhere, drawn and analysed on its page."""
+        if self._Worker is not None:
+            return
+        kind = next(iter(panel.RECORDS))
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Open a {panel.Title.lower()} record",
+            os.path.join(self._Data_Dir, 'hardware_calibration'),
+            f"{panel.Title} records ({kind}_2*.csv)")
+        if not path:
+            return
+        try:
+            panel.Show_Record(path)
+        except Exception as e:
+            log.exception("Opening %s failed", path)
+            panel.Show_Failure(f"{os.path.basename(path)} was not opened: {e}")
+            QMessageBox.warning(self, 'Record not opened', f"{os.path.basename(path)} could "
+                                                           f"not be shown: {e}")
+            return
+        log.info("Showing the %s record %s", kind, path)
 
     def _Set_Settle_Model(self, model):
         """Scans settle by ``model`` (None: SETTLE for every step) from the next one."""
@@ -595,30 +752,33 @@ class Main_Window(QMainWindow):
         runs = run_file.Runs(self._Data_Dir) if os.path.isdir(self._Data_Dir) else []
         self.Performance.Set_Runs(runs, keep)
 
-    def _Browse_Run(self):
-        path, _ = QFileDialog.getOpenFileName(self, 'Analyse a run', self._Data_Dir,
-                                              'Run files (run_*.asdf)')
-        if path:
-            self._Analyse(path)
-
     def _Analyse(self, path):
+        """Analyse ``path`` for Scan Performance, off the GUI thread. One asked
+        for while another runs waits for it, and only the last asked for is
+        shown, so the tab never shows another run than the rest."""
+        self._Wanted = path
+        self.Performance.Begin(path)
         if self._Analysis is not None:
-            return
+            return                      # started as the one running finishes
         laser = self._Laser
 
         def job(progress, stopped):
             return scan_performance.Analyse(*run_file.Read(path), laser)
 
+        self._Analysing = path
         self._Analysis = Job_Worker(job, self)
-        self._Analysis.Done.connect(lambda result: self.Performance.Show(path, result))
-        self._Analysis.Failed.connect(self.Performance.Show_Failure)
+        self._Analysis.Done.connect(
+            lambda result: path == self._Wanted and self.Performance.Show(path, result))
+        self._Analysis.Failed.connect(
+            lambda message: path == self._Wanted and self.Performance.Show_Failure(message))
         self._Analysis.finished.connect(self._Analysis_Finished)
-        self.Performance.Begin(path)
         self._Analysis.start()
 
     def _Analysis_Finished(self):
         self._Analysis.Retire()
         self._Analysis = None
+        if self._Wanted is not None and self._Wanted != self._Analysing:
+            self._Analyse(self._Wanted)
 
     def _Export_Performance(self):
         path, result = self.Performance.Result
@@ -669,9 +829,23 @@ class Main_Window(QMainWindow):
             self._Elog.Last_Error = None
         if not self._Death_Shown and not self._Link.Alive():
             self._Death_Shown = True
-            QMessageBox.critical(self, 'Acquisition stopped',
-                                 "The acquisition process has stopped; the session log says "
-                                 "why. Restart ORACLE.")
+            self._Acquisition_Died()
+
+    def _Acquisition_Died(self):
+        """The acquisition process is gone. Its flags live on in shared memory,
+        so they are cleared here, and a run it was taking is closed on the rows
+        it sent, rather than left open with the window in its scanning state."""
+        state = self._State
+        for flag in (state.Scanning, state.Triggering, state.Outputting, state.Calibrating):
+            flag.clear()
+        if self._Run is not None:
+            log.error("The acquisition process stopped during run %s", self._Run)
+            self._End_Run()
+        self._Show_State()
+        QMessageBox.critical(self, 'Acquisition stopped',
+                             "The acquisition process has stopped; the session log says why, "
+                             "and a run it was taking has been closed on what it recorded. "
+                             "Restart ORACLE.")
 
     def _Take_Data(self):
         scan_rows = []
@@ -739,12 +913,15 @@ class Main_Window(QMainWindow):
         scan.Start_Button.setText('Stop after scan' if scanning else 'Start scan')
         scan.Stop_Button.setEnabled(scanning)
         busy = calibrating or scanning
+        self._Awake.Hold(busy or triggering or outputting)
         hardware = self.Hardware
         for widget in (self.Calibration.Params_Group, self.Calibration.Control_Group,
                        self.Quick_Group, scan.New_Entry_Button, hardware.Ramp_Group,
-                       hardware.Linearity.Correction_Group, hardware.Settle.Model_Group,
+                       hardware.Read_Group, hardware.Linearity.Correction_Group,
+                       hardware.Settle.Model_Group,
                        *(panel.Params_Group for panel in hardware.Panels),
-                       *(panel.Start_Button for panel in hardware.Panels)):
+                       *(panel.Start_Button for panel in hardware.Panels),
+                       *(panel.Open_Button for panel in hardware.Panels)):
             widget.setEnabled(not busy)
         self.Trigger_Button.setText('Disable triggers' if triggering else 'Enable triggers')
         self.Volt_Button.setText('Disable voltage' if outputting else 'Enable voltage')
@@ -769,9 +946,9 @@ class Main_Window(QMainWindow):
             event.ignore()
             return
         self._Timer.stop()
+        self._Awake.Hold(False)
         if self._Analysis is not None:
             self._Analysis.wait()       # a thread cannot outlive its window
-        self.Viewer.Close()
         self._Take_Data()
         self._Link.Close()              # stops any scan and leaves the platform at 0 V
         self._Take_Data()
@@ -824,10 +1001,36 @@ def _Splash():
     return splash
 
 
+def _Windows_App_Id():
+    """Give the process ORACLE's own identity on Windows, so its taskbar
+    button carries ORACLE's icon rather than pythonw.exe's and is pinned as
+    ORACLE; elsewhere, nothing."""
+    if sys.platform != 'win32':
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_ID)
+    except (AttributeError, OSError):
+        log.warning("Windows did not take ORACLE's taskbar identity")
+
+
+def _Refuse_Start(message, log_path, splash=None):
+    """Say why ORACLE cannot start, with the session log's place; returns 1."""
+    if splash is not None:
+        splash.close()                          # it stays on top and would hide the error
+    QMessageBox.critical(None, 'ORACLE could not start',
+                         f"{message}\n\nThe session log has the details:\n{log_path}")
+    return 1
+
+
 def main():
     log_path = session_log.Install(settings.APP_ROOT)
     session_log.Install_Qt_Handler()
-    config = settings.Load()
+    try:
+        config, unreadable = settings.Load(), None
+    except settings.Settings_Error as e:
+        # said in a window below: a launch from the shortcut has no console
+        config, unreadable = None, e
+        log.error("%s", e)
 
     print('=' * 60)
     print(f"ORACLE v{__version__}")
@@ -835,18 +1038,21 @@ def main():
     print(f"Python:     {sys.version.split()[0]}")
     print(f"Platform:   {platform.platform()}")
     print(f"App dir:    {settings.APP_ROOT}")
-    print(f"Rack:       {config['rack']}")
+    print(f"Rack:       {config['rack'] if config else 'unknown: the settings are unreadable'}")
     print(f"Settings:   {settings.Settings_Path()}")
     if log_path:
         print(f"Log file:   {log_path}")
     print('-' * 60)
 
+    _Windows_App_Id()
     app = QApplication(sys.argv)
     app.setApplicationName('ORACLE')
     if not _Single_Instance(app):
         return 0
     theme.Apply_Theme(app)
     app.setWindowIcon(theme.App_Icon())
+    if unreadable is not None:
+        return _Refuse_Start(unreadable, log_path)
     splash = _Splash()
     app.processEvents()
 
@@ -878,10 +1084,7 @@ def main():
             opened.pop_all()                    # the window owns them from here
     except Exception as e:
         log.exception("ORACLE could not start")
-        splash.close()                          # it stays on top and would hide the error
-        QMessageBox.critical(None, 'ORACLE could not start',
-                             f"{e}\n\nThe session log has the details:\n{log_path}")
-        return 1
+        return _Refuse_Start(e, log_path, splash)
 
     window = Main_Window(config, rack, link, line_meter, cooler_meter, pvs, elog, warnings)
     if server is not None:

@@ -18,7 +18,9 @@ between the check and its READ?.
 A meter is reset when it is opened (another program, the bench tool or
 the old DAQ, may have left it streaming, in binary or on another
 trigger) and must answer *IDN? as a 3446x or 3447x; its *OPT? says how
-many readings its memory holds. Every reading is checked for the meter's
+many readings its memory holds. It is reset again when it is closed, as
+the bench tool leaves it, so whichever program opens it next finds it in
+its power-on state, not part way through a capture. Every reading is checked for the meter's
 overload (+-9.9E37) and invalid (9.91E37) markers, so a bad reading
 raises instead of passing for a voltage.
 
@@ -307,13 +309,19 @@ class _Meter():
         self._Move('continuous')
 
     def Close(self):
+        """Stop the poll, leave the meter reset, and let the session go."""
         self._Polling = False
         self._Thread.join(timeout=1.0)
+
+        def reset(inst):
+            for command in ("ABOR", "*RST", "*CLS"):
+                inst.Write(command)
+
         try:
-            self._Session.Transaction(lambda inst: inst.Write("ABOR"), timeout=2.0)
+            self._Session.Transaction(reset, timeout=2.0)
         except Exception as e:
-            log.warning("The meter at %s did not take its last ABOR: %s", self._Session.Resource,
-                        e)
+            log.warning("The meter at %s was not reset as it closed: %s",
+                        self._Session.Resource, e)
         self._Session.Close()
 
 

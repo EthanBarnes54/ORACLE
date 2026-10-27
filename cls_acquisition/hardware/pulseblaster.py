@@ -1,7 +1,7 @@
 """The SpinCore PulseBlaster that clocks the buncher and the time tagger.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Programs a pattern from cls_acquisition.triggers as a loop of time
@@ -22,7 +22,13 @@ IDLE_SLICE_NS = 5000
 class Pulse_Blaster():
 
     def __init__(self):
-        from spinapi import spinapi
+        try:
+            from spinapi import spinapi
+        except (ImportError, OSError) as e:
+            # spinapi loads SpinCore's native library as it is imported
+            raise RuntimeError(f"The PulseBlaster needs spinapi and SpinCore's SpinAPI driver; "
+                               f"install them on the rack PC ('install.bat rack' and SpinCore's "
+                               f"installer), or set rack: simulated ({e}).") from e
         self._Pb = spinapi
         spinapi.pb_select_board(0)
         if spinapi.pb_init() != 0:

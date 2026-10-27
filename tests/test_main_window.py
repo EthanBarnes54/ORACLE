@@ -29,6 +29,8 @@ def _Pump(app, until, timeout=60.0):
 @pytest.fixture
 def window(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, 'APP_ROOT', str(tmp_path))
+    # its own settings: the correction this module puts in force stays here
+    monkeypatch.setenv('ORACLE_SETTINGS_PATH', str(tmp_path / 'settings.yaml'))
     dialogs = []
     for kind in ('critical', 'warning'):
         monkeypatch.setattr(main_window.QMessageBox, kind,
@@ -126,8 +128,13 @@ def test_The_Hardware_Calibrations_Run_Save_And_Correct_The_Dac(qapp, window):
     assert cooler.Peak_Table.rowCount() > 0
     records = glob.glob(os.path.join(window._Data_Dir, 'hardware_calibration', '*.csv'))
     assert {os.path.basename(r).split('_2')[0] for r in records} == {
-        'settle', 'settle_traces', 'linearity', 'cooler'}
+        'settle', 'settle_traces', 'linearity', 'cooler', 'cooler_spectrum'}
     for record in records:
         with open(record) as fh:
-            assert '# status: completed' in fh.read()
+            text = fh.read()
+        assert '# status: completed' in text
+        if 'cooler_spectrum' in record:
+            # the averaged spectrum, written once the monitor ends, as the bench's spectrum.csv
+            rows = [line for line in text.splitlines() if line and not line.startswith('#')]
+            assert rows[0] == 'frequency_hz,asd_v_rt_hz' and len(rows) > 10
     assert window.Dialogs == []

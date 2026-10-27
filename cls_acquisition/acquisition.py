@@ -115,7 +115,9 @@ class Acquisition_Loop():
         self._Volts = None                  # on the DAC; None before the first write
         self._Last_Write = None
         self._Settle = None                 # the scan's settle model
-        self._Settled_At = None             # monotonic time the window may open again
+        # perf_counter time the window may open again: monotonic ticked every
+        # 15.6 ms on Windows before Python 3.13, a third of a step's settling
+        self._Settled_At = None
         self._Accepted = 0                  # bunches taken since the scan or stream began
         self._Tagger_Ref = None             # (tagger's bunch, ours) at the last hits
         self._Running = True
@@ -212,13 +214,13 @@ class Acquisition_Loop():
         if scan_type not in SCAN_TYPES:
             raise _Refused(f"'{scan_type}' is not a scan type; use one of "
                            f"{', '.join(SCAN_TYPES)}.")
+        self._Start_Triggers(timing)
         self._Plan = np.asarray(setpoints, dtype=float)
         self._Index = 0
         self._Scan_Type = scan_type
         self._Bunches_Per_Step = max(int(bunches_per_step), 1)
         self._Settle = settle
         self._State.Round.value = 1
-        self._Start_Triggers(timing)
         self._Step_To(self._Plan[0])
         self._State.Scanning.set()
         return {}
@@ -299,7 +301,7 @@ class Acquisition_Loop():
         """Wait out the step's settling, then its bunches, then on to the next
         setpoint."""
         if self._Settled_At is not None:
-            remaining = self._Settled_At - time.monotonic()
+            remaining = self._Settled_At - time.perf_counter()
             if remaining > 0:
                 self._Take_Instructions(min(remaining, IDLE_WAIT_S))
                 return
@@ -329,7 +331,7 @@ class Acquisition_Loop():
         self._Gate.Close()
         self._Drop()
         self._Write(volts)
-        self._Settled_At = time.monotonic() + (Settle_For(self._Settle, jump) if jump else 0.0)
+        self._Settled_At = time.perf_counter() + (Settle_For(self._Settle, jump) if jump else 0.0)
 
     def _Drop(self):
         self._State.Dropped.value += self._Tagger.Drain()
@@ -396,18 +398,18 @@ class Acquisition_Loop():
             state.Outputting.clear()
 
     def _Start_Triggers(self, timing):
-        """The pulses and the tagger running from a fresh count."""
+        """The pulses and the tagger running from a fresh count; a timing
+        whose edges or window do not fit its cycle is refused first."""
+        try:
+            pattern = triggers.Pattern(timing)
+            self._Tagger.Configure(timing['gate_start_us'], timing['gate_stop_us'])
+        except ValueError as e:
+            raise _Refused(f"{e} The triggers were not started.") from None
         for counter in (self._State.Bunches, self._State.Dropped, self._State.Skipped):
             counter.value = 0
         self._Accepted = 0
         self._Tagger_Ref = None
-        if timing['bunched']:
-            pattern = triggers.Bunched_Pattern(timing['rep_rate_hz'], timing['release_us'],
-                                               timing['tagger_delay_us'])
-        else:
-            pattern = triggers.Dc_Pattern()
         self._Pulses.Program(pattern)
-        self._Tagger.Configure(timing['gate_start_us'], timing['gate_stop_us'])
         self._Tagger.Start()
         self._Pulses.Start()
 

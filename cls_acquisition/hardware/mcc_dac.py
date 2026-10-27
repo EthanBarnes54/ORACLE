@@ -172,8 +172,14 @@ class Dac():
 def _Ul(board):
     """mcculw's ``ul``, its BIP10VOLTS range and a call that names a failure
     of ``board`` in a sentence."""
-    from mcculw import ul
-    from mcculw.enums import ULRange
+    try:
+        from mcculw import ul
+        from mcculw.enums import ULRange
+    except (ImportError, OSError) as e:
+        # mcculw is a wrapper of InstaCal's cbw64.dll, which exists only on Windows
+        raise Dac_Error(f"The MCC DAC needs mcculw and InstaCal (MCC DAQ software), which "
+                        f"run only on Windows; install ORACLE there with 'install.bat rack' "
+                        f"and InstaCal, or set rack: simulated ({e}).") from e
 
     def call(what, fn, *args):
         try:

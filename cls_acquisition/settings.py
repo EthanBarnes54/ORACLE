@@ -13,6 +13,11 @@ copy over an edit made while ORACLE was running.
 ``ORACLE_SETTINGS_PATH`` overrides the file (the tests point it at a
 private copy).
 
+A file that is not valid YAML, or not a mapping of keys, raises
+Settings_Error naming it and the line, rather than starting ORACLE on
+defaults the operator did not choose. The likeliest on Windows is a
+folder in double quotes, where YAML reads each backslash as an escape.
+
 Depends on: PyYAML.
 """
 
@@ -79,17 +84,33 @@ DEFAULTS = {
 }
 
 
+class Settings_Error(ValueError):
+    pass
+
+
 def Settings_Path():
     override = os.environ.get('ORACLE_SETTINGS_PATH')
     return override or os.path.join(APP_ROOT, 'settings', 'settings.yaml')
 
 
 def _Read():
+    path = Settings_Path()
     try:
-        with open(Settings_Path(), 'r', encoding='utf-8') as fh:
-            return yaml.safe_load(fh) or {}
+        with open(path, 'r', encoding='utf-8') as fh:
+            stored = yaml.safe_load(fh) or {}
     except FileNotFoundError:
         return {}
+    except yaml.YAMLError as e:
+        raise Settings_Error(f"The settings file {path} is not valid YAML: {e}. A Windows "
+                             f"folder must be written bare, in single quotes, or with "
+                             f"forward slashes, not in double quotes.") from None
+    except UnicodeDecodeError as e:
+        raise Settings_Error(f"The settings file {path} is not UTF-8 text ({e}); save it as "
+                             f"UTF-8.") from None
+    if not isinstance(stored, dict):
+        raise Settings_Error(f"The settings file {path} holds a {type(stored).__name__}, not "
+                             f"keys and their values.")
+    return stored
 
 
 def _Merged(base, over):

@@ -70,7 +70,14 @@ class Time_Tagger():
             sys.path.insert(0, driver_dir)
             if hasattr(os, 'add_dll_directory'):
                 os.add_dll_directory(driver_dir)
-        import timetagger4
+        try:
+            import timetagger4
+        except (ImportError, OSError) as e:
+            raise RuntimeError(f"The time tagger's wrapper (timetagger4) could not be loaded "
+                               f"from {driver_dir or 'the import path'}: it is a Windows module, "
+                               f"built on the rack PC from cls_acquisition/hardware/"
+                               f"timetagger4_wrapper, with the cronologic driver beside it "
+                               f"(instruments: tagger_driver) ({e}).") from e
         self._Card_Type = timetagger4.TimeTagger
         self._Levels = list(levels)
         self._Trigger_Level = trigger_level

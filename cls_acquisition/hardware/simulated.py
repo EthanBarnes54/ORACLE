@@ -91,6 +91,11 @@ COOLER_V = 29884.8
 COOLER_DRIFT_V_S = 0.0058 / 60
 COOLER_TONES = ((50.0, 0.438), (100.0, 0.014), (150.0, 0.038), (200.0, 0.023))  # (Hz, V)
 
+# every simulated time, in both processes: perf_counter is system-wide on
+# Windows and macOS alike, and fine enough for a 0.4 ms rise and a 50 Hz
+# ripple, where monotonic ticked every 15.6 ms on Windows before Python 3.13
+CLOCK = time.perf_counter
+
 RESONANCES = ((32.0, 1.0), (47.0, 0.6), (71.0, 0.35))  # (platform volts, height)
 FWHM_V = 4.0
 PEAK_RATE_HZ = 60.0                 # counts per second at the top of the strongest
@@ -111,19 +116,19 @@ def Step_Remaining(t):
 
 class Platform():
     """The platform voltage, shared between processes: where it was, where
-    it is going, and since when (time.monotonic, the same in both)."""
+    it is going, and since when (CLOCK, the same in both)."""
 
     def __init__(self, context):
-        self._State = context.Array('d', [0.0, 0.0, time.monotonic()])
+        self._State = context.Array('d', [0.0, 0.0, CLOCK()])
 
     def Set(self, volts):
         with self._State.get_lock():
-            now = time.monotonic()
+            now = CLOCK()
             self._State[:] = [self._At(now), volts, now]
 
     def Volts(self):
         with self._State.get_lock():
-            return self._At(time.monotonic())
+            return self._At(CLOCK())
 
     def _At(self, now):
         start, target, since = self._State[:]
@@ -271,10 +276,10 @@ def Line_Meter_Source(platform):
 
 
 def Cooler_Meter_Source():
-    start = time.monotonic()
+    start = CLOCK()
 
     def cooler():
-        t = time.monotonic()
+        t = CLOCK()
         volts = COOLER_V + COOLER_DRIFT_V_S * (t - start)
         volts += sum(a * np.sin(2.0 * np.pi * f * t) for f, a in COOLER_TONES)
         return volts / COOLER_DIVIDER
@@ -373,10 +378,10 @@ class Pulse_Generator():
         self._Thread.start()
 
     def _Run(self):
-        next_edge = time.monotonic()
+        next_edge = CLOCK()
         while self._Running:
             next_edge += self._Period_S
-            time.sleep(max(next_edge - time.monotonic(), 0.0))
+            time.sleep(max(next_edge - CLOCK(), 0.0))
             if self._Running:
                 self._Tagger.Edge(self._Period_S)
 

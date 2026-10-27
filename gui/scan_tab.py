@@ -10,7 +10,11 @@ over the TOF spectrum and the TOF-HFS map on the right. The tab reads
 its own widgets into what the acquisition process needs (the plan, the
 trigger timing, bunches per step) and draws from a Live_Data; starting
 and stopping belong to the main window. Its voltages are bounded by the
-platform's limit, and its gate by the tagger's timestamp range.
+platform's limit, and its gate by the tagger's timestamp range and the
+trigger's cycle. DC hits come through the tagger too, so its gate stays
+settable in DC mode; only the bunched timing is greyed out there. A TOF
+bin finer than MAX_TOF_BINS across the gate is widened to it, as the old
+DAQ's was, so a small bin cannot ask the window for gigabytes.
 
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
 cls_acquisition.hardware.timetagger, cls_acquisition.scan_plan,
@@ -34,6 +38,7 @@ from gui.shared_widgets import Spin
 RANGES = 7
 CHANNELS = (1, 2, 3, 4)
 DC_TRIGGER_HZ = 1e9 / triggers.DC_PERIOD_NS
+MAX_TOF_BINS = 50000                # across the gate; the old DAQ's cap
 
 
 def _Row(*widgets):
@@ -109,8 +114,7 @@ class Scan_Tab(QWidget):
         self.Tagger_Delay_Box = Spin(0, 0, 1000000, 0)
         self.Gate_Start_Box = Spin(0.0, 0.0, MAX_WINDOW_US)
         self.Gate_Length_Box = Spin(200.0, 0.0, MAX_WINDOW_US)
-        self._Timing_Boxes = (self.Dwell_Box, self.Release_Box, self.Tagger_Delay_Box,
-                              self.Gate_Start_Box, self.Gate_Length_Box)
+        self._Bunched_Boxes = (self.Dwell_Box, self.Release_Box, self.Tagger_Delay_Box)
         grid = QGridLayout()
         for row, (text, box, unit) in enumerate((
                 ('Dwell time', self.Dwell_Box, 'ms'),
@@ -186,7 +190,7 @@ class Scan_Tab(QWidget):
         bunched = self.Bunched_Radio.isChecked()
         self.Per_Step_Label.setText('Bunches per channel' if bunched else 'Seconds per channel')
         self.Per_Step_Box.setValue(1.0 if bunched else 0.1)
-        for box in self._Timing_Boxes:
+        for box in self._Bunched_Boxes:
             box.setEnabled(bunched)
 
     def Plan(self):
@@ -210,18 +214,22 @@ class Scan_Tab(QWidget):
 
     def Timing(self):
         """The trigger timing; raises ValueError for a gate past the tagger's
-        timestamp range."""
+        timestamp range, or any edge or window that does not fit the cycle."""
         start = self.Gate_Start_Box.value()
         Check_Window(start, start + self.Gate_Length_Box.value())
-        return {'bunched': self.Bunched(), 'rep_rate_hz': self.Trigger_Hz(),
-                'release_us': self.Release_Box.value(),
-                'tagger_delay_us': self.Tagger_Delay_Box.value(),
-                'gate_start_us': start, 'gate_stop_us': start + self.Gate_Length_Box.value()}
+        timing = {'bunched': self.Bunched(), 'rep_rate_hz': self.Trigger_Hz(),
+                  'release_us': self.Release_Box.value(),
+                  'tagger_delay_us': self.Tagger_Delay_Box.value(),
+                  'gate_start_us': start, 'gate_stop_us': start + self.Gate_Length_Box.value()}
+        triggers.Pattern(timing)
+        return timing
 
     def Tof_Edges(self):
-        start = self.Gate_Start_Box.value()
-        size = self.Bin_Box.value()
-        count = int(round(self.Gate_Length_Box.value() / size)) + 1
+        """The TOF histogram's edges across the gate, a bin apart, or wider
+        if that would make more than MAX_TOF_BINS."""
+        start, length = self.Gate_Start_Box.value(), self.Gate_Length_Box.value()
+        size = max(self.Bin_Box.value(), length / MAX_TOF_BINS)
+        count = int(round(length / size)) + 1
         return start + size * (np.arange(count + 1) - 0.5)
 
     def Channels(self):

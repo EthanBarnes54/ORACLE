@@ -328,6 +328,20 @@ def test_Each_Measurement_Runs_On_The_Simulated_Rack(tmp_path):
             record.Close('completed')
             with open(record.Path) as fh:
                 assert len(fh.read().splitlines()) > 3
+        # and each record reads back as it was taken, for its page's Open record
+        read = hc.Read_Settle(records['settle'].Path)
+        assert [(r['Step'], r['Mode'], r['Rep']) for r in read] == [
+            (r['Step'], r['Mode'], r['Rep']) for r in steps]
+        for back, taken in zip(read, steps):
+            for key in ('Lag_S', 'Settle_S', 'Rise_S', 'Overshoot_Pct', 'Final_V'):
+                assert back[key] == pytest.approx(taken[key], rel=1e-8)
+            assert back['Deviation_V'] == pytest.approx(taken['Deviation_V'], rel=1e-8,
+                                                        abs=1e-12)
+        points = hc.Read_Linearity(records['linearity'].Path)
+        assert [p['Kind'] for p in points] == [p['Kind'] for p in sweep['Points']]
+        assert hc.Linearity_Analysis(points)['Gain'] == pytest.approx(sweep['Gain'], rel=1e-8)
+        times, volts, _ = hc.Read_Cooler(records['cooler'].Path)
+        assert len(volts) == 300 and np.mean(volts) == pytest.approx(monitor['Mean_V'])
     finally:
         line.Close()
         cooler.Close()
@@ -342,3 +356,31 @@ def test_The_Settle_Model_Grows_With_The_Jump_And_Never_Counts_A_Lag_Below_Zero(
     # 2 kV settled sooner than 1 kV here, but a larger jump is never taken as faster
     assert model == {'measured': '2026-10-27',
                      'points': [[100.0, 0.002], [1000.0, 0.02], [2000.0, 0.02]]}
+
+
+def test_The_Line_Meter_Is_Read_Precisely_And_Left_On_Its_Poll():
+    meter, _ = _Meter(simulated.Keysight(lambda: 0.1234567, simulated.LINE_NOISE_V))
+    mean, sigma = hc.Precise_Reading(meter, DIVIDER)
+    # five readings at NPLC 10: the 0.065 V scatter at 200 us falls by sqrt(1000)
+    assert mean == pytest.approx(123.4567, abs=0.02) and sigma < 0.02
+    assert meter.Mode == 'continuous'
+    meter.Close()
+
+
+def test_A_Precise_Reading_That_Fails_Still_Leaves_The_Meter_On_Its_Poll(monkeypatch):
+    meter, _ = _Meter(simulated.Keysight(lambda: 0.1))
+
+    def lost(count, timeout_s):
+        raise RuntimeError("The meter at SIM did not answer: timeout.")
+
+    monkeypatch.setattr(meter, 'Fetch_When_Done', lost)
+    with pytest.raises(RuntimeError, match="did not answer"):
+        hc.Precise_Reading(meter, DIVIDER)
+    assert meter.Mode == 'continuous'
+    meter.Close()
+
+
+def test_The_Recommended_Wait_Is_Three_Slowest_Steps_From_Their_Command_And_At_Least_0_2_S():
+    assert hc.Recommended_Wait([{'Lag_S': 0.003, 'Settle_S': 0.0175}]) == pytest.approx(0.2)
+    assert hc.Recommended_Wait([{'Lag_S': 0.003, 'Settle_S': 0.0175},
+                                {'Lag_S': -0.01, 'Settle_S': 0.1}]) == pytest.approx(0.3)
