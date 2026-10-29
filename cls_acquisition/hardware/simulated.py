@@ -1,6 +1,6 @@
 """The simulated rack: a software bench the whole DAQ runs on without hardware.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -31,7 +31,8 @@ sample timed captures (INIT, then FETC? or R?) on a thread of their own,
 so a capture catches whatever the platform does meanwhile; back-to-back
 readings take READ_TIME_S, not their integration time, to keep tests
 quick. The PulseBlaster's period clocks a tagger that sees three
-resonances on a flat background, the ions in one time-of-flight bunch.
+resonances on a flat background, the ions in one time-of-flight bunch,
+timed in the card's 500 ps bins.
 
 The converters live in the acquisition process and the line meter in
 the GUI's, so the platform's state is shared memory (:class:`Platform`),
@@ -51,7 +52,7 @@ from cls_acquisition import triggers
 from cls_acquisition.calibration import DIVIDER
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER, OVERLOAD, RANGE_V
 from cls_acquisition.hardware.mcc_dac import AMPLIFIER_GAIN, CH_NEG, CH_POS
-from cls_acquisition.hardware.timetagger import Check_Window
+from cls_acquisition.hardware.timetagger import BIN_US, Check_Window
 
 # the step response, fitted to the bench's 1 kV and 2 kV steps
 TAU_RISE_S = 0.00018
@@ -328,8 +329,9 @@ class Tagger():
 
     def Edge(self, period_s):
         """One trigger: the ions and background of one period, the ions
-        timed in their bunch and the background spread over the window. A
-        gated window never reaches the tagger, so it is not counted."""
+        timed in their bunch and the background spread over the window, each
+        in the card's bins as the driver hands real hits on. A gated window
+        never reaches the tagger, so it is not counted."""
         if not self._Reading or self.Gated:
             return
         self._Bunch += 1
@@ -340,6 +342,7 @@ class Tagger():
         times = np.concatenate([
             rng.normal(TOF_US, TOF_WIDTH_US, rng.poisson(PEAK_RATE_HZ * shape * period_s)),
             rng.uniform(start, stop, rng.poisson(BACKGROUND_RATE_HZ * period_s))])
+        times = np.rint(times / BIN_US) * BIN_US
         times = times[(times >= start) & (times < stop)]
         self._Packets.put(np.column_stack([np.full(len(times), float(self._Bunch)),
                                            rng.integers(1, 5, len(times)), times]))

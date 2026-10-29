@@ -1,6 +1,6 @@
 """Shared GUI building blocks: spin boxes, form layouts, verdicts and the worker thread.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -47,6 +47,13 @@ def Form(group, rows):
         grid.addWidget(QLabel(text), row, 0)
         grid.addWidget(widget, row, 1)
     return grid
+
+
+def Duration_Text(seconds):
+    """A length of time as an operator reads it: seconds, minutes or hours."""
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60:.0f} min" if seconds < 5400 else f"{seconds / 3600:.1f} h"
 
 
 def Verdict_Html(verdict, text=''):

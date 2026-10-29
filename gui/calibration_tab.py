@@ -103,10 +103,15 @@ class Calibration_Tab(QWidget):
     def Show_Failure(self, message):
         self.Report_Label.setText(Verdict_Html('FAIL', message))
 
-    def Show_Run(self, name, commanded, readings):
+    def Inputs(self):
+        return [('from', self.From_Box), ('to', self.To_Box), ('step', self.Step_Box)]
+
+    def Show_Run(self, name, commanded, readings, report=None):
         """A run file's own calibration: the voltages commanded and the meter's
-        readings, as written. Its line and where its branches meet 0 V are
-        given; the gate is not run again, since a file keeps no stamps."""
+        readings, as written, with the gate's ``report`` on them as it was
+        given when the run was taken, from ORACLE's record of it. A run with
+        no record gets its line and where its branches meet 0 V; the gate is
+        not run again, since a file keeps no stamps."""
         commanded = np.asarray(commanded, dtype=float)
         readback = np.asarray(readings, dtype=float) * calibration.DIVIDER
         if len(commanded) != len(readback) or len(commanded) < 2:
@@ -118,6 +123,9 @@ class Calibration_Tab(QWidget):
             return
         self._Set, self._Readback = list(commanded), list(readback)
         self._Draw()
+        if report is not None:
+            self.Show_Report(report)
+            return
         gain, offset, rms = calibration.Line_Fit(commanded, readback)
         seam = calibration.Step_At_Zero(commanded, readback)
         self.Report_Label.setText(html.escape(

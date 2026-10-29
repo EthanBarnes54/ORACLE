@@ -56,6 +56,19 @@ def test_A_Sweep_Adds_A_Fine_Grid_Across_Zero_And_Checks_Zero_As_It_Goes():
     assert all(volts == 0.0 for (kind, _, _), volts in measured if kind == 'zero')
 
 
+@pytest.mark.parametrize('direction', hc.DIRECTIONS)
+@pytest.mark.parametrize('zero_every', (0, 1, 3, 7))
+def test_The_Estimate_Counts_The_Points_The_Plan_Will_Measure(direction, zero_every):
+    """The page counts a sweep from its rungs alone, as the parameters are
+    typed; the plan with its ramps must measure exactly that many."""
+    args = (-1000.0, 1000.0, 100.0, direction)
+    plan = hc.Linearity_Plan(*args, 50.0, 20.0, 5.0, zero_every, 11)
+    rungs = hc.Linearity_Rungs(*args, 20.0, 5.0, 11)
+    assert hc.Linearity_Marks(rungs, zero_every) == len(plan.Marks)
+    assert [(volts, way) for (_, way, volts) in
+            (label for _, label in sorted(plan.Marks.items())) if way] == rungs
+
+
 def test_A_Random_Sweep_Visits_Every_Rung_Once_In_An_Order_Its_Seed_Fixes():
     rungs = lambda seed: [volts for _, volts in _Measured(hc.Linearity_Plan(
         -200.0, 200.0, 50.0, hc.DIRECTIONS[3], 500.0, seed=seed))]

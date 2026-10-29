@@ -127,6 +127,33 @@ def Settle_Plan(steps, reps, ramp_step_v):
     return plan
 
 
+def Linearity_Rungs(start, stop, step_v, direction, fine_span_v=0.0, fine_step_v=0.0, seed=0):
+    """The rungs of :func:`Linearity_Plan` as ``(volts, way)``, in the order
+    visited, without the ramps between them: cheap enough to lay out again
+    as each parameter is typed. Raises Scan_Plan_Error for a ladder that
+    cannot be laid out."""
+    rungs = Scan_Plan([start], [stop], step_v).Setpoints
+    if fine_span_v > 0 and fine_step_v > 0:
+        fine = Scan_Plan([-fine_span_v], [fine_span_v], fine_step_v).Setpoints
+        fine = fine[(fine >= rungs[0]) & (fine <= rungs[-1])]
+        rungs = np.unique(np.round(np.concatenate([rungs, fine]), 9))
+    rungs = rungs.tolist()
+    return {
+        DIRECTIONS[0]: lambda: [(volts, 'up') for volts in rungs],
+        DIRECTIONS[1]: lambda: [(volts, 'down') for volts in rungs[::-1]],
+        DIRECTIONS[2]: lambda: ([(volts, 'up') for volts in rungs]
+                                + [(volts, 'down') for volts in rungs[-2::-1]]),
+        DIRECTIONS[3]: lambda: [(float(volts), 'random')
+                                for volts in np.random.default_rng(seed).permutation(rungs)],
+    }[direction]()
+
+
+def Linearity_Marks(rungs, zero_every):
+    """How many points a sweep of ``rungs`` measures, its 0 V checks included:
+    every ramp ends on a new setpoint, so no two marks share one."""
+    return len(rungs) + (-(-len(rungs) // zero_every) + 1 if zero_every else 0)
+
+
 def Linearity_Plan(start, stop, step_v, direction, ramp_step_v, fine_span_v=0.0,
                    fine_step_v=0.0, zero_every=0, seed=0):
     """A ladder laid out by count (no float accumulation), with a finer grid
@@ -134,20 +161,7 @@ def Linearity_Plan(start, stop, step_v, direction, ramp_step_v, fine_span_v=0.0,
     rung, 0 V read again before every ``zero_every`` rungs and at the end.
     Each rung is labelled ``('sweep', way, volts)`` and each check
     ``('zero', '', 0.0)``."""
-    rungs = Scan_Plan([start], [stop], step_v).Setpoints
-    if fine_span_v > 0 and fine_step_v > 0:
-        fine = Scan_Plan([-fine_span_v], [fine_span_v], fine_step_v).Setpoints
-        fine = fine[(fine >= rungs[0]) & (fine <= rungs[-1])]
-        rungs = np.unique(np.round(np.concatenate([rungs, fine]), 9))
-    rungs = rungs.tolist()
-    sequence = {
-        DIRECTIONS[0]: [(volts, 'up') for volts in rungs],
-        DIRECTIONS[1]: [(volts, 'down') for volts in rungs[::-1]],
-        DIRECTIONS[2]: ([(volts, 'up') for volts in rungs]
-                        + [(volts, 'down') for volts in rungs[-2::-1]]),
-        DIRECTIONS[3]: [(float(volts), 'random')
-                        for volts in np.random.default_rng(seed).permutation(rungs)],
-    }[direction]
+    sequence = Linearity_Rungs(start, stop, step_v, direction, fine_span_v, fine_step_v, seed)
     plan = Bench_Plan(ramp_step_v)
     for i, (volts, way) in enumerate(sequence):
         if zero_every and i % zero_every == 0:

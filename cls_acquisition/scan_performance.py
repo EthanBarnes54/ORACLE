@@ -92,6 +92,29 @@ def _Grade(value, limits):
     return FAIL if value > fail else WARN if value > warn else PASS
 
 
+def _Distinct(x, y):
+    """A plotted series less every point that repeats the one before it. A
+    bunch's hits share its time and the readings taken with it, so one point
+    per hit draws each bunch over and over: millions of points, and a
+    gigabyte in the plot, for the picture its distinct points make."""
+    moved = np.ones(len(x), dtype=bool)
+    moved[1:] = (x[1:] != x[:-1]) | (y[1:] != y[:-1])
+    return x[moved], y[moved]
+
+
+def _By_Scan(scans, values, wanted):
+    """``values[scans == k]`` for each scan ``k`` of ``wanted``, from one sort
+    of the run (none if it is in scan order already, as a run is) rather
+    than a pass over every hit for each scan. Each keeps its hits' order."""
+    order = None if np.all(scans[1:] >= scans[:-1]) else np.argsort(scans, kind='stable')
+    ordered = scans if order is None else scans[order]
+    bounds = zip(np.searchsorted(ordered, wanted, 'left'),
+                 np.searchsorted(ordered, wanted, 'right'))
+    if order is None:
+        return [values[low:high] for low, high in bounds]
+    return [values[order[low:high]] for low, high in bounds]
+
+
 def _Trend(t, values, errors=None):
     """The straight line through ``values`` against ``t``, weighted by
     ``errors`` if given: ``(its rise over the span of t, the line, the
@@ -183,7 +206,7 @@ def Analyse(header, raw, monitor, laser, settle_s=THRESHOLDS['SettleS']):
 def _Voltage_Tags(report, plan, per_step, volts, bunch, monitor):
     """Which setpoint each hit should carry, from its bunch; how many do not."""
     n = len(plan)
-    rounded = np.round(volts, VOLTS_DECIMALS)
+    rounded, planned = np.round(volts, VOLTS_DECIMALS), np.round(plan, VOLTS_DECIMALS)
     best = None
     for origin in (0, 1):
         visit = (bunch - origin) // per_step
@@ -192,7 +215,7 @@ def _Voltage_Tags(report, plan, per_step, volts, bunch, monitor):
             # a triangle runs every other scan backwards
             reverse = (kind == 'Triangle') & (scan % 2 == 1)
             index = np.where(reverse, n - 1 - position, position)
-            agree = rounded == np.round(plan[index], VOLTS_DECIMALS)
+            agree = rounded == planned[index]
             if best is None or agree.mean() > best['Agree'].mean():
                 best = {'Origin': origin, 'Type': kind, 'Index': index, 'Scan': scan,
                         'Agree': agree}
@@ -207,7 +230,7 @@ def _Voltage_Tags(report, plan, per_step, volts, bunch, monitor):
                   "out (the collinear DAQ's D5)." if mistagged else ""))
     if mistagged:
         report.Cut(np.unique(best['Scan'][~best['Agree']]), 'hits at the wrong voltage')
-    off_plan = int(np.count_nonzero(~np.isin(rounded, np.round(plan, VOLTS_DECIMALS))))
+    off_plan = int(np.count_nonzero(~np.isin(rounded, planned)))
     report.Add(VOLTAGE, 'Setpoints in the plan', FAIL if off_plan else PASS, off_plan,
                f"{off_plan} hits at a voltage the plan never held.")
     # the file holds only bunches with hits; the loop's own count says how
@@ -301,7 +324,7 @@ def _Timing(report, monitor, header, times, bunch, per_step, settle_s, t0):
     first = np.full(step_of.max() + 1, np.inf)
     np.minimum.at(first, step_of, latency)
     latency -= first[step_of]
-    report.Series['Latency'] = (t - t0, latency)
+    report.Series['Latency'] = _Distinct(t - t0, latency)
     stalls = int(np.count_nonzero(np.diff(latency)[same] > TOLERANCES['StallS']))
     report.Add(TIMING, 'Read stalls', WARN if stalls else PASS, stalls,
                f"{stalls} reads came more than {TOLERANCES['StallS']:g} s later than the one "
@@ -349,8 +372,12 @@ def _Beam_And_Spectrum(report, plan, per_step, raw, scan, step, t0):
         report.Add(BEAM, 'Scans', NA, 0, "No scan completed, so scans cannot be compared.")
         return
     keep = scan['Scan'] < complete
-    counts = np.zeros((complete, len(plan)))
-    np.add.at(counts, (scan['Scan'][keep], scan['Index'][keep]), 1)
+    # each hit's cell counted at once; a scan before the first (bunch 0 counted
+    # from 1) wraps to the last, as indexing the cell itself would put it
+    cells = np.ravel_multi_index((scan['Scan'][keep], scan['Index'][keep]),
+                                 (complete, len(plan)), mode='wrap')
+    counts = np.bincount(cells, minlength=complete * len(plan)).reshape(
+        complete, len(plan)).astype(float)
     totals = counts.sum(axis=1)
     rate = totals / (len(plan) * per_step)
     floor = TOLERANCES['BeamLossFraction'] * np.median(rate)
@@ -397,7 +424,7 @@ def _Centroids(report, plan, counts, kept, scan, step, times):
     width = high - low + 1
     window = slice(max(low - width, 0), min(high + width, len(plan) - 1) + 1)
     v = plan[window]
-    peaked, centroids, errors, mids = [], [], [], []
+    peaked, centroids, errors = [], [], []
     for k in kept:
         above = np.clip(counts[k, window] - np.median(counts[k]), 0, None)
         if above.sum() < TOLERANCES['MinPeakCounts']:
@@ -406,12 +433,12 @@ def _Centroids(report, plan, counts, kept, scan, step, times):
         peaked.append(int(k))
         centroids.append(c)
         errors.append(float(np.sqrt(np.sum(above * (v - c) ** 2)) / above.sum()))
-        mids.append(float(np.median(times[scan['Scan'] == k])))
     if len(centroids) < 3:
         report.Add(BEAM, 'Peak position', NA, None,
                    f"Fewer than three scans have {TOLERANCES['MinPeakCounts']} counts over "
                    f"background in the strongest peak.")
         return
+    mids = [float(np.median(t)) for t in _By_Scan(scan['Scan'], times, peaked)]
     c, e = np.array(centroids), np.array(errors)
     drift, trend, _ = _Trend(mids, c, e)
     pulls = (c - trend) / np.maximum(e, 1e-9)
@@ -435,8 +462,7 @@ def _Tof(report, raw, scan, complete):
     peak = edges[np.argmax(histogram)]
     near = np.abs(tof - peak) < 3.0
     scans, medians, errors = [], [], []
-    for k in range(complete):
-        hits = tof[near & (scan['Scan'] == k)]
+    for k, hits in enumerate(_By_Scan(scan['Scan'][near], tof[near], np.arange(complete))):
         if len(hits) >= 10:
             scans.append(k)
             medians.append(np.median(hits))
@@ -482,7 +508,7 @@ def _Cooler(report, raw, monitor, step, t0):
                    f"{lost} cooler readings were missing: the meter stopped answering.")
     _Drift_Check(report, 'Cooler', t - t0, cooler, step, 'cooler voltage')
     if np.isfinite(cooler).any():
-        report.Series['Cooler'] = (t - t0, cooler - np.nanmean(cooler))
+        report.Series['Cooler'] = _Distinct(t - t0, cooler - np.nanmean(cooler))
 
 
 def _Laser(report, monitor, header, laser, plan, step, t0):

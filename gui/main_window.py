@@ -1,6 +1,6 @@
 """ORACLE's main window and entry point.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -20,10 +20,16 @@ says so, and into the settings with it. Every tab shows one run at a
 time, named on the Shown line: the latest as ORACLE opens, any opened
 (File ▸ Open run, or Scan Performance), or the one being taken, which a
 scan or the triggers start by clearing them all for, and which stays on
-them, saved and analysed, once it ends. Analysis runs off the GUI
-thread. If the acquisition process
-dies, the window clears the flags it left set, closes a run it was
-taking on what it recorded, and says so.
+them, saved and analysed, once it ends. A run is drawn with its own
+trigger timing, and opened, it comes back as it stood when it had just
+been taken, controls and all, from the record each run file keeps of
+what the archive's header does not (run_file.ORACLE_KEY); the plots'
+view is part of that record, and held from Start to the scan's end.
+Analysis runs off the GUI thread. Every input in the window is kept
+through a crash (gui.input_memory) and set again as ORACLE opens; those,
+not the latest run's, are the controls ORACLE opens with. If the
+acquisition process dies, the window clears the flags it left set,
+closes a run it was taking on what it recorded, and says so.
 
 ``main()`` sets up the session log, one instance per user (two would
 fight over the instruments), the theme and splash, and the rack: the
@@ -33,7 +39,7 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.2.1'
+__version__ = '0.3.0'
 
 import contextlib
 import ctypes
@@ -70,6 +76,7 @@ from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 from gui import plots, session_log, theme
 from gui.calibration_tab import Calibration_Tab
 from gui.hardware_tab import Hardware_Tab
+from gui.input_memory import Input_Memory
 from gui.live_data import Live_Data
 from gui.performance_tab import Performance_Tab
 from gui.scan_tab import Scan_Tab
@@ -110,6 +117,8 @@ class Main_Window(QMainWindow):
         self._Wanted = None             # the run Scan Performance is to show
         self._Laser = config['laser']
         self._Monitor = []              # monitor rows of the run, not yet written
+        self._Shown_Timing = None       # the shown run's trigger timing; None: the boxes'
+        self._Shown_Round = None        # an opened run's last scan; None: the loop's
         self._Death_Shown = False
         self._Awake = Keep_Awake()      # no sleep while anything runs
 
@@ -141,6 +150,15 @@ class Main_Window(QMainWindow):
         layout.setRowStretch(0, 1)
         self.setCentralWidget(central)
         self._Build_Menus()
+        # what was entered when ORACLE last stopped, however it stopped
+        self._Inputs = Input_Memory(settings.Inputs_Path(), self)
+        for group, inputs in (('scan', self.Scan.Inputs()), ('time', self.Time.Inputs()),
+                              ('calibration', self.Calibration.Inputs()),
+                              ('hardware', self.Hardware.Inputs()),
+                              ('performance', self.Performance.Inputs()),
+                              ('quick_tune', (('sweep_from', self.Sweep_From),
+                                              ('sweep_to', self.Sweep_To)))):
+            self._Inputs.Add(group, inputs)
         rack_label = QLabel(f"  {rack_name.capitalize()}  ")
         if rack.Simulated:
             rack_label.setStyleSheet(f"color: {theme.TRACE_ALT}; font-weight: bold;")
@@ -193,8 +211,9 @@ class Main_Window(QMainWindow):
         performance.Export_Button.clicked.connect(self._Export_Performance)
         self._Refresh_Runs()
         if performance.Selected():
-            # the latest run, on every tab
-            self.Show_Run(performance.Selected(), quiet=True)
+            # the latest run, on every tab but the controls, which keep what was
+            # entered when ORACLE last stopped
+            self.Show_Run(performance.Selected(), quiet=True, settings=False)
 
         self._Timer = QTimer(self, interval=TICK_MS, timeout=self._Tick)
         self._Show_State()              # the controls as the rack stands, from the start
@@ -239,7 +258,7 @@ class Main_Window(QMainWindow):
             grid.addWidget(label, row, 2 * (i % 3) + 1)
             grid.setColumnStretch(2 * (i % 3) + 1, 1)
         # the one run every tab shows, and whether it is live, saved or from a file
-        self.Shown_Label = QLabel('nothing yet')
+        self.Shown_Label = QLabel('nothing yet', wordWrap=True)
         grid.addWidget(QLabel('Shown:'), 2, 0)
         grid.addWidget(self.Shown_Label, 2, 1, 1, 5)
         return group
@@ -280,17 +299,22 @@ class Main_Window(QMainWindow):
         if path:
             self.Show_Run(path)
 
-    def Show_Run(self, path, quiet=False):
-        """The run at ``path`` on every tab at once, as the DAQ saw it: its hits
-        on the Scan tab and the Time graphs, through the tab's own gate,
-        channels and bin size, its calibration on the Scan Calibration tab, and
-        its analysis on the Scan Performance tab. It stays there until a scan,
-        the triggers or another run take the tabs. Fitting it is DENIS's.
-        ``quiet``: a run that cannot be read is said in the log and the Shown
-        line alone, as at start-up."""
+    def Show_Run(self, path, quiet=False, settings=True):
+        """The run at ``path`` on every tab at once, as it stood when it had
+        just been taken: its hits on the Scan tab and the Time graphs, drawn
+        with its own tagger window and trigger rate, its calibration and the
+        gate's verdict on the Scan Calibration tab, its run and scan numbers,
+        and its analysis on the Scan Performance tab; with ``settings``, the
+        controls too, as it was taken (scan, buncher and view). What ORACLE's
+        record of the run gives is shown; a run older than the record keeps
+        today's controls for what it lacks, and the Shown line says so. It
+        stays until a scan, the triggers or another run take the tabs.
+        Fitting it is DENIS's. ``quiet``: a run that cannot be read is said
+        in the log and the Shown line alone, as at start-up."""
         name = os.path.basename(path)
         try:
-            header, raw, _ = run_file.Read(path)
+            run = run_file.Read(path)
+            header, raw, monitor = run
             plan = Scan_Plan(*zip(*header['ScanningRanges']), header['StepSize'])
         except Exception as e:
             log.exception("Opening %s failed", path)
@@ -299,17 +323,46 @@ class Main_Window(QMainWindow):
                 QMessageBox.warning(self, 'Run not opened', f"{name} could not be read as a "
                                                             f"run file: {e}")
             return
-        self._Start_Live(plan)
+        record = header.get(run_file.ORACLE_KEY) or {}
+        unshown = self._Show_Settings(header, plan) if settings else []
+        self._Start_Live(plan, record.get('Timing'))
         self._Live.Add(raw)
-        self.Calibration.Show_Run(name, header.get('CalSet', []), header.get('CalReadback', []))
+        if monitor is not None and len(monitor.get('round', ())):
+            self._Shown_Round = int(monitor['round'][-1])
+        elif len(raw):
+            # a run without the loop's record: the scan its last bunch was in
+            per_scan = len(plan) * max(int(header['BunchesPerChannel']), 1)
+            self._Shown_Round = int(raw[:, 2].max() // per_scan) + 1
+        self.Run_Label.setText(str(header.get('Run')))
+        self.Calibration.Show_Run(name, header.get('CalSet', []), header.get('CalReadback', []),
+                                  record.get('Calibration'))
         self._Refresh_Runs(keep=path)
-        self._Analyse(path)
+        self._Analyse(path, run)
         self.Tabs.setCurrentWidget(self.Scan)
         self.Shown_Label.setText(
             f"{name}, from its file: {len(raw)} hits, {len(plan)} setpoints of {plan.Step:g} V, "
             f"{header.get('BunchesPerChannel')} bunches each "
-            f"({header.get('Experiment') or 'no experiment named'})")
+            f"({header.get('Experiment') or 'no experiment named'})"
+            + (f". Not shown, so as set now: {'; '.join(unshown)}." if unshown else ""))
+        for sentence in unshown:
+            log.info("%s: not shown, %s", name, sentence)
         log.info("Showing %s", path)
+
+    def _Show_Settings(self, header, plan):
+        """The controls as the run in ``header`` was taken; returns what of it
+        they could not show, as sentences."""
+        record = header.get(run_file.ORACLE_KEY) or {}
+        try:
+            unshown = self.Scan.Show_Settings(header)
+            if record.get('View'):
+                self.Time.Show_View(record['View'])
+        except (KeyError, TypeError, ValueError) as e:
+            log.exception("The settings of run %s were not all shown", header.get('Run'))
+            return [f"some of its settings, which its file holds in a form this ORACLE does "
+                    f"not read ({e})"]
+        self.Sweep_From.setValue(plan.Setpoints.min())
+        self.Sweep_To.setValue(plan.Setpoints.max())
+        return unshown
 
     def _Clear_Shown(self, shown, waiting):
         """Every tab given over to what starts now (``shown``): the scan plots
@@ -366,9 +419,11 @@ class Main_Window(QMainWindow):
                           f"number can be given.")
         return run_file.Last_Run_Number(self._Data_Dir) + 1
 
-    def _Start_Live(self, plan):
+    def _Start_Live(self, plan, timing=None):
+        """The tabs cleared for a run of ``plan``, drawn with its ``timing``."""
         self._Live.Clear()
         self._Volt_Edges = plan.Bin_Edges() if plan is not None else np.array([0.0, 1.0])
+        self._Shown_Timing, self._Shown_Round = timing, None
 
     def _Toggle_Scan(self):
         if self._State.Scanning.is_set():
@@ -386,7 +441,7 @@ class Main_Window(QMainWindow):
             QMessageBox.warning(self, 'Scan not started', str(e))
             return
 
-        self._Start_Live(plan)
+        self._Start_Live(plan, timing)
         self._Clear_Shown(f"run_{run:04d}, being calibrated",
                           f"Run {run} is being taken: it is analysed as it ends.")
         self.Sweep_From.setValue(plan.Setpoints.min())
@@ -438,8 +493,15 @@ class Main_Window(QMainWindow):
                   'ScanningRanges': plan.Ranges, 'CalSet': cal.Commanded,
                   'CalReadback': cal.Readings, 'DacCorrectionApplied': applied,
                   'DacCorrection': description}
+        # what the archive's keys do not hold, all locked while the scan runs, so
+        # opening the run shows it as it was taken
+        record = {'Version': __version__,
+                  'Rack': 'simulated' if self._Rack.Simulated else 'hardware',
+                  'ScanType': pending['scan_type'], 'Timing': pending['timing'],
+                  'View': {**self.Scan.View(), **self.Time.View()}, 'Calibration': report,
+                  'SettleModel': self._Settle_Model}
         try:
-            self._Run = run_file.Create(self._Data_Dir, header)
+            self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
             self.Shown_Label.setText(f"nothing: run {pending['run']}'s file was not written")
             QMessageBox.critical(self, 'Run file not written', str(e))
@@ -494,7 +556,7 @@ class Main_Window(QMainWindow):
             plan = self.Scan.Plan()
         except Scan_Plan_Error:
             plan = None             # the TOF still shows; the spectrum has no axis
-        self._Start_Live(plan)
+        self._Start_Live(plan, timing)
         self._Clear_Shown("the triggers' stream, live: not saved",
                           "The triggers are streaming; nothing of theirs is saved or analysed.")
         self._Send('Start_Triggering', timing=timing)
@@ -752,10 +814,12 @@ class Main_Window(QMainWindow):
         runs = run_file.Runs(self._Data_Dir) if os.path.isdir(self._Data_Dir) else []
         self.Performance.Set_Runs(runs, keep)
 
-    def _Analyse(self, path):
-        """Analyse ``path`` for Scan Performance, off the GUI thread. One asked
-        for while another runs waits for it, and only the last asked for is
-        shown, so the tab never shows another run than the rest."""
+    def _Analyse(self, path, run=None):
+        """Analyse ``path`` for Scan Performance, off the GUI thread, from
+        ``run`` (run_file.Read's) if it has just been read, so a large run is
+        not read twice. One asked for while another runs waits for it, and is
+        read then; only the last asked for is shown, so the tab never shows
+        another run than the rest."""
         self._Wanted = path
         self.Performance.Begin(path)
         if self._Analysis is not None:
@@ -763,7 +827,7 @@ class Main_Window(QMainWindow):
         laser = self._Laser
 
         def job(progress, stopped):
-            return scan_performance.Analyse(*run_file.Read(path), laser)
+            return scan_performance.Analyse(*(run or run_file.Read(path)), laser)
 
         self._Analysing = path
         self._Analysis = Job_Worker(job, self)
@@ -815,14 +879,14 @@ class Main_Window(QMainWindow):
         if self._Run is not None and self._State.Scanning.is_set():
             self._Sample_Monitor()
         self._Take_Data()
-        scan = self.Scan
-        self._Live.Configure(self._Volt_Edges, scan.Tof_Edges(), scan.Tof_Plot.Gate(),
+        scan, timing = self.Scan, self._Shown_Timing
+        self._Live.Configure(self._Volt_Edges, scan.Tof_Edges(timing), scan.Tof_Plot.Gate(),
                              scan.Channels(), scan.Map_Check.isChecked())
         self._Live.Update()
         if self.Tabs.currentWidget() is scan:
             scan.Draw(self._Live)
         elif self.Tabs.currentWidget() is self.Time:
-            self.Time.Draw(self._Live, scan.Trigger_Hz(), scan.Tof_Plot.Gate())
+            self.Time.Draw(self._Live, scan.Trigger_Hz(timing), scan.Tof_Plot.Gate())
         self._Show_State()
         if self._Elog.Last_Error:
             self.statusBar().showMessage(self._Elog.Last_Error, 10000)
@@ -848,17 +912,20 @@ class Main_Window(QMainWindow):
                              "Restart ORACLE.")
 
     def _Take_Data(self):
-        scan_rows = []
+        scan_rows, taken = [], []
         for kind, rows in self._Link.Drain():
             if kind == 'scan_end':
                 self._Write(scan_rows)
                 scan_rows = []
                 self._End_Run()
                 continue
-            self._Live.Add(rows)
+            taken.append(rows)
             if kind == 'scan':
                 scan_rows.append(rows)
         self._Write(scan_rows)
+        if taken:
+            # kept in one go: a packet is one bunch, and each is coded as it is kept
+            self._Live.Add(np.vstack(taken))
 
     def _Sample_Monitor(self):
         """One row of what the rack is doing, for the run's monitor record."""
@@ -903,13 +970,18 @@ class Main_Window(QMainWindow):
         self.Cooler_Label.setText(f"{self._Cooler.Voltage * COOLER_DIVIDER:.2f} V")
         self.Readback_Label.setText(f"{self._Line.Voltage * calibration.DIVIDER:.1f} V")
         self.Wavenumber_Label.setText(_Number(self._Pvs.Value('wavenumber'), '.5f') + ' cm⁻¹')
-        self.Round_Label.setText(str(state.Round.value))
+        self.Round_Label.setText(str(state.Round.value if self._Shown_Round is None
+                                     else self._Shown_Round))
         self.Mode_Label.setText('Bunched' if self.Scan.Bunched() else 'DC')
 
         scan = self.Scan
         scan.Params_Group.setEnabled(not (scanning or triggering or calibrating))
         scan.Buncher_Group.setEnabled(not (scanning or triggering or calibrating))
         scan.Control_Group.setEnabled(not (calibrating or triggering))
+        # the view a run's record holds, from Start until its last event
+        locked = scanning or self._Pending is not None
+        scan.Lock_View(locked)
+        self.Time.Lock_View(locked)
         scan.Start_Button.setText('Stop after scan' if scanning else 'Start scan')
         scan.Stop_Button.setEnabled(scanning)
         busy = calibrating or scanning
@@ -946,6 +1018,7 @@ class Main_Window(QMainWindow):
             event.ignore()
             return
         self._Timer.stop()
+        self._Inputs.Save()
         self._Awake.Hold(False)
         if self._Analysis is not None:
             self._Analysis.wait()       # a thread cannot outlive its window

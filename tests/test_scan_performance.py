@@ -86,6 +86,27 @@ def test_A_Pause_Is_Flagged():
     assert _Check(sp.Analyse(header, raw, monitor, LASER), 'Pauses')['Verdict'] == sp.WARN
 
 
+def test_A_Bunch_Is_Drawn_Once_However_Many_Hits_It_Holds():
+    """Its hits share its time and readings, so its points coincide: the plot
+    gets each once, the checks still weigh every hit."""
+    header, raw, _ = _Run()
+    result = sp.Analyse(header, raw, None, LASER)
+    bunches = len(np.unique(raw[:, 2]))
+    for name in ('Latency', 'Cooler'):
+        times, values = result['Series'][name]
+        assert len(times) == len(values) == bunches < len(raw), name
+    assert _Check(result, 'Tags against bunches')['Message'].startswith(f"0 of {len(raw)} hits")
+
+
+def test_Hits_Are_Grouped_By_Scan_As_A_Mask_Picks_Them():
+    rng = np.random.default_rng(0)
+    scans, values = rng.integers(0, 5, 200), rng.random(200)
+    for order in (np.arange(200), np.argsort(scans, kind='stable')):    # as taken, and sorted
+        mine, theirs = scans[order], values[order]
+        for k, group in zip((0, 2, 4, 7), sp._By_Scan(mine, theirs, (0, 2, 4, 7))):
+            assert np.array_equal(group, theirs[mine == k])
+
+
 def test_The_Export_Hands_DENIS_Its_Scan_Filter(tmp_path):
     result = sp.Analyse(*_Run(rate=lambda scan: 0.1 if scan == 1 else 1.0), LASER)
     path = str(tmp_path / 'run_0007.asdf')

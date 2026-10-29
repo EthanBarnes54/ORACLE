@@ -1,9 +1,3 @@
-def _Duration(seconds):
-    if seconds < 90:
-        return f"{seconds:.0f} s"
-    return f"{seconds / 60:.0f} min" if seconds < 5400 else f"{seconds / 3600:.1f} h"
-
-
 """The Hardware Calibration tab: settle time, linearity and the cooler monitor.
 
 Date:    2026-10-29
@@ -42,7 +36,7 @@ import html
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
                                QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
@@ -52,7 +46,7 @@ from cls_acquisition import hardware_calibration as hc
 from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
-from gui.shared_widgets import REPORT_WIDTH, Form, Spin, Verdict_Html
+from gui.shared_widgets import REPORT_WIDTH, Duration_Text, Form, Spin, Verdict_Html
 
 STEP_ROWS = 4
 NPLC_CHOICES = ('0.02', '0.2', '1', '10', '100')
@@ -252,6 +246,16 @@ class Settle_Panel(_Panel):
         for widget in (self.Tail_Box, self.Tail_Nplc_Combo):
             widget.setEnabled(self.Tail_Check.isChecked())
 
+    def Inputs(self):
+        steps = [(f"step_{i}_{part}", widget) for i, row in enumerate(zip(
+            self.Step_Checks, self.From_Boxes, self.To_Boxes))
+            for part, widget in zip(('on', 'from', 'to'), row)]
+        return [*steps, ('reps', self.Reps_Box), ('window', self.Window_Box),
+                ('interval', self.Interval_Box), ('aperture', self.Aperture_Box),
+                ('hold', self.Hold_Box), ('tolerance', self.Tolerance_Box),
+                ('tail', self.Tail_Check), ('tail_length', self.Tail_Box),
+                ('tail_nplc', self.Tail_Nplc_Combo)]
+
     def Show_Model(self, model):
         if not model:
             self.Model_Label.setText(f"None measured: every scan step waits SETTLE "
@@ -422,22 +426,33 @@ class Linearity_Panel(_Panel):
         self._Points = []
         self._Estimate()
 
-    def _Plan(self, params):
-        return hc.Linearity_Plan(params['start'], params['stop'], params['step_v'],
-                                 params['direction'], params['ramp'][0], params['fine_span_v'],
-                                 params['fine_step_v'], params['zero_every'], params['seed'])
+    def Inputs(self):
+        return [('from', self.From_Box), ('to', self.To_Box), ('step', self.Step_Box),
+                ('fine_span', self.Fine_Span_Box), ('fine_step', self.Fine_Step_Box),
+                ('order', self.Direction_Combo), ('seed', self.Seed_Box),
+                ('zero_every', self.Zero_Box), ('settle', self.Settle_Box),
+                ('readings', self.Readings_Box), ('nplc', self.Nplc_Combo),
+                ('autocal', self.Autocal_Check), ('valid_days', self.Valid_Box)]
+
+    def _Rungs(self, params):
+        """The ladder alone: the ramps between its rungs are laid out by the
+        measurement, since a 1 V sweep's take a third of a second."""
+        return hc.Linearity_Rungs(params['start'], params['stop'], params['step_v'],
+                                  params['direction'], params['fine_span_v'],
+                                  params['fine_step_v'], params['seed'])
 
     def _Estimate(self):
         try:
-            marks = len(self._Plan(self.Params()).Marks)
+            params = self.Params()
         except ValueError as e:
             self.Estimate_Label.setText(html.escape(str(e)))
             return
+        marks = hc.Linearity_Marks(self._Rungs(params), params['zero_every'])
         # each reading integrates its NPLC, and autozero doubles it
         point_s = (self.Settle_Box.value() + 2 * self.Readings_Box.value()
                    * float(self.Nplc_Combo.currentText()) / hc.POWER_LINE_HZ)
         self.Estimate_Label.setText(f"{marks} points with the 0 V checks, about "
-                                    f"{_Duration(marks * point_s)}")
+                                    f"{Duration_Text(marks * point_s)}")
 
     def Params(self):
         params = {'start': self.From_Box.value(), 'stop': self.To_Box.value(),
@@ -450,7 +465,7 @@ class Linearity_Panel(_Panel):
                   'zero_every': self.Zero_Box.value(), 'seed': self.Seed_Box.value(),
                   'autocal': self.Autocal_Check.isChecked()}
         # a ladder that cannot be laid out is refused here, not on the worker
-        self._Plan(params)
+        self._Rungs(params)
         return params
 
     def Max_Volts(self, params):
@@ -603,6 +618,10 @@ class Cooler_Panel(_Panel):
         self.Voltage_Plot.addItem(self._Curve)
         self._Asd_Curve = self.Asd_Plot.plot(pen=plots.Pen())
         self._Times, self._Volts = [], []
+        # the record drawn once all the chunks waiting have been added, not once
+        # per chunk: each draw takes the whole record, so a long monitor drawn per
+        # chunk falls behind its meter and its chunks queue up unread
+        self._Redraw = QTimer(self, singleShot=True, interval=0, timeout=self._Draw)
         self._Integration_Changed()
         self._Estimate()
 
@@ -610,6 +629,11 @@ class Cooler_Panel(_Panel):
         aperture = self.Integration_Combo.currentIndex() == 0
         self.Aperture_Box.setEnabled(aperture)
         self.Nplc_Combo.setEnabled(not aperture)
+
+    def Inputs(self):
+        return [('duration', self.Duration_Box), ('interval', self.Interval_Box),
+                ('integration', self.Integration_Combo), ('aperture', self.Aperture_Box),
+                ('nplc', self.Nplc_Combo)]
 
     def _Estimate(self):
         count = int(self.Duration_Box.value() / (self.Interval_Box.value() / 1e3))
@@ -658,6 +682,7 @@ class Cooler_Panel(_Panel):
 
     def Begin(self):
         super().Begin()
+        self._Redraw.stop()
         self._Times, self._Volts = [], []
         self._Curve.setData([], [])
         self._Asd_Curve.setData([], [])
@@ -667,10 +692,17 @@ class Cooler_Panel(_Panel):
         times, volts = chunk
         self._Times.append(times)
         self._Volts.append(volts)
+        if not self._Redraw.isActive():
+            self._Redraw.start()
+
+    def _Draw(self):
         volts = np.concatenate(self._Volts)
         self._Curve.setData(np.concatenate(self._Times), volts - volts.mean())
 
     def Show_Result(self, result, paths):
+        if self._Redraw.isActive():
+            self._Redraw.stop()
+            self._Draw()                # the whole record as it ends, not a pass later
         self._Asd_Curve.setData(result['Frequency_Hz'], result['Asd'])
         for peak in result['Peaks']:
             _Add_Row(self.Peak_Table, (f"{peak['Freq_Hz']:.3f}", f"{peak['Amplitude_V']:.4f}",
@@ -730,6 +762,13 @@ class Hardware_Tab(QWidget):
     def Ramp(self):
         """``(step V, rate V/s)`` of every unmeasured move."""
         return self.Ramp_Step_Box.value(), self.Ramp_Rate_Box.value()
+
+    def Inputs(self):
+        """Every input of the ramp and the pages, each page's under its own name."""
+        return [('ramp_rate', self.Ramp_Rate_Box), ('ramp_step', self.Ramp_Step_Box),
+                *((f"{page}.{name}", widget) for page, panel in (
+                    ('settle', self.Settle), ('linearity', self.Linearity),
+                    ('cooler', self.Cooler)) for name, widget in panel.Inputs())]
 
     def _Use_Wait(self):
         """The settle test's recommended wait into the linearity sweep."""

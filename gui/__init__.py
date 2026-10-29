@@ -1,7 +1,7 @@
 """ORACLE's PySide6 interface.
 
-Date:    2026-10-27
-Version: 0.2.1
+Date:    2026-10-29
+Version: 0.3.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The main window and its three tabs, the theme, the session log and the

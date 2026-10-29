@@ -25,6 +25,7 @@ from cls_acquisition import run_file, settings
 from cls_acquisition.hardware import simulated
 from cls_acquisition.hardware.visa_session import Scpi_Error
 from gui import main_window
+from gui.input_memory import _Accessors
 from tests.window import Close_Window, Open_Window, Pump, Run_Files
 
 YES, NO = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
@@ -506,27 +507,208 @@ def _Open_Run_Action(window):
                 if action.text() == 'Open run...')
 
 
-def test_A_Run_File_Is_Shown_As_It_Was_Taken(qapp, window, monkeypatch):
-    """The old DAQ's Open: a saved run back on the Scan tab and its
-    calibration on the Scan Calibration tab."""
+def _Inputs(window):
+    """Every input of the Scan and Time tabs, but the ELOG draft, by name."""
+    return {name: _Accessors(widget)[0]() for name, widget in
+            (*window.Scan.Inputs(), *window.Time.Inputs()) if name != 'elog_text'}
+
+
+def test_An_Opened_Run_Comes_Back_As_It_Stood_When_It_Was_Taken(qapp, window, monkeypatch):
+    """The old DAQ's Open, and the rest: a saved run back on every tab, its
+    controls, view, calibration verdict, numbers and plots as they stood the
+    moment it finished, however much has been changed since."""
+    scan = window.Scan
+    scan.Release_Box.setValue(150)
+    scan.Bin_Box.setValue(0.5)
+    scan.Channel_Checks[3].setChecked(False)
+    scan.Tof_Plot.Set_Gate((30.0, 80.0))
+    window.Time.Bin_Combo.setCurrentText('1')
     _Scan(qapp, window)
     _Finished(qapp, window)
+    live = window._Live
+    # every hit histogrammed: through its gate and channels, not every hit counts
+    assert Pump(qapp, lambda: live._Done == live.Count > 0)
     [path] = Run_Files(window)
-    header, raw, _ = run_file.Read(path)
-    window._Live.Clear()
+    taken = {'inputs': _Inputs(window), 'report': window.Calibration.Report_Label.text(),
+             'run': window.Run_Label.text(), 'round': window.Round_Label.text(),
+             'experiment': scan.Experiment_Edit.text(), 'tof_edges': live.Tof_Edges.copy(),
+             'spectrum': live.Spectrum.copy(), 'tof': live.Tof.copy()}
+    # everything set up differently for a next run
+    scan.Dc_Radio.setChecked(True)
+    for box, value in ((scan.From_Boxes[0], -100.0), (scan.Step_Box, 5.0),
+                       (scan.Gate_Length_Box, 500.0), (scan.Release_Box, 300),
+                       (scan.Bin_Box, 2.0)):
+        box.setValue(value)
+    scan.Range_Checks[1].setChecked(True)
+    scan.Tof_Plot.Set_Gate(None)
+    scan.Type_Combo.setCurrentText('Sawtooth')
+    scan.Experiment_Edit.setText('another experiment')
+    window.Time.Bin_Combo.setCurrentText('10')
+    live.Clear()
     window.Calibration.Begin(window.Calibration.Plan())
     monkeypatch.setattr(main_window.QFileDialog, 'getOpenFileName',
                         lambda *_, **__: (path, 'Run files (run_*.asdf)'))
     _Open_Run_Action(window).trigger()
     assert window.Tabs.currentWidget() is window.Scan
-    assert window._Live.Count == len(raw)
-    assert Pump(qapp, lambda: window._Live.Spectrum.sum() == len(raw))
-    assert window._Live.Volt_Edges[[0, -1]].tolist() == [19.0, 41.0]
-    assert len(window.Calibration._Curves[0].getData()[0]) == len(header['CalSet']) == 11
-    assert "run_0001.asdf's calibration, 11 points" in window.Calibration.Report_Label.text()
-    assert window.statusBar().currentMessage().startswith(f"Showing run_0001.asdf as it was "
-                                                          f"taken: {len(raw)} hits")
+    assert _Inputs(window) == taken['inputs']
+    assert scan.Experiment_Edit.text() == taken['experiment']
+    assert window.Calibration.Report_Label.text() == taken['report']
+    assert window.Run_Label.text() == taken['run']
+    assert Pump(qapp, lambda: window.Round_Label.text() == taken['round'])
+    assert Pump(qapp, lambda: live._Done == live.Count > 0)
+    for attribute, key in (('Tof_Edges', 'tof_edges'), ('Spectrum', 'spectrum'), ('Tof', 'tof')):
+        assert np.array_equal(getattr(live, attribute), taken[key]), attribute
+    _, raw, _ = run_file.Read(path)
+    assert window.Shown_Label.text().startswith(f"run_0001.asdf, from its file: {len(raw)} hits")
+    assert 'Not shown' not in window.Shown_Label.text() and window.Dialogs == []
+
+
+def test_A_Runs_Record_Holds_What_It_Was_Taken_With_And_Its_View_Is_Held(qapp, window):
+    scan = window.Scan
+    scan.Tof_Plot.Set_Gate((30.0, 80.0))
+    timing = scan.Timing()
+    _Scan(qapp, window, 'Sawtooth')
+    # held from Start to the last event, so the record holds for every one
+    assert not scan.Bin_Box.isEnabled() and not scan.Map_Check.isEnabled()
+    assert scan.Tof_Plot._View.Locked and not window.Time.Bin_Combo.isEnabled()
+    scan.Stop_Button.click()
+    _Finished(qapp, window)
+    assert Pump(qapp, lambda: scan.Bin_Box.isEnabled() and not scan.Tof_Plot._View.Locked)
+    [path] = Run_Files(window)
+    header, _, _ = run_file.Read(path)
+    record = header[run_file.ORACLE_KEY]
+    assert record['Timing'] == timing and record['ScanType'] == 'Sawtooth'
+    assert record['View']['tof_gate_us'] == [30.0, 80.0]
+    assert record['View']['channels'] == scan.Channels()
+    assert record['Calibration']['Verdict'] in ('PASS', 'WARN')
+    assert record['Rack'] == 'simulated' and record['Version'] == main_window.__version__
+
+
+def test_A_Finished_Run_Keeps_Its_Window_While_The_Next_Is_Set_Up(qapp, window):
+    _Scan(qapp, window)
+    _Finished(qapp, window)
+    edges = window._Live.Tof_Edges.copy()
+    window.Scan.Gate_Start_Box.setValue(50.0)
+    window.Scan.Gate_Length_Box.setValue(400.0)
+    window.Scan.Dwell_Box.setValue(50)
+    Pump(qapp, lambda: False, timeout=0.3)                  # a few ticks
+    assert np.array_equal(window._Live.Tof_Edges, edges)
+    assert window.Scan.Trigger_Hz(window._Shown_Timing) == 100.0  # its own 10 ms dwell
+
+
+def test_Reopened_After_A_Crash_The_Window_Has_What_Was_Entered(qapp, window, monkeypatch,
+                                                               tmp_path):
+    """Back as ORACLE opens again, though it never closed: what was entered,
+    not the latest run's settings, while that run is still what the tabs
+    show, drawn with its own timing."""
+    _Scan(qapp, window)
+    _Finished(qapp, window)
+    timing = window._Shown_Timing
+    window.Scan.Release_Box.setValue(250)               # set up after the run
+    window.Calibration.Step_Box.setValue(7.0)
+    window.Hardware.Linearity.Settle_Box.setValue(1.25)
+    window.Performance.Follow_Check.setChecked(False)
+    window.Scan.Queue.Add_Entry({'ranges': [[20.0, 30.0]], 'step': 2.0, 'per_step': 2,
+                                 'order': 'Triangle', 'scans': 4})
+    window.Scan.Elog_Edit.setPlainText("for the next entry")
+    inputs = tmp_path / 'inputs.yaml'
+    assert Pump(qapp, lambda: inputs.exists()
+                and 'for the next entry' in inputs.read_text(encoding='utf-8'))
+    again = Open_Window(monkeypatch, tmp_path)          # the first never closed
+    try:
+        assert again.Scan.Release_Box.value() == 250
+        assert again.Calibration.Step_Box.value() == 7.0
+        assert again.Hardware.Linearity.Settle_Box.value() == 1.25
+        assert not again.Performance.Follow_Check.isChecked()
+        assert again.Scan.Elog_Edit.toPlainText() == "for the next entry"
+        [queued] = again.Scan.Queue.Value()
+        assert (queued['ranges'], queued['order'], queued['scans']) == ('20:30', 'Triangle', '4')
+        assert again.Shown_Label.text().startswith("run_0001.asdf, from its file")
+        assert again._Shown_Timing == timing
+    finally:
+        Close_Window(qapp, again)
+
+
+# ── The scan queue ──────────────────────────────────────────────
+
+def _Queue(window, *rows, manual=False):
+    """The queue given ``rows`` of (ranges, scans): 2 V steps, two bunches."""
+    queue = window.Scan.Queue
+    queue.Mode_Combo.setCurrentIndex(1 if manual else 0)
+    for ranges, scans in rows:
+        queue.Add_Entry({'ranges': ranges, 'step': 2.0, 'per_step': 2, 'order': 'Sawtooth',
+                         'scans': scans})
+    return queue
+
+
+def _Queue_Idle(window):
+    return not window._Queueing and window._Queue_Row is None
+
+
+def test_An_Automatic_Queue_Takes_Its_Scans_One_After_Another(qapp, window):
+    queue = _Queue(window, ([[20.0, 30.0]], 2), ([[40.0, 50.0], [60.0, 64.0]], 1))
+    queue.Start_Button.click()
+    assert Pump(qapp, lambda: _Queue_Idle(window) and len(Run_Files(window)) == 2,
+                timeout=120)
+    (first, _, monitor), (second, _, _) = (run_file.Read(path) for path in Run_Files(window))
+    assert first[run_file.ORACLE_KEY]['Rounds'] == 2 and monitor['round'][-1] == 2
+    assert first[run_file.ORACLE_KEY]['Queue'] == [1, 2]
+    assert second['ScanningRanges'] == [[40.0, 50.0], [60.0, 64.0]]
+    assert second[run_file.ORACLE_KEY]['Queue'] == [2, 2]
+    assert [queue.State(row) for row in (0, 1)] == ['done', 'done'] and queue.Why(1) == 'run 2'
+    texts = window._Elog.Texts()
+    assert any('QUEUE STARTED: 2 scans, Automatic' in text for text in texts)
+    assert any('Queued scan 2 of 2, 1 scans' in text for text in texts)
+    assert any('QUEUE OVER: every scan in it is done' in text for text in texts)
     assert window.Dialogs == []
+
+
+def test_A_Manual_Queue_Asks_Before_Each_Scan_After_The_First(qapp, window, monkeypatch):
+    asked = _Answer(monkeypatch, NO)
+    queue = _Queue(window, ([[20.0, 30.0]], 1), ([[40.0, 50.0]], 1), manual=True)
+    queue.Start_Button.click()
+    assert Pump(qapp, lambda: asked and _Queue_Idle(window), timeout=90)
+    [(title, text)] = asked
+    assert title == 'Next queued scan'
+    assert text.startswith("Scan 2 of 2 is next: 40:50 V in 2 V steps: 6 setpoints, 2 bunches "
+                           "each, 1 scan, Sawtooth, about")
+    assert [queue.State(row) for row in (0, 1)] == ['done', ''] and len(Run_Files(window)) == 1
+    asked.clear()                       # started again, it takes up at the scan not done
+    queue.Start_Button.click()
+    assert Pump(qapp, lambda: len(Run_Files(window)) == 2 and _Queue_Idle(window), timeout=90)
+    assert asked == [] and queue.State(1) == 'done'
+
+
+def test_A_Queued_Scan_Stopped_By_Hand_Stops_The_Queue(qapp, window):
+    queue = _Queue(window, ([[20.0, 40.0]], 5), ([[40.0, 50.0]], 1))
+    queue.Start_Button.click()
+    assert Pump(qapp, lambda: window._Link.State.Scanning.is_set())
+    assert not queue.Add_Button.isEnabled()                 # held while the queue runs
+    assert queue.Start_Button.text() == 'Stop queue after this scan'
+    window.Scan.Stop_Button.click()
+    assert Pump(qapp, lambda: _Queue_Idle(window))
+    assert queue.State(0) == 'stopped' and queue.Why(0) == 'stopped by hand; run 1'
+    assert queue.State(1) == '' and len(Run_Files(window)) == 1
+    assert Pump(qapp, lambda: queue.Add_Button.isEnabled())
+
+
+def test_A_Fault_Stops_An_Unattended_Queue_And_Says_Why(qapp, window, monkeypatch):
+    calls, calibrate = [], main_window.calibration.Run_Calibration
+
+    def failing(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise main_window.calibration.Calibration_Error("The line meter stopped answering.")
+        return calibrate(*args, **kwargs)
+
+    monkeypatch.setattr(main_window.calibration, 'Run_Calibration', failing)
+    queue = _Queue(window, ([[20.0, 30.0]], 1), ([[40.0, 50.0]], 1), ([[60.0, 70.0]], 1))
+    queue.Start_Button.click()
+    assert Pump(qapp, lambda: window.Dialogs and _Queue_Idle(window), timeout=90)
+    assert [queue.State(row) for row in range(3)] == ['done', 'failed', '']
+    assert 'The line meter stopped answering' in queue.Why(1)
+    assert window.Dialogs[-1][0] == 'Calibration failed' and len(Run_Files(window)) == 1
+    assert any('QUEUE OVER: scan 2 failed' in text for text in window._Elog.Texts())
 
 
 def test_A_Run_Is_Not_Opened_Over_A_Scan_Or_From_A_File_That_Is_Not_One(

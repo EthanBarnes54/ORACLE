@@ -10,6 +10,14 @@ follow the header as raw float64 rows of :data:`DATA_COLS`, appended
 while the scan runs, as ASDF's streamed block. Files go to
 ``<data>/<year>/<month>/<day>/run_NNNN.asdf``.
 
+ORACLE's own record of the run sits beside the header under one more
+key, :data:`ORACLE_KEY`, which readers that look keys up by name pass
+over: what the archive's keys do not hold and opening the run needs to
+show it as it was taken (the scan type, the trigger timing sent to the
+rack, the plots' view, the calibration gate's verdict). It is written
+with the header, before the first event, from settings that are locked
+for the whole scan, so it holds for every event in the file.
+
 A run's number is one more than the highest already in the data folder,
 counted when the run starts, so numbers survive a restart and a refused
 calibration leaves no gap. An existing file is never overwritten.
@@ -45,6 +53,7 @@ HEADER_KEYS = ('SortingUtilities', 'Run', 'Experiment', 'Date', 'BunchesPerChann
                'LaserSetpoint', 'ScanningRanges', 'CalSet', 'CalReadback',
                'DacCorrectionApplied', 'DacCorrection')
 SORTING_UTILITIES = 'https://github.com/andry3vi/cls_tools.git'
+ORACLE_KEY = 'ORACLE'
 
 # the ASDF standard the archive was written to, which its readers know
 ASDF_STANDARD = '1.5.0'
@@ -65,8 +74,9 @@ def Last_Run_Number(directory):
     return runs[0][0] if runs else 0
 
 
-def Create(directory, header):
-    """Write a new run's header and return the file's path.
+def Create(directory, header, record=None):
+    """Write a new run's header, and ORACLE's ``record`` of it under
+    :data:`ORACLE_KEY` if given, and return the file's path.
 
     ``header`` holds every key of :data:`HEADER_KEYS` but SortingUtilities;
     any other set of keys is refused, so the format cannot drift.
@@ -82,6 +92,8 @@ def Create(directory, header):
 
     tree = {'SortingUtilities': SORTING_UTILITIES}
     tree.update((key, header[key]) for key in HEADER_KEYS[1:])
+    if record is not None:
+        tree[ORACLE_KEY] = record
     tree.update(raw_header=DATA_COLS, raw=Stream([len(DATA_COLS)], np.float64))
     asdf_file = AsdfFile(tree, version=ASDF_STANDARD)
     for key in ('CalSet', 'CalReadback'):
@@ -115,14 +127,17 @@ def Append_Monitor(path, rows):
 
 
 def Read(path):
-    """``(header, raw rows, monitor)``: the header as a dict, the rows as an
+    """``(header, raw rows, monitor)``: the header as a dict, with ORACLE's
+    record under :data:`ORACLE_KEY` if the run has one, the rows as an
     (n, 6) array, and the monitor record as a dict of columns, or None for
     a run that has none (one written before it existed, or by the old DAQ)."""
     with asdf.open(path, memmap=False) as af:
-        # arrays are copied out, as the file closes behind them
+        # without memmap the arrays are read into memory, so they outlive the
+        # file; the header's are copied out, and the events, the run's whole
+        # size, are taken as read rather than copied a second time
         header = {key: np.array(af.tree[key]) if hasattr(af.tree[key], 'shape') else af.tree[key]
-                  for key in HEADER_KEYS if key in af.tree}
-        raw = np.array(af.tree['raw'], dtype=float).reshape(-1, len(DATA_COLS))
+                  for key in (*HEADER_KEYS, ORACLE_KEY) if key in af.tree}
+        raw = np.asarray(af.tree['raw'], dtype=float).reshape(-1, len(DATA_COLS))
     monitor = None
     if os.path.exists(Monitor_Path(path)):
         table = np.genfromtxt(Monitor_Path(path), delimiter=',', names=True)

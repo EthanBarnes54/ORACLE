@@ -1,6 +1,6 @@
 """The Scan tab: scan and buncher parameters, run control, the ELOG panel and the live plots.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -16,21 +16,30 @@ settable in DC mode; only the bunched timing is greyed out there. A TOF
 bin finer than MAX_TOF_BINS across the gate is widened to it, as the old
 DAQ's was, so a small bin cannot ask the window for gigabytes.
 
+A run is drawn with its own tagger window and trigger rate, which a run
+file's record keeps, not with the boxes as they stand. Its view (the TOF
+bin, the gate, the channels, the map) is recorded as it starts and held
+for the whole scan. ``Show_Settings`` sets every control as a run file
+says it was taken; ``Inputs`` names every input, for the window's memory
+of them.
+
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
-cls_acquisition.hardware.timetagger, cls_acquisition.scan_plan,
-cls_acquisition.triggers, gui.plots, gui.shared_widgets.
+cls_acquisition.hardware.timetagger, cls_acquisition.run_file,
+cls_acquisition.scan_plan, cls_acquisition.triggers, gui.plots,
+gui.shared_widgets.
 """
 
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QRadioButton, QTextEdit, QVBoxLayout,
-                               QWidget)
+                               QLineEdit, QPushButton, QRadioButton, QSpinBox, QTextEdit,
+                               QVBoxLayout, QWidget)
 
 from cls_acquisition import triggers
 from cls_acquisition.acquisition import SCAN_TYPES
 from cls_acquisition.hardware.timetagger import MAX_WINDOW_US, Check_Window
+from cls_acquisition.run_file import ORACLE_KEY
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots
 from gui.shared_widgets import Spin
@@ -48,6 +57,15 @@ def _Row(*widgets):
     return row
 
 
+def _Put(box, value, what, unshown):
+    """``value`` into ``box``, and a sentence into ``unshown`` if the box
+    cannot hold it (the limits of this window, not the run's)."""
+    if not box.minimum() <= value <= box.maximum():
+        unshown.append(f"{what} of {value:g}, beyond {box.minimum():g} to {box.maximum():g} "
+                       f"here")
+    box.setValue(int(round(value)) if isinstance(box, QSpinBox) else float(value))
+
+
 class Scan_Tab(QWidget):
 
     def __init__(self, limit_v, parent=None):
@@ -60,6 +78,7 @@ class Scan_Tab(QWidget):
         layout.addLayout(self._Build_Elog(), 3, 0)
         layout.addWidget(self._Build_Plots(), 0, 1, 4, 1)
         layout.setColumnStretch(1, 1)
+        self._Drawn = None
         self.Bunched_Radio.toggled.connect(self._Mode_Changed)
         self._Mode_Changed()
 
@@ -158,7 +177,7 @@ class Scan_Tab(QWidget):
         grid = QGridLayout(group)
         self.Spectrum_Plot = plots.Plot('HFS spectrum', ('Scanning voltage', 'V'),
                                         ('Counts', None))
-        self.Spectrum_Curve = pg.PlotCurveItem(pen=plots.Pen())
+        self.Spectrum_Curve = plots.Dense_Curve(pen=plots.Pen())
         self.Spectrum_Plot.addItem(self.Spectrum_Curve)
         self.Tof_Plot = plots.Gate_Plot()
         self.Map_Plot = plots.Plot('TOF-HFS', ('Scanning voltage', 'V'),
@@ -209,7 +228,10 @@ class Scan_Tab(QWidget):
             return max(int(self.Per_Step_Box.value()), 1)
         return max(int(round(self.Per_Step_Box.value() * DC_TRIGGER_HZ)), 1)
 
-    def Trigger_Hz(self):
+    def Trigger_Hz(self, timing=None):
+        """Triggers a second: ``timing``'s (a run's) if given, else as set."""
+        if timing is not None:
+            return timing['rep_rate_hz']
         return 1000.0 / self.Dwell_Box.value() if self.Bunched() else DC_TRIGGER_HZ
 
     def Timing(self):
@@ -224,10 +246,15 @@ class Scan_Tab(QWidget):
         triggers.Pattern(timing)
         return timing
 
-    def Tof_Edges(self):
-        """The TOF histogram's edges across the gate, a bin apart, or wider
-        if that would make more than MAX_TOF_BINS."""
-        start, length = self.Gate_Start_Box.value(), self.Gate_Length_Box.value()
+    def Tof_Edges(self, timing=None):
+        """The TOF histogram's edges across the tagger's window, ``timing``'s
+        (a run's) if given, else as set: a bin apart, or wider if that would
+        make more than MAX_TOF_BINS."""
+        if timing is None:
+            start, length = self.Gate_Start_Box.value(), self.Gate_Length_Box.value()
+        else:
+            start = timing['gate_start_us']
+            length = timing['gate_stop_us'] - start
         size = max(self.Bin_Box.value(), length / MAX_TOF_BINS)
         count = int(round(length / size)) + 1
         return start + size * (np.arange(count + 1) - 0.5)
@@ -235,7 +262,90 @@ class Scan_Tab(QWidget):
     def Channels(self):
         return [c for c, check in zip(CHANNELS, self.Channel_Checks) if check.isChecked()]
 
+    def View(self):
+        """How the plots show a run, for its record."""
+        gate = self.Tof_Plot.Gate()
+        return {'tof_bin_us': self.Bin_Box.value(), 'tof_gate_us': gate and list(gate),
+                'channels': self.Channels(), 'map': self.Map_Check.isChecked()}
+
+    def Lock_View(self, locked):
+        """The view held as it is while a scan runs, so its record holds for
+        every event; the plots still pan and zoom."""
+        for widget in (self.Bin_Box, self.Map_Check, *self.Channel_Checks):
+            widget.setEnabled(not locked)
+        self.Tof_Plot.Lock_Gate(locked)
+
+    def Show_Settings(self, header):
+        """Every control as the run in ``header`` (run_file.Read's) was taken:
+        its ranges, step, bunches, dwell and experiment from the header, and
+        its scan type, mode, timing and view from ORACLE's record. Returns
+        what of the run they could not show, as sentences."""
+        record = header.get(ORACLE_KEY) or {}
+        timing, view, unshown = record.get('Timing'), record.get('View'), []
+        if record.get('ScanType') in SCAN_TYPES:
+            self.Type_Combo.setCurrentText(record['ScanType'])
+        if timing is not None:
+            # the mode first: changing it resets the bunches per step
+            (self.Bunched_Radio if timing['bunched'] else self.Dc_Radio).setChecked(True)
+        ranges = [list(r) for r in header.get('ScanningRanges', [])]
+        for i, (check, low, high) in enumerate(zip(self.Range_Checks, self.From_Boxes,
+                                                   self.To_Boxes)):
+            check.setChecked(i < len(ranges))
+            if i < len(ranges):
+                _Put(low, ranges[i][0], 'a range limit', unshown)
+                _Put(high, ranges[i][1], 'a range limit', unshown)
+        if len(ranges) > RANGES:
+            unshown.append(f"{len(ranges) - RANGES} of its {len(ranges)} ranges (the tab "
+                           f"holds {RANGES})")
+        _Put(self.Step_Box, float(header['StepSize']), 'its step', unshown)
+        bunches = int(header['BunchesPerChannel'])
+        _Put(self.Per_Step_Box, bunches if self.Bunched() else bunches / DC_TRIGGER_HZ,
+             'its bunches per step', unshown)
+        _Put(self.Dwell_Box, int(header['DwellTime']), 'its dwell', unshown)
+        self.Experiment_Edit.setText(str(header.get('Experiment') or ''))
+        if timing is None:
+            unshown.append("its scan type, mode, trigger timing and view, which ORACLE did not "
+                           "yet record")
+            return unshown
+        start = timing['gate_start_us']
+        for box, value, what in ((self.Release_Box, timing['release_us'], 'its release'),
+                                 (self.Tagger_Delay_Box, timing['tagger_delay_us'],
+                                  'its trigger delay'),
+                                 (self.Gate_Start_Box, start, 'its gate start'),
+                                 (self.Gate_Length_Box, timing['gate_stop_us'] - start,
+                                  'its gate length')):
+            _Put(box, value, what, unshown)
+        if view is not None:
+            _Put(self.Bin_Box, view['tof_bin_us'], 'its TOF bin', unshown)
+            self.Tof_Plot.Set_Gate(view['tof_gate_us'])
+            for channel, check in zip(CHANNELS, self.Channel_Checks):
+                check.setChecked(channel in view['channels'])
+            self.Map_Check.setChecked(view['map'])
+        return unshown
+
+    def Inputs(self):
+        """Every input, by name, in the order to set them again: the mode
+        before the bunches per step it resets."""
+        ranges = [(f"range_{i}_{part}", widget) for i, row in enumerate(zip(
+            self.Range_Checks, self.From_Boxes, self.To_Boxes))
+            for part, widget in zip(('on', 'from', 'to'), row)]
+        return [('scan_type', self.Type_Combo), ('mode', (self.Dc_Radio, self.Bunched_Radio)),
+                ('per_step', self.Per_Step_Box), ('step', self.Step_Box), *ranges,
+                ('dwell', self.Dwell_Box), ('release', self.Release_Box),
+                ('tagger_delay', self.Tagger_Delay_Box), ('gate_start', self.Gate_Start_Box),
+                ('gate_length', self.Gate_Length_Box), ('tof_bin', self.Bin_Box),
+                ('tof_gate', self.Tof_Plot), ('map', self.Map_Check),
+                *((f"channel_{c}", check) for c, check in zip(CHANNELS, self.Channel_Checks)),
+                ('elog_text', self.Elog_Edit)]
+
     def Draw(self, live):
+        """The plots from ``live``, redrawn only if it or the map's box has
+        changed since they last were: a 50,000-bin TOF and a full map cost
+        tens of milliseconds a tick to draw again unchanged."""
+        drawn = (live, live.Version, self.Map_Check.isChecked())
+        if drawn == self._Drawn:
+            return
+        self._Drawn = drawn
         self.Spectrum_Curve.setData(live.Volt_Edges, live.Spectrum, stepMode='center')
         self.Tof_Plot.Curve.setData(live.Tof_Edges, live.Tof, stepMode='center')
         if self.Map_Check.isChecked():
