@@ -12,6 +12,7 @@ from cls_acquisition.hardware import mcc_dac
 from cls_acquisition.scan_plan import Scan_Plan
 from tests.bench import Loop_Bench
 
+HALF_CODE_V = mcc_dac.LSB_V * mcc_dac.AMPLIFIER_GAIN / 2   # a write's rounding, at the platform
 TIMING = {'bunched': True, 'rep_rate_hz': 200.0, 'release_us': 100, 'tagger_delay_us': 0,
           'gate_start_us': 0.0, 'gate_stop_us': 200.0}
 
@@ -22,12 +23,12 @@ def _Scan(loop, setpoints, scan_type='Single scan', bunches=2, timing=TIMING):
 
 
 def test_Every_Instruction_Gets_One_Reply(loop):
-    assert loop.Send('Ping') == (True, {})
+    assert loop.Send('Ping') == (True, {'Warnings': []})
     ok, why = loop.Send('Make_Coffee')
     assert not ok and "not an instruction" in why
     ok, why = loop.Send('Start_Scan', setpoints=[0, 1])      # missing parameters
     assert not ok and "failed in the acquisition process" in why
-    assert loop.Send('Ping') == (True, {})                   # and the loop is still alive
+    assert loop.Send('Ping')[0]                              # and the loop is still alive
 
 
 def test_Calibration_Steps_Write_Then_Stamp(loop):
@@ -39,7 +40,8 @@ def test_Calibration_Steps_Write_Then_Stamp(loop):
     assert not loop.Send('Calibration_Step', index=len(plan))[0]    # outside the plan
     ok, step = loop.Send('Calibration_Step', index=0)
     assert ok and step['Index'] == 0 and step['Volts'] == -10.0
-    assert loop.Writes[-2:] == [(mcc_dac.CH_POS, 0.0), (mcc_dac.CH_NEG, 0.01)]
+    assert loop.Writes[-2:] == [(mcc_dac.CH_POS, 0.0), (mcc_dac.CH_NEG, pytest.approx(
+        0.01, abs=mcc_dac.LSB_V / 2))]
     assert loop.State.Voltage.value == -10.0
     writes = len(loop.Writes)
     loop.Packets()                                  # time passes; the idle branch must not
@@ -65,13 +67,27 @@ def test_Single_Scan_Tags_Each_Hit_With_Its_Setpoint_And_Ends_Marked(loop):
     assert packets[-1] == ('scan_end', None)
     # each setpoint commanded once, in order, and nothing put 0 V back mid-scan
     live = [volts * mcc_dac.AMPLIFIER_GAIN for _, volts in loop.Writes[start:][1::2]]
-    assert live[:len(plan)] == pytest.approx(plan)
+    assert live[:len(plan)] == pytest.approx(plan, abs=HALF_CODE_V)
     rows = np.vstack([p[1] for p in packets[:-1]] or [np.empty((0, 6))])
     assert set(rows[:, 1]) <= set(plan)
     assert loop.State.Bunches.value == 3 * len(plan)
     assert not loop.State.Scanning.is_set()
     loop.Packets()
     assert loop.State.Voltage.value == 0.0          # the platform back at rest
+
+
+def test_A_Scan_Given_Its_Rounds_Ends_Itself_After_The_Last(loop):
+    """As a queued scan is: a triangle of three rounds, up, down and up, then
+    its end marked, with nothing asked of it in between."""
+    assert loop.Send('Start_Scan', setpoints=[30.0, 31.0, 32.0], scan_type='Triangle',
+                     bunches_per_step=1, timing=TIMING, rounds=3)[0]
+    packets = loop.Packets(until_end=True)
+    assert packets[-1] == ('scan_end', None)
+    assert loop.State.Round.value == 3 and loop.State.Bunches.value == 3 * 3
+    assert not loop.State.Scanning.is_set()
+    ok, why = loop.Send('Start_Scan', setpoints=[30.0, 31.0], scan_type='Sawtooth',
+                        bunches_per_step=1, timing=TIMING, rounds=0)
+    assert not ok and 'needs one at least' in why
 
 
 def test_Triangle_Reverses_And_Stop_After_Scan_Ends_The_Round(loop):
@@ -83,7 +99,7 @@ def test_Triangle_Reverses_And_Stop_After_Scan_Ends_The_Round(loop):
     loop.Packets(until_end=True)
     assert loop.State.Round.value == last_round and not loop.State.Scanning.is_set()
     commanded = [volts * mcc_dac.AMPLIFIER_GAIN for _, volts in loop.Writes if volts]
-    assert commanded[:5] == pytest.approx([30, 31, 32, 31, 30])
+    assert commanded[:5] == pytest.approx([30, 31, 32, 31, 30], abs=HALF_CODE_V)
 
 
 def test_Dc_Mode_Records(loop):
@@ -113,7 +129,7 @@ def test_An_Orphaned_Loop_Stops():
     parent = threading.Event()
     parent.set()
     bench = Loop_Bench(parent.is_set)
-    assert bench.Send('Ping') == (True, {})
+    assert bench.Send('Ping')[0]
     parent.clear()                                  # the GUI's process is gone
     bench.Thread.join(timeout=2)
     assert not bench.Thread.is_alive()
@@ -132,10 +148,28 @@ def test_The_Link_Talks_To_A_Spawned_Process():
     from cls_acquisition import settings
     from cls_acquisition.hardware import Rack
     link = Rack_Link(Rack(settings.DEFAULTS, get_context('spawn')).Loop_Spec())
-    assert link.Send('Ping', timeout=30) == {}
+    assert link.Send('Ping', timeout=30) == {'Warnings': []}
     with pytest.raises(Acquisition_Error, match="not an instruction"):
         link.Send('Make_Coffee')
     link.Close()
     assert not link.Alive()
     with pytest.raises(Acquisition_Error, match="has stopped"):
         link.Send('Ping')
+
+
+def test_A_Timing_That_Does_Not_Fit_Is_Refused_With_Its_Sentence_And_Nothing_Moves(loop):
+    loop.Send('Calibrate', setpoints=[0.0, 10.0])
+    loop.Send('Calibration_Step', index=1)
+    loop.Send('Stop_Calibration')
+    writes = len(loop.Writes)
+    late = dict(TIMING, release_us=10000)                   # a 5 ms cycle at 200 Hz
+    ok, why = _Scan(loop, [20.0, 30.0], timing=late)
+    assert not ok and "bunch release at 10000 µs" in why and "not started" in why
+    ok, why = loop.Send('Start_Triggering', timing=dict(TIMING, gate_stop_us=6000.0))
+    assert not ok and "closes 6000 µs into the 5000 µs cycle" in why
+    state = loop.State
+    assert not state.Scanning.is_set() and not state.Triggering.is_set()
+    assert state.Round.value == 0
+    time.sleep(0.2)
+    # the idle loop puts 0 V back after the calibration, and nothing else is written
+    assert all(volts == 0.0 for _, volts in loop.Writes[writes:])

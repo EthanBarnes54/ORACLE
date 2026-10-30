@@ -1,6 +1,6 @@
 """The Scan Calibration tab: a stand-alone calibration and the gate's verdict on it.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -22,20 +22,19 @@ cls_acquisition.scan_plan, gui.plots, gui.shared_widgets.
 import html
 
 import numpy as np
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QVBoxLayout, QWidget)
 
 from cls_acquisition import calibration
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots
-from gui.shared_widgets import REPORT_WIDTH, Form, Spin, Verdict_Html
+from gui.shared_widgets import REPORT_WIDTH, Form, Scroll_Column, Spin, Verdict_Html
 
 
 class Calibration_Tab(QWidget):
 
     def __init__(self, limit_v, parent=None):
         super().__init__(parent)
-        layout = QGridLayout(self)
-
         self.Params_Group = QGroupBox('Calibration parameters')
         self.From_Box = Spin(0.0, -limit_v, limit_v)
         self.To_Box = Spin(min(3000.0, limit_v), -limit_v, limit_v)
@@ -55,21 +54,41 @@ class Calibration_Tab(QWidget):
 
         plot_group = QGroupBox('Plots')
         plot_grid = QGridLayout(plot_group)
-        set_axis = ('Set voltage', 'V')
-        self.Readback_Plot = plots.Plot('Calibration scan', set_axis, ('Readback voltage', 'V'))
-        self.Difference_Plot = plots.Plot('Readback - set', set_axis, ('Difference', 'V'))
-        self.Step_Plot = plots.Plot('Measured step size', set_axis, ('Step', 'V'))
+        set_axis = ('Setpoint', 'V')
+        self.Readback_Plot = plots.Plot('HV readback against setpoint', set_axis,
+                                        ('Readback voltage', 'V'), (
+            "The platform voltage measured at each step of the calibration, against the voltage "
+            "commanded. A working high-voltage chain lies on a straight line of unit slope.",
+            "Each setpoint is written to the DAC and, once the amplifier has settled, the line "
+            "meter reads the platform through its 1000:1 divider; a reading taken before the "
+            "step had settled is repeated. The run's calibration is the straight line fitted "
+            "to these points."))
+        self.Difference_Plot = plots.Plot('Readback deviation from setpoint', set_axis,
+                                          ('Readback − setpoint', 'V'), (
+            "Measured minus commanded voltage at each calibration step: the offset, gain error "
+            "and non-linearity of the high-voltage chain.",
+            "The readback (line meter reading × 1000) less the setpoint. An offset or a "
+            "straight-line trend is absorbed by the linear calibration; curvature and periodic "
+            "structure (the DAC's integral non-linearity, and its rounding to codes 0.305 V "
+            "apart) remain in the voltage axis unless a DAC correction is in force."))
+        self.Step_Plot = plots.Plot('Measured voltage step', set_axis, ('Readback step', 'V'), (
+            "The change in readback from one calibration step to the next, which should equal "
+            "the commanded step size.",
+            "The difference of successive readbacks, plotted at the later setpoint. Scatter "
+            "reflects the DAC's code rounding and the meter's noise; an outlier marks a step "
+            "that had not settled when it was read."))
         self._Curves = [p.plot(**dict(plots.Dots(), pen=plots.Pen()))
                         for p in (self.Readback_Plot, self.Difference_Plot, self.Step_Plot)]
         plot_grid.addWidget(self.Readback_Plot, 0, 0, 1, 2)
         plot_grid.addWidget(self.Difference_Plot, 1, 0)
         plot_grid.addWidget(self.Step_Plot, 1, 1)
 
-        layout.addWidget(self.Params_Group, 0, 0)
-        layout.addWidget(self.Control_Group, 1, 0)
-        layout.addWidget(plot_group, 0, 1, 2, 1)
-        layout.setColumnStretch(1, 1)
-        layout.setRowStretch(1, 1)
+        controls = QVBoxLayout()
+        controls.addWidget(self.Params_Group)
+        controls.addWidget(self.Control_Group, 1)
+        layout = QHBoxLayout(self)
+        layout.addWidget(Scroll_Column(controls))
+        layout.addWidget(plot_group, 1)
         self._Set, self._Readback = [], []
 
     def Plan(self):

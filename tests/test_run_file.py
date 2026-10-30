@@ -56,3 +56,22 @@ def test_Numbering_Takes_The_Highest_Run_In_Any_Folder(tmp_path):
     run_file.Create(str(tmp_path), _Header(7080, datetime(2026, 1, 16)))
     run_file.Create(str(tmp_path), _Header(12000, datetime(2025, 12, 1)))
     assert run_file.Last_Run_Number(str(tmp_path)) == 12000
+
+
+def test_Oracles_Record_Sits_Beside_The_Archives_Keys_And_Reads_Back_As_Written(tmp_path):
+    record = {'Version': '0.2.0', 'ScanType': 'Triangle',
+              'Timing': {'bunched': False, 'rep_rate_hz': 1000.0, 'release_us': 100,
+                         'tagger_delay_us': 0, 'gate_start_us': 0.0, 'gate_stop_us': 200.0},
+              'View': {'tof_bin_us': 0.5, 'tof_gate_us': None, 'channels': [1, 3], 'map': True},
+              'Calibration': {'Verdict': 'WARN', 'Checks': [{'Check': 'settle',
+                                                              'Verdict': 'WARN', 'Message': 'm'}]},
+              'SettleModel': None}
+    path = run_file.Create(str(tmp_path), _Header(), record)
+    run_file.Append(path, np.arange(12.0).reshape(2, 6))
+    with asdf.open(path) as f:
+        stored = {k for k in f.tree if not k.startswith(('asdf_library', 'history'))}
+        assert stored == set(run_file.HEADER_KEYS) | {run_file.ORACLE_KEY, 'raw', 'raw_header'}
+    header, raw, _ = run_file.Read(path)
+    assert header[run_file.ORACLE_KEY] == record and raw.shape == (2, 6)
+    older = run_file.Create(str(tmp_path), _Header(8))      # one written before the record
+    assert run_file.ORACLE_KEY not in run_file.Read(older)[0]

@@ -1,6 +1,6 @@
 """The run file, in the ASDF format the archive and its readers expect.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -111,6 +111,29 @@ def Append(path, rows):
 def Runs(directory):
     """Every run file under ``directory``, newest run number first."""
     return [path for _, path in _Numbered(directory)]
+
+
+def Earlier_Calibrations(path, directory, count=3):
+    """The start-of-run calibrations of the ``count`` runs numbered before
+    ``path`` in ``directory``, newest first, as ``(run, CalSet,
+    CalReadback)``: only those keys are read, never the events. A run that
+    cannot be read is passed over."""
+    found = _RUN_NAME.search(path)
+    if found is None or not os.path.isdir(directory):
+        return []
+    number, calibrations = int(found.group(1)), []
+    for run, other in _Numbered(directory):
+        if run >= number:
+            continue
+        try:
+            with asdf.open(other, memmap=False) as af:
+                calibrations.append((run, np.array(af.tree['CalSet'], dtype=float),
+                                     np.array(af.tree['CalReadback'], dtype=float)))
+        except (OSError, KeyError, ValueError, TypeError):
+            continue
+        if len(calibrations) == count:
+            break
+    return calibrations
 
 
 def Monitor_Path(path):

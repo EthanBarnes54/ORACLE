@@ -248,15 +248,16 @@ def test_The_Installers_Keep_Their_Own_Line_Endings():
     assert b"GetFolderPath('Desktop')" in batch and b'attrib +P -U' in batch
 
 
-def test_The_Performance_Report_Names_Its_Run_As_This_System_Writes_It(tmp_path):
+def test_The_Performance_Report_Is_Written_Beside_Its_Run_As_This_System_Names_It(tmp_path):
     path = run_file.Create(str(tmp_path / 'With Space'), _Header(3))
-    result = {'Verdict': 'PASS', 'Summary': '', 'Sections': {}, 'Cuts': {3: ['beam lost']},
-              'Leading_Bunches': 0}
+    result = {'Verdict': 'WARN', 'Summary': '', 'Budget': '', 'Sections': {},
+              'Flagged': ['Beam below half its usual level from 1.0 to 2.0 min into the run.']}
     written = scan_performance.Export(path, result)
     import yaml
     with open(written, encoding='utf-8') as fh:
         report = yaml.safe_load(fh)
-    assert list(report['scan_filters']) == [os.path.abspath(path)]
+    assert os.path.dirname(written) == os.path.dirname(path)
+    assert report['run'] == os.path.basename(path) and report['flagged'] == result['Flagged']
 
 
 # ── Starting the acquisition process ────────────────────────────

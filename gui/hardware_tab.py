@@ -1,6 +1,6 @@
 """The Hardware Calibration tab: settle time, linearity and the cooler monitor.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -46,7 +46,7 @@ from cls_acquisition import hardware_calibration as hc
 from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
-from gui.shared_widgets import REPORT_WIDTH, Duration_Text, Form, Spin, Verdict_Html
+from gui.shared_widgets import REPORT_WIDTH, Duration_Text, Form, Scroll_Column, Spin, Verdict_Html
 
 STEP_ROWS = 4
 NPLC_CHOICES = ('0.02', '0.2', '1', '10', '100')
@@ -106,12 +106,12 @@ class _Panel(QWidget):
         plot_column = QVBoxLayout(plot_group)
         for widget, stretch in plot_widgets:
             plot_column.addWidget(widget, stretch)
-        layout = QGridLayout(self)
-        layout.addWidget(self.Params_Group, 0, 0)
-        layout.addWidget(self.Control_Group, 1, 0)
-        layout.addWidget(plot_group, 0, 1, 2, 1)
-        layout.setColumnStretch(1, 1)
-        layout.setRowStretch(1, 1)
+        controls = QVBoxLayout()
+        controls.addWidget(self.Params_Group)
+        controls.addWidget(self.Control_Group, 1)
+        layout = QHBoxLayout(self)
+        layout.addWidget(Scroll_Column(controls))
+        layout.addWidget(plot_group, 1)
 
     def Max_Volts(self, params):
         """The most the measurement puts on the platform, or None if it
@@ -170,10 +170,23 @@ class Settle_Panel(_Panel):
                'settle_traces': hc.SETTLE_TRACE_COLUMNS}
 
     def __init__(self, ramp, limit_v, parent=None):
-        self.Response_Plot = plots.Plot('Step response (time from 10 % crossing)',
-                                        ('Time', 's'), ('HV', 'V'))
-        self.Deviation_Plot = plots.Plot('Deviation from final value', ('Time', 's'),
-                                         ('HV - final', 'V'))
+        since_crossing = ('Time from 10 % crossing', 's')
+        self.Response_Plot = plots.Plot('Step response', since_crossing,
+                                        ('Platform voltage', 'V'), (
+            "The platform voltage through each commanded step of the settle test, outward steps "
+            "and return steps in different colours, showing the amplifier's delay, rise and "
+            "overshoot.",
+            "The line meter samples the platform at the chosen interval and aperture from before "
+            "the step is commanded; each trace is shifted in time so that zero is where it "
+            "crosses 10 % of the step's height."))
+        self.Deviation_Plot = plots.Plot('Settling to the final value', since_crossing,
+                                         ('Deviation from final value', 'V'), (
+            "The same steps relative to their final value, magnified around zero to show how "
+            "each approaches it. The dashed lines mark the settle tolerance.",
+            "The final value is the median of the last fifth of each capture. A step has "
+            "settled once its trace stays inside the tolerance (or inside a band set by its "
+            "noise, if that is wider); the settle times in the table are when each trace last "
+            "leaves it."))
         self.Table = _Table(self.COLUMNS)
         super().__init__('Settle test', ((self.Response_Plot, 3), (self.Deviation_Plot, 3),
                                          (self.Table, 2)), parent)
@@ -354,9 +367,23 @@ class Linearity_Panel(_Panel):
 
     def __init__(self, ramp, limit_v, parent=None):
         set_axis = ('Setpoint', 'V')
-        self.Difference_Plot = plots.Plot('Readback - setpoint', set_axis, ('HV - set', 'V'))
-        self.Residual_Plot = plots.Plot('Residual from linear fit', set_axis,
-                                        ('Residual', 'V'))
+        self.Difference_Plot = plots.Plot('Readback deviation from setpoint', set_axis,
+                                          ('Readback − setpoint', 'V'), (
+            "Readback minus setpoint at every point of the linearity sweep: points on the "
+            "positive and negative converter branches in different colours, and the 0 V "
+            "reference checks as squares.",
+            "Each point is the mean of the readings taken at its setpoint after the chosen "
+            "settle time, at the chosen integration time (NPLC). A straight trend is the "
+            "chain's gain and offset; curvature and periodic structure are the DAC's integral "
+            "non-linearity."))
+        self.Residual_Plot = plots.Plot('Residual from a linear fit', set_axis,
+                                        ('Residual', 'V'), (
+            "What a single straight-line calibration leaves in the voltage axis: the readback "
+            "less the line fitted to every sweep point so far.",
+            "A least-squares line through the sweep points, refitted as points arrive; the "
+            "residual is readback − (gain × setpoint + offset). Its rms and maximum are "
+            "reported below the plots, and a DAC correction table built from the sweep removes "
+            "it."))
         self.Fit_Label = QLabel()
         self.Fit_Label.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.Fit_Label.setWordWrap(True)
@@ -589,9 +616,21 @@ class Cooler_Panel(_Panel):
     RECORDS = {'cooler': hc.COOLER_COLUMNS, 'cooler_spectrum': hc.SPECTRUM_COLUMNS}
 
     def __init__(self, parent=None):
-        self.Voltage_Plot = plots.Plot('Cooler voltage', ('Time', 's'), ('Cooler - mean', 'V'))
-        self.Asd_Plot = plots.Plot('Amplitude spectral density (detrended)',
-                                   ('Frequency', 'Hz'), ('ASD (V/√Hz)', None))
+        self.Voltage_Plot = plots.Plot('Cooler platform voltage',
+                                       ('Time since the start of the record', 's'),
+                                       ('Deviation from mean', 'V'), (
+            "The cooler (RFQ cooler-buncher) platform voltage over the record, relative to its "
+            "mean, showing drift, ripple and noise.",
+            "The cooler meter reads the platform through its 10 000:1 divider at the chosen "
+            "interval and aperture; the record's mean is subtracted for display. The mean, "
+            "drift and noise figures are listed below the plots."))
+        self.Asd_Plot = plots.Plot('Amplitude spectral density (ASD) of the cooler voltage',
+                                   ('Frequency', 'Hz'), ('ASD (V/√Hz)', None), (
+            "The cooler voltage's noise by frequency, on logarithmic axes. Tones such as mains "
+            "harmonics stand above the noise floor, and those found are listed in the table.",
+            "The record less its straight-line drift is cut into Hann-windowed segments, half "
+            "overlapping; their power spectra are averaged (Welch's method) and the square root "
+            "taken. Tones are found in the whole record's spectrum, against its local median."))
         self.Asd_Plot.setLogMode(x=True, y=True)
         self.Peak_Table = _Table(self.PEAK_COLUMNS)
         super().__init__('Cooler monitor', ((self.Voltage_Plot, 3), (self.Asd_Plot, 3),

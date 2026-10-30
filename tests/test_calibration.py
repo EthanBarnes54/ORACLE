@@ -6,15 +6,18 @@ early read is a stamp short of SETTLE by a chosen amount, a clock offset
 moves every confirmation's stamp.
 """
 
+import multiprocessing
 import types
 
 import numpy as np
 import pytest
 
 from cls_acquisition import calibration
+from cls_acquisition import hardware_calibration as hc
 from cls_acquisition.acquisition import Acquisition_Error
 from cls_acquisition.calibration import (DIVIDER, REJECT, THRESHOLDS, WARN, Calibration,
                                          Calibration_Error, Quality_Report, Run_Calibration)
+from cls_acquisition.hardware import mcc_dac, simulated
 from cls_acquisition.scan_plan import Scan_Plan
 
 SETTLE_NS = round(THRESHOLDS['SettleS'] * 1e9)
@@ -188,3 +191,42 @@ def test_Gate_Passes_The_Dac_Verdict_Through(plan):
     report = Quality_Report(_Cal(plan, plan.Setpoints, dac_status=('REJECT', 'expired')), plan)
     assert _Verdict(report, 'dac_calibration') == REJECT
     assert 'dac_calibration: expired' in calibration.Rejections(report)
+
+
+@pytest.mark.parametrize('measured', [False, True])
+def test_The_Beamline_Geometry_On_The_Measured_Rack(measured):
+    # the audit's hardening found a gate that refused the ramp the beamline runs, which
+    # no test had used: -450 to +475 V in 2 V steps, here through the measured rack's
+    # converters (seam, non-linearity, code rounding) and its meter's scatter
+    plan = Scan_Plan([-450], [475], 2)
+    platform = simulated.Platform(multiprocessing.get_context('spawn'))
+    rng = np.random.default_rng(5)
+    correction = mcc_dac.CORRECTION
+    if measured:
+        dac = mcc_dac.Dac(simulated.Converters(platform).V_Out)
+        points = []
+        for volts in np.arange(-1000.0, 1001.0, 2.0):
+            channel, _ = dac.Write(volts)
+            points.append({'Kind': 'sweep', 'Direction': 'up', 'Set_V': volts,
+                           'Read_V': platform._State[1], 'Channel': channel, 'Sigma_V': 0.0,
+                           'Dac_V': 0.0, 'Time_S': 0.0})
+        sweep = hc.Linearity_Analysis(points)
+        correction = hc.Corrected(correction, sweep['Fits'], 1, 'test', inl=sweep['Inl'])
+    dac = mcc_dac.Dac(simulated.Converters(platform).V_Out, correction)
+
+    class Measured_Rack(Fake_Rack):
+
+        def Read_Settled(self, wait_s):
+            stamp, _ = super().Read_Settled(wait_s)
+            dac.Write(self.Plan.Setpoints[self.Index])
+            return stamp, (platform._State[1] + rng.normal(0.0, 0.065)) / DIVIDER
+
+    rack = Measured_Rack(plan)
+    report = Quality_Report(Run_Calibration(rack, rack, plan), plan)
+    assert len(plan) == 463
+    for check in ('length', 'tracking', 'span', 'settle', 'plan'):
+        assert _Verdict(report, check) == 'PASS', check
+    # the branches' lines meet 0 V 0.5 V apart on the bench; a measured correction brings
+    # them within 0.1 V
+    assert _Verdict(report, 'polarity') == ('PASS' if measured else WARN)
+    assert report['Verdict'] == ('PASS' if measured else WARN)

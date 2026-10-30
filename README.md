@@ -4,7 +4,7 @@
 
 The data acquisition for collinear laser spectroscopy (CLS) at IGISOL: it steps the platform voltage through a scan, records every ion the time tagger sees against the voltage it was taken at, and calibrates the voltage axis before every run. ORACLE keeps the collinear DAQ's layout and functions, brings in the bench calibration tool, and is built so that the faults found in that DAQ cannot happen rather than being caught afterwards.
 
-**Version:** 0.3.0
+**Version:** 0.3.1
 **Developer:** Ethan Barnes (ethan.barnes@postgrad.manchester.ac.uk)
 **Framework:** PySide6 (Qt6) + pyqtgraph + numpy + asdf
 

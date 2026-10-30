@@ -1,6 +1,6 @@
 """ORACLE's settings: the rack, the facility services and the data folder.
 
-Date:    2026-10-27
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -11,7 +11,8 @@ given, on a fresh read of the file, so it never writes back a stale
 copy over an edit made while ORACLE was running.
 
 ``ORACLE_SETTINGS_PATH`` overrides the file (the tests point it at a
-private copy).
+private copy). What was last entered in the window is kept beside it, in
+``inputs.yaml`` (gui.input_memory), so this file stays the operator's.
 
 A file that is not valid YAML, or not a mapping of keys, raises
 Settings_Error naming it and the line, rather than starting ORACLE on
@@ -62,6 +63,9 @@ DEFAULTS = {
         'tagger_trigger_level': 2.5,
         # threshold per tagger input in volts; a negative one is a falling edge
         'tagger_levels': [-0.2, -0.6, 0.1, 0.1],
+        # the inputs with a detector wired to them; Scan Performance reports one
+        # that records nothing as a possible fault
+        'tagger_channels': [1, 2, 3, 4],
     },
     # how the laser meets the ions, as DENIS takes it: the Scan Performance tab
     # converts the wavemeter's drift into scan volts with these
@@ -91,6 +95,11 @@ class Settings_Error(ValueError):
 def Settings_Path():
     override = os.environ.get('ORACLE_SETTINGS_PATH')
     return override or os.path.join(APP_ROOT, 'settings', 'settings.yaml')
+
+
+def Inputs_Path():
+    """Where the window keeps what was last entered in it: beside the settings."""
+    return os.path.join(os.path.dirname(Settings_Path()), 'inputs.yaml')
 
 
 def _Read():

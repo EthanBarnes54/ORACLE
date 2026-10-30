@@ -1,6 +1,6 @@
 """The acquisition process: the loop that drives the DAC, the triggers and the tagger.
 
-Date:    2026-10-27
+Date:    2026-10-29
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -19,7 +19,9 @@ bunch. Calibration is stepped from the GUI: 'Calibrate', one
 'Calibration_Step' per setpoint, then 'Stop_Calibration'; meanwhile the
 loop writes the DAC only when told to. The hardware calibrations step
 the DAC the same way. A scan or calibration plan beyond the DAC's limit
-is refused whole, before its first write.
+is refused whole, before its first write. A scan may be given the number
+of rounds to take (a queued one is), and ends itself after the last, so
+a queue's scans hold exactly what was asked of them.
 
 A scan step is settle-aware. The PulseBlaster, and the buncher and
 cooler with it, runs on untouched; what stops is acquisition. At each
@@ -111,6 +113,7 @@ class Acquisition_Loop():
         self._Plan = np.zeros(0)
         self._Index = 0
         self._Scan_Type = SCAN_TYPES[0]
+        self._Rounds = None                 # scans to take; None: until told to stop
         self._Bunches_Per_Step = 1
         self._Volts = None                  # on the DAC; None before the first write
         self._Last_Write = None
@@ -208,16 +211,23 @@ class Acquisition_Loop():
         except ValueError as e:
             raise _Refused(f"{e} Nothing was written.") from None
 
-    def _Start_Scan(self, setpoints, scan_type, bunches_per_step, timing, settle=None):
+    def _Start_Scan(self, setpoints, scan_type, bunches_per_step, timing, settle=None,
+                    rounds=None):
+        """``rounds`` scans of ``setpoints`` (one for a single scan), or until
+        told to stop."""
         self._Require_Idle('start a scan')
         self._Require_Within_Limit(setpoints)
         if scan_type not in SCAN_TYPES:
             raise _Refused(f"'{scan_type}' is not a scan type; use one of "
                            f"{', '.join(SCAN_TYPES)}.")
+        if rounds is not None and int(rounds) < 1:
+            raise _Refused(f"A scan of {rounds} rounds cannot be taken; it needs one at "
+                           f"least.")
         self._Start_Triggers(timing)
         self._Plan = np.asarray(setpoints, dtype=float)
         self._Index = 0
         self._Scan_Type = scan_type
+        self._Rounds = None if rounds is None else int(rounds)
         self._Bunches_Per_Step = max(int(bunches_per_step), 1)
         self._Settle = settle
         self._State.Round.value = 1
@@ -316,7 +326,7 @@ class Acquisition_Loop():
         self._Index += 1
         if self._Index == len(self._Plan):
             self._Index = 0
-            if self._Scan_Type == 'Single scan':
+            if self._Scan_Type == 'Single scan' or self._State.Round.value == self._Rounds:
                 self._End_Scan()
                 return
             self._State.Round.value += 1

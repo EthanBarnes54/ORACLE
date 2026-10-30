@@ -1,7 +1,7 @@
 """Step-and-confirm calibration, and the gate every calibration must pass.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-27
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Calibration pairs each commanded platform voltage with what the line
@@ -45,9 +45,9 @@ THRESHOLDS = {
     'SpanTolerance': 0.10,          # readback span within 10 % of commanded
     'MaxPlanDeviationV': 1e-6,      # commanded against planned
     'MaxPolarityStepV': 0.10,       # branch offset at 0 V before a WARN
-    # the HV amplifier's settling after a write. Provisional until the
-    # Settle time page has measured it on the rack; the first jump from rest
-    # is the worst
+    # the HV amplifier's settling after a write. The bench (cls-cal, 24 Oct
+    # 2026) put a 2 kV jump inside 0.5 V 20.5 ms after a 3 ms lag, and at the
+    # meter's own scatter by about 30 ms; a jump of the full 4 kV, about 42 ms
     'SettleS': 0.050,
     # one read and two re-requests: a real shortfall is gone after the first
     # re-request, which waits it out, so a third early read is a fault
@@ -218,10 +218,13 @@ def Line_Fit(x, y):
 
 
 def Step_At_Zero(commanded, readback):
-    """The positive branch's readback at 0 V less the negative's, from a line
-    through each, or None if the scan does not put three points either side
-    of zero. 0 V itself is on neither side: it leaves the platform on
-    whichever amplifier was driven last."""
+    """Where a line through the positive branch meets 0 V less where the
+    negative branch's does, or None if the scan does not put three points
+    either side of zero. 0 V itself is on neither side: both converters sit
+    at mid-code there. The platform runs on through 0 V (the bench, 24 and
+    25 October 2026), so this is not a step in it but how differently each
+    converter's gain and non-linearity bend its branch: what one straight
+    line through the whole calibration cannot describe (Mode C)."""
     offsets = []
     for side in (commanded > 0, commanded < 0):
         if side.sum() < 3 or np.ptp(readback[side]) == 0:

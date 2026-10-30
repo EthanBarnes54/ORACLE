@@ -1,11 +1,11 @@
 """ORACLE's PySide6 interface.
 
-Date:    2026-10-29
-Version: 0.3.0
+Date:    2026-10-30
+Version: 0.3.1
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The main window and its three tabs, the theme, the session log and the
-live plots. Binds pyqtgraph to PySide6 before any module imports it.
+The main window and its five tabs, the theme, the session log and the
+plots. Binds pyqtgraph to PySide6 before any module imports it.
 
 Depends on: PySide6, pyqtgraph; cls_acquisition.
 """

@@ -1,6 +1,6 @@
 """ORACLE's main window and entry point.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -25,6 +25,10 @@ trigger timing, and opened, it comes back as it stood when it had just
 been taken, controls and all, from the record each run file keeps of
 what the archive's header does not (run_file.ORACLE_KEY); the plots'
 view is part of that record, and held from Start to the scan's end.
+The scan queue (gui.scan_queue) is driven from here: each queued scan is
+set up on the Scan tab and started as a scan is, with its number of
+scans, the next once it has ended cleanly (Automatic) or once the
+operator says so (Manual), and anything but a clean end stops the queue.
 Analysis runs off the GUI thread. Every input in the window is kept
 through a crash (gui.input_memory) and set again as ORACLE opens; those,
 not the latest run's, are the controls ORACLE opens with. If the
@@ -39,7 +43,7 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.3.0'
+__version__ = '0.3.1'
 
 import contextlib
 import ctypes
@@ -56,13 +60,13 @@ from datetime import datetime
 from functools import partial
 
 import numpy as np
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QFontDatabase,
                            QKeySequence, QPainter, QPixmap)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import (QApplication, QFileDialog, QGridLayout, QGroupBox, QLabel,
-                               QMainWindow, QMessageBox, QPushButton, QSlider, QSplashScreen,
-                               QTabWidget, QWidget)
+from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, QGroupBox,
+                               QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea,
+                               QSlider, QSplashScreen, QStyle, QTabWidget, QWidget)
 
 from cls_acquisition import (calibration, hardware_calibration, run_file, scan_performance,
                              settings)
@@ -77,10 +81,11 @@ from gui import plots, session_log, theme
 from gui.calibration_tab import Calibration_Tab
 from gui.hardware_tab import Hardware_Tab
 from gui.input_memory import Input_Memory
+from gui.scan_queue import CALIBRATING, Describe, Duration_S
 from gui.live_data import Live_Data
 from gui.performance_tab import Performance_Tab
 from gui.scan_tab import Scan_Tab
-from gui.shared_widgets import Job_Worker, Spin, Verdict_Html
+from gui.shared_widgets import Duration_Text, Job_Worker, Spin, Verdict_Html
 from gui.time_tab import Time_Tab
 
 TICK_MS = 100
@@ -88,12 +93,24 @@ MONITOR_FLUSH_TICKS = 10            # the monitor record is written once a secon
 SLIDER_STEPS = 10000
 STARTUP_TIMEOUT_S = 30.0            # the acquisition process opens its devices first
 APP_ID = 'io.github.ethanbarnes54.oracle'   # as the macOS bundle's CFBundleIdentifier
+NORMAL_SIZE = QSize(1250, 1040)     # px, restored, on a screen with room for it
+SCREEN_SHARE = 0.9                  # of the work area at most, leaving room for the frame
 
 log = logging.getLogger('oracle.gui')
 
 
 def _Number(value, fmt):
     return 'unavailable' if value is None else format(value, fmt)
+
+
+class _Window_Grid(QGridLayout):
+    """The window's grid, said to have no height-for-width (its wrapped
+    Shown line has one): a scroll area holds a widget so laid out at its
+    preferred height for the width, not its minimum, and the window would
+    scroll on a screen with room for it all."""
+
+    def hasHeightForWidth(self):
+        return False
 
 
 class Main_Window(QMainWindow):
@@ -116,15 +133,25 @@ class Main_Window(QMainWindow):
         self._Analysing = None          # the run it is of
         self._Wanted = None             # the run Scan Performance is to show
         self._Laser = config['laser']
+        self._Channels = config['instruments']['tagger_channels']
         self._Monitor = []              # monitor rows of the run, not yet written
         self._Shown_Timing = None       # the shown run's trigger timing; None: the boxes'
         self._Shown_Round = None        # an opened run's last scan; None: the loop's
+        self._Queueing = False          # the queue goes on to its next scan as this ends
+        self._Queue_Row = None          # the queue's row of the scan being taken
+        self._Queue_Held = ''           # why that scan ended short, if it did
+        self._Queue_Asks = False        # Manual asks before every scan but the first
         self._Death_Shown = False
         self._Awake = Keep_Awake()      # no sleep while anything runs
 
         rack_name = 'simulated rack' if rack.Simulated else 'rack'
         self.setWindowTitle(f"ORACLE v{__version__} ({rack_name})")
-        self.resize(1250, 1040)
+        # it opens maximized; restored, it is centred in the screen's work area
+        # and inside it, title bar and all, however small the screen
+        area = self.screen().availableGeometry()
+        self.setGeometry(QStyle.alignedRect(
+            Qt.LayoutDirection.LeftToRight, Qt.AlignmentFlag.AlignCenter,
+            NORMAL_SIZE.boundedTo(area.size() * SCREEN_SHARE), area))
 
         self.Tabs = QTabWidget(objectName='MainTabs', documentMode=True)
         self.Tabs.tabBar().setDrawBase(False)
@@ -143,12 +170,17 @@ class Main_Window(QMainWindow):
         self.Scan.Experiment_Edit.setText(config['experiment'])
 
         central = QWidget()
-        layout = QGridLayout(central)
+        layout = _Window_Grid(central)
         layout.addWidget(self.Tabs, 0, 0)
         layout.addWidget(self._Build_Quick_Tune(), 1, 0)
         layout.addWidget(self._Build_Information(), 2, 0)
         layout.setRowStretch(0, 1)
-        self.setCentralWidget(central)
+        # Each tab's controls scroll, so the window fits a short screen; on one
+        # too short even for the tabs' plots, the window scrolls too, rather
+        # than run off the screen's bottom edge.
+        page = QScrollArea(widgetResizable=True, frameShape=QFrame.Shape.NoFrame)
+        page.setWidget(central)
+        self.setCentralWidget(page)
         self._Build_Menus()
         # what was entered when ORACLE last stopped, however it stopped
         self._Inputs = Input_Memory(settings.Inputs_Path(), self)
@@ -183,6 +215,8 @@ class Main_Window(QMainWindow):
         self.Scan.Screen_Button.clicked.connect(self._Send_Screen)
         self.Scan.Experiment_Edit.editingFinished.connect(
             lambda: settings.Update(experiment=self._Experiment()))
+        self.Scan.Queue.Start_Button.clicked.connect(self._Toggle_Queue)
+        self.Scan.Queue.Set_Settle_Model(self._Settle_Model)
         self.Calibration.Start_Button.clicked.connect(self._Calibrate_Only)
         hardware = self.Hardware
         on_line = (link, line_meter, calibration.DIVIDER)
@@ -428,21 +462,31 @@ class Main_Window(QMainWindow):
     def _Toggle_Scan(self):
         if self._State.Scanning.is_set():
             if self._Send('Stop_After_Scan') is not None:
+                self._Hold_Queue(f"stopped by hand after scan {self._State.Round.value}")
                 self._Elog.Append(f"\n\nSCAN STOPPED AFTER {self._State.Round.value} ROUNDS",
                                   self._Experiment())
             return
         if self._Worker is not None:
             return                      # a second click before the controls caught up
+        refused = self._Start_Scan()
+        if refused is not None:
+            QMessageBox.warning(self, 'Scan not started', refused)
+
+    def _Start_Scan(self, rounds=None, queued=None):
+        """Calibrate the Scan tab's plan, then take it: ``rounds`` scans of
+        it (until stopped if None, as its scan type says), ``queued`` its
+        ``(place, length)`` in the queue. Returns why it could not start,
+        or None once its calibration has."""
         try:
             plan = self.Scan.Plan()
             timing = self.Scan.Timing()
             run = self._Next_Run()
         except (ValueError, OSError) as e:
-            QMessageBox.warning(self, 'Scan not started', str(e))
-            return
+            return str(e)
 
+        in_queue = f" (queued scan {queued[0]} of {queued[1]})" if queued else ''
         self._Start_Live(plan, timing)
-        self._Clear_Shown(f"run_{run:04d}, being calibrated",
+        self._Clear_Shown(f"run_{run:04d}, being calibrated{in_queue}",
                           f"Run {run} is being taken: it is analysed as it ends.")
         self.Sweep_From.setValue(plan.Setpoints.min())
         self.Sweep_To.setValue(plan.Setpoints.max())
@@ -457,11 +501,14 @@ class Main_Window(QMainWindow):
                 f"Dwell time [ms]:     {self.Scan.Dwell_Box.value()}\n"
                 f"Laser Set Point [cm-1]: {_Number(pvs['wavenumber'], '.5f')}\n"
                 f"Mass [amu]:          {_Number(pvs['mass'], '.4f')}\n"
-                f"Mass setpoint [A or amu]:          {_Number(pvs['mass_setpoint'], '.4f')}\n")
+                f"Mass setpoint [A or amu]:          {_Number(pvs['mass_setpoint'], '.4f')}\n"
+                + (f"Queued scan {queued[0]} of {queued[1]}, {rounds} scans\n" if queued
+                   else ""))
         self._Pending = {'plan': plan, 'run': run, 'when': when, 'pvs': pvs, 'text': text,
-                         'bunches': bunches, 'timing': timing,
-                         'scan_type': self.Scan.Type_Combo.currentText()}
+                         'bunches': bunches, 'timing': timing, 'rounds': rounds,
+                         'queued': queued, 'scan_type': self.Scan.Type_Combo.currentText()}
         self._Calibrate(plan)
+        return None
 
     def _Begin_Scan(self, pending, cal, report):
         """After the calibration: the gate's verdict, then the file and the scan."""
@@ -475,6 +522,8 @@ class Main_Window(QMainWindow):
                               self._Experiment())
             self.Shown_Label.setText(f"run_{pending['run']:04d}'s calibration, refused by "
                                      f"the gate: nothing written")
+            self._Queue_Scan_Ended('rejected', f"its calibration was refused by the gate: "
+                                               f"{calibration.Rejections(report)}")
             QMessageBox.critical(self, 'Run rejected', f"{calibration.Rejections(report)}\n\n"
                                                        f"No file written, no scan started.")
             return
@@ -499,23 +548,29 @@ class Main_Window(QMainWindow):
                   'Rack': 'simulated' if self._Rack.Simulated else 'hardware',
                   'ScanType': pending['scan_type'], 'Timing': pending['timing'],
                   'View': {**self.Scan.View(), **self.Time.View()}, 'Calibration': report,
-                  'SettleModel': self._Settle_Model}
+                  'SettleModel': self._Settle_Model, 'Laser': dict(self._Laser),
+                  'Channels': list(self._Channels), 'Rounds': pending['rounds'],
+                  'Queue': list(pending['queued']) if pending['queued'] else None}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
             self.Shown_Label.setText(f"nothing: run {pending['run']}'s file was not written")
+            self._Queue_Scan_Ended('failed', f"its run file was not written: {e}")
             QMessageBox.critical(self, 'Run file not written', str(e))
             return
         started = self._Send('Start_Scan', setpoints=plan.Setpoints.tolist(),
                              scan_type=pending['scan_type'],
                              bunches_per_step=pending['bunches'], timing=pending['timing'],
-                             settle=self._Settle_Model)
+                             settle=self._Settle_Model, rounds=pending['rounds'])
         if started is None:
             with contextlib.suppress(OSError):
                 os.remove(self._Run)    # a header with no scan behind it is not a run
             self._Run = None
             self.Shown_Label.setText(f"nothing: run {pending['run']} did not start")
+            self._Queue_Scan_Ended('failed', "the acquisition process refused to start it")
             return
+        if self._Queue_Row is not None:
+            self.Scan.Queue.Set_State(self._Queue_Row, 'running', f"run {pending['run']}")
         self.Run_Label.setText(str(pending['run']))
         self.Shown_Label.setText(f"{os.path.basename(self._Run)}, live: written to its file "
                                  f"as it comes in")
@@ -523,6 +578,10 @@ class Main_Window(QMainWindow):
 
     def _End_Run(self):
         finished = self._Run
+        if self._Queue_Row is not None:
+            held, taken = self._Queue_Held, self.Scan.Queue.Why(self._Queue_Row)
+            self._Queue_Scan_Ended('stopped' if held else 'done',
+                                   f"{held}; {taken}" if held else taken)
         if finished is not None:
             self._Sample_Monitor()      # the loop's final counts, now it has stopped
             self._Flush_Monitor()
@@ -541,6 +600,7 @@ class Main_Window(QMainWindow):
 
     def _Stop_Now(self):
         if self._Send('Stop_Now') is not None:
+            self._Hold_Queue("stopped by hand")
             self._Elog.Append("\n\nSCAN KILLED", self._Experiment())
 
     def _Toggle_Triggers(self):
@@ -583,6 +643,102 @@ class Main_Window(QMainWindow):
         low, high = self.Sweep_From.value(), self.Sweep_To.value()
         self.Voltage_Box.setValue(low + (high - low) * position / SLIDER_STEPS)
 
+    # ── The scan queue ───────────────────────────────────────────
+
+    def _Toggle_Queue(self):
+        """Start the queue at its first scan not done, or let the scan being
+        taken be its last."""
+        if self._Queueing:
+            self._Queueing = False
+            self.statusBar().showMessage("The queue stops once this scan ends.", 10000)
+            self._Show_State()
+            return
+        queue = self.Scan.Queue
+        try:
+            pending = queue.Pending()
+            if not pending and queue.Value() and QMessageBox.question(
+                    self, 'Queue done', "Every scan in the queue is done. Take them all "
+                                        "again?") == QMessageBox.StandardButton.Yes:
+                queue.Reset_States()
+                pending = queue.Pending()
+            self.Scan.Timing()          # the timing every scan of it is taken with
+        except ValueError as e:
+            QMessageBox.warning(self, 'Queue not started', str(e))
+            return
+        if not pending:
+            if not queue.Value():
+                QMessageBox.warning(self, 'Queue not started', "The queue holds no scan: "
+                                                               "Add current adds one.")
+            return
+        mode = queue.Mode_Combo.currentText()
+        self._Queueing, self._Queue_Asks = True, False
+        log.info("Scan queue started: %d scans, %s", len(pending), mode)
+        self._Elog.Append(f"\n\nQUEUE STARTED: {len(pending)} scans, {mode}",
+                          self._Experiment())
+        self._Queue_Next()
+
+    def _Queue_Next(self):
+        """The queue's next scan; in Manual, asked about first, but for the
+        first."""
+        if not self._Queueing:
+            return
+        queue = self.Scan.Queue
+        try:
+            pending = queue.Pending()
+        except ValueError as e:
+            self._Queue_Over(str(e))
+            return
+        if not pending:
+            self._Queue_Over("every scan in it is done")
+            return
+        row, entry = pending[0]
+        place, bunched = queue.Position(row), self.Scan.Bunched()
+        about = Duration_Text(Duration_S(entry, bunched, self.Scan.Trigger_Hz(),
+                                         self._Settle_Model))
+        if queue.Manual() and self._Queue_Asks and QMessageBox.question(
+                self, 'Next queued scan',
+                f"Scan {place[0]} of {place[1]} is next: {Describe(entry, bunched)}, about "
+                f"{about}.\n\nReady to start it?") != QMessageBox.StandardButton.Yes:
+            self._Queue_Over(f"held before scan {place[0]}")
+            return
+        self.Scan.Show_Entry(entry)
+        self._Queue_Row, self._Queue_Held, self._Queue_Asks = row, '', True
+        queue.Set_State(row, CALIBRATING)
+        refused = self._Start_Scan(rounds=entry['scans'], queued=place)
+        if refused is not None:
+            self._Queue_Scan_Ended('failed', refused)
+            QMessageBox.warning(self, 'Queued scan not started', refused)
+        self._Show_State()
+
+    def _Hold_Queue(self, why):
+        """The queued scan being taken ends short, for ``why``: the queue stops
+        with it."""
+        if self._Queue_Row is not None:
+            self._Queue_Held = why
+            self._Queueing = False
+
+    def _Queue_Scan_Ended(self, state, why):
+        """What became of the queued scan, if one was being taken; the next
+        once this tick has handed its rows to the run, unless it ended short."""
+        row, self._Queue_Row = self._Queue_Row, None
+        if row is None:
+            return
+        self.Scan.Queue.Set_State(row, state, why)
+        log.info("Queued scan %d of %d: %s, %s", *self.Scan.Queue.Position(row), state, why)
+        if state == 'done' and self._Queueing:
+            QTimer.singleShot(0, self._Queue_Next)
+        elif state == 'done':
+            self._Queue_Over("stopped as asked, after its scan")
+        else:
+            self._Queue_Over(f"scan {self.Scan.Queue.Position(row)[0]} {state}: {why}")
+
+    def _Queue_Over(self, why):
+        self._Queueing = False
+        log.info("Scan queue over: %s", why)
+        self._Elog.Append(f"\n\nQUEUE OVER: {why}", self._Experiment())
+        self.statusBar().showMessage(f"Scan queue over: {why}", 30000)
+        self._Show_State()
+
     # ── Calibration ──────────────────────────────────────────────
 
     def _Calibrate_Only(self):
@@ -620,6 +776,7 @@ class Main_Window(QMainWindow):
 
     def _Calibration_Failed(self, message):
         self.Calibration.Show_Failure(message)
+        self._Queue_Scan_Ended('failed', f"its calibration failed: {message}")
         pending, self._Pending = self._Pending, None
         if pending is not None:
             self._Elog.Append(pending['text'] + f"Calibration failed: {message}\n"
@@ -772,6 +929,7 @@ class Main_Window(QMainWindow):
         """Scans settle by ``model`` (None: SETTLE for every step) from the next one."""
         self._Settle_Model = model
         settings.Update(settle_model=model)
+        self.Scan.Queue.Set_Settle_Model(model)
         self.Hardware.Settle.Use_Button.setEnabled(False)
         self.Hardware.Settle.Show_Model(model)
         log.info("Scan settle model: %s", model)
@@ -824,10 +982,12 @@ class Main_Window(QMainWindow):
         self.Performance.Begin(path)
         if self._Analysis is not None:
             return                      # started as the one running finishes
-        laser = self._Laser
+        laser, settle_model, data_dir = self._Laser, self._Settle_Model, self._Data_Dir
 
         def job(progress, stopped):
-            return scan_performance.Analyse(*(run or run_file.Read(path)), laser)
+            header, raw, monitor = run or run_file.Read(path)
+            return scan_performance.Analyse(header, raw, monitor, laser, settle_model,
+                                            run_file.Earlier_Calibrations(path, data_dir))
 
         self._Analysing = path
         self._Analysis = Job_Worker(job, self)
@@ -852,8 +1012,7 @@ class Main_Window(QMainWindow):
             QMessageBox.warning(self, 'Not exported', f"The performance report could not be "
                                                      f"written: {e}")
             return
-        self.statusBar().showMessage(f"Performance report and DENIS scan filter: {written}",
-                                     10000)
+        self.statusBar().showMessage(f"Performance report: {written}", 10000)
 
     # ── ELOG ─────────────────────────────────────────────────────
 
@@ -902,6 +1061,7 @@ class Main_Window(QMainWindow):
         state = self._State
         for flag in (state.Scanning, state.Triggering, state.Outputting, state.Calibrating):
             flag.clear()
+        self._Hold_Queue("the acquisition process stopped")
         if self._Run is not None:
             log.error("The acquisition process stopped during run %s", self._Run)
             self._End_Run()
@@ -957,6 +1117,7 @@ class Main_Window(QMainWindow):
         except OSError as e:
             log.exception("Writing the run file failed")
             self._Run = None
+            self._Hold_Queue(f"its run file could not be written: {e}")
             self._Send('Stop_Now')
             QMessageBox.critical(self, 'Scan stopped', f"The run file could not be written, "
                                                        f"so the scan was stopped: {e}")
@@ -982,6 +1143,13 @@ class Main_Window(QMainWindow):
         locked = scanning or self._Pending is not None
         scan.Lock_View(locked)
         self.Time.Lock_View(locked)
+        queue = scan.Queue
+        queue.Lock(self._Queueing or self._Queue_Row is not None or calibrating or scanning
+                   or triggering)
+        queue.Start_Button.setText('Stop queue after this scan' if self._Queueing
+                                   else 'Start queue')
+        queue.Start_Button.setEnabled(self._Queueing or not (calibrating or scanning
+                                                             or triggering))
         scan.Start_Button.setText('Stop after scan' if scanning else 'Start scan')
         scan.Stop_Button.setEnabled(scanning)
         busy = calibrating or scanning

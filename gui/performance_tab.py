@@ -1,17 +1,23 @@
-"""The Scan Performance tab: how the rack behaved during a run, and what to cut from it.
+"""The Scan Performance tab: how the rack behaved during a run, and how that shaped its spectrum.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-10-30
+Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Down the left, the run (the latest by default, or any in the data folder
-or chosen from disk), the verdict, every check grouped by the part of
-the pipeline it judges, and the cuts the analysis recommends, which
-export as DENIS's scan filter. On the right, one plot for each
-systematic: the voltage against its calibration, the peak's position
-scan by scan, the beam rate, how far reads trailed their bunches, the
-cooler and the laser. A check's sentence shows under the list when it
-is selected, and in its tooltip.
+or chosen from disk), the verdict with the line's width and what moved
+it, every check grouped by the part of the pipeline it judges, and what
+the analysis flagged for review. Nothing is cut: the operator decides
+in DENIS, and the report exports beside the run. On the right, one plot
+for each systematic: the HV against its calibration, the beam over time
+against what its setpoints give, the beam rate scan by scan, how far
+reads trailed the first of their step, the cooler and the laser. A
+check's sentence shows under the list when it is selected, and in its
+tooltip.
+
+It shows the run every other tab shows: Show and analyse puts the chosen
+run on all of them, and a scan or the triggers clear it here as they
+clear the plots, until the run they make is saved and analysed.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.scan_performance,
 gui.plots, gui.shared_widgets, gui.theme.
@@ -30,7 +36,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHB
 
 from cls_acquisition import scan_performance as sp
 from gui import plots, theme
-from gui.shared_widgets import Verdict_Html
+from gui.shared_widgets import Scroll_Column, Verdict_Html
 
 PANEL_WIDTH = 400                   # px: the checks' names and values side by side
 
@@ -62,7 +68,9 @@ class Performance_Tab(QWidget):
         self.Browse_Button = QToolButton(icon=theme.Icon('folder-open'))
         self.Browse_Button.setToolTip("Analyse a run file from anywhere.")
         self.Follow_Check = QCheckBox('Analyse each run as it ends', checked=True)
-        self.Analyse_Button = QPushButton('Analyse')
+        self.Analyse_Button = QPushButton('Show and analyse')
+        self.Analyse_Button.setToolTip("Show the chosen run on every tab, as it was taken, and "
+                                       "analyse it here.")
         self.Info_Label = QLabel('No run analysed yet in this session.')
         self.Info_Label.setWordWrap(True)
         grid.addWidget(self.Run_Combo, 0, 0)
@@ -93,40 +101,76 @@ class Performance_Tab(QWidget):
         column.addWidget(self.Detail_Label)
         self.Checks_Tree.currentItemChanged.connect(self._Show_Detail)
 
-        self.Cuts_Group = QGroupBox('Recommended cuts')
-        column = QVBoxLayout(self.Cuts_Group)
-        self.Cuts_Label = QLabel()
-        self.Cuts_Label.setWordWrap(True)
-        self.Export_Button = QPushButton(theme.Icon('file-down'), 'Export for DENIS',
-                                         enabled=False)
+        self.Flagged_Group = QGroupBox('Flagged for review')
+        column = QVBoxLayout(self.Flagged_Group)
+        self.Flagged_Label = QLabel()
+        self.Flagged_Label.setWordWrap(True)
+        self.Export_Button = QPushButton(theme.Icon('file-down'), 'Export report', enabled=False)
         self.Export_Button.setToolTip("Write run_NNNN_performance.yaml beside the run: the "
-                                      "report, and the cuts as DENIS's scan_filters.")
-        column.addWidget(self.Cuts_Label)
+                                      "verdict, every check and what was flagged. Nothing is "
+                                      "cut; that is decided in DENIS.")
+        column.addWidget(self.Flagged_Label)
         column.addWidget(self.Export_Button)
 
         left = QVBoxLayout()
         for group, stretch in ((self.Dataset_Group, 0), (self.Verdict_Group, 0),
-                               (self.Checks_Group, 1), (self.Cuts_Group, 0)):
+                               (self.Checks_Group, 1), (self.Flagged_Group, 0)):
             left.addWidget(group, stretch)
-        side = QWidget()
-        side.setLayout(left)
+        side = Scroll_Column(left)
         side.setFixedWidth(PANEL_WIDTH)
-        left.setContentsMargins(0, 0, 0, 0)
 
         plot_group = QGroupBox('Systematics')
         plot_grid = QGridLayout(plot_group)
-        time_axis = ('Time in run', 's')
-        self.Readback_Plot = plots.Plot('Voltage against its calibration', time_axis,
-                                        ('Readback - calibration', 'V'))
-        self.Centroid_Plot = plots.Plot('Peak position by scan', ('Scan', None),
-                                        ('Centroid', 'V'))
-        self.Rate_Plot = plots.Plot('Beam rate by scan', ('Scan', None),
-                                    ('Hits per bunch', None))
-        self.Latency_Plot = plots.Plot('Reads behind their bunches', time_axis,
-                                       ('Latency', 's'))
-        self.Cooler_Plot = plots.Plot('Cooler', time_axis, ('Cooler - mean', 'V'))
-        self.Laser_Plot = plots.Plot('Laser', time_axis, ('Wavemeter - mean (MHz)', None))
-        self.Plots = (self.Readback_Plot, self.Centroid_Plot, self.Rate_Plot, self.Latency_Plot,
+        elapsed = ('Elapsed time', 's')
+        from_first = " Elapsed time runs from the run's first recorded hit."
+        self.Readback_Plot = plots.Plot('HV readback against its calibration', elapsed,
+                                        ('Readback − calibration', 'V'), (
+            "How far the platform voltage was, through the run, from where the start-of-run "
+            "calibration places it. Zero means no change since the calibration; a trend is "
+            "drift.",
+            "For each monitor reading taken once its setpoint had settled (sampled every "
+            "0.1 s), the line meter's readback less the calibration's own reading at that "
+            "setpoint. DENIS applies the calibration as it was taken, so a non-zero value "
+            "shifts the line by the same voltage." + from_first))
+        self.Beam_Plot = plots.Plot('Beam intensity over time', elapsed,
+                                    ('Relative intensity', None), (
+            "The beam intensity relative to the run's usual level, period by period: 1 is the "
+            "usual level and the lower dashed line half of it. Periods marked in red fell below "
+            "half beyond what counting statistics explain, and are flagged for review.",
+            "The hits in each period divided by the hits expected there, the run's average "
+            "count rate at each setpoint the period visited, summed, so the spectrum's own "
+            "structure cancels. A period lasts long enough to expect about 20 hits, and at "
+            "least 10 s." + from_first))
+        self.Rate_Plot = plots.Plot('Count rate per scan', ('Scan number', None),
+                                    ('Hits per bunch', None), (
+            "The count rate of each complete scan. Every scan visits every setpoint equally, so "
+            "the scans compare directly; the dashed line is their median.",
+            "The hits in the scan divided by the bunches it took (setpoints × bunches per "
+            "step). Not shown when the run's scan numbers are unreliable."))
+        self.Latency_Plot = plots.Plot('Read delay within each step', elapsed,
+                                       ('Read delay', 's'), (
+            "How far each bunch's read trailed the earliest read in its voltage step. A flat "
+            "band near zero means the acquisition kept pace with the triggers.",
+            "The read time less the bunch number × the trigger period, less the smallest such "
+            "value in the step. The run file's timestamps are rounded to 10 ms, which sets the "
+            "resolution." + from_first))
+        self.Cooler_Plot = plots.Plot('Cooler platform voltage', elapsed,
+                                      ('Deviation from mean', 'V'), (
+            "The cooler platform voltage during the run, relative to its mean. DENIS corrects "
+            "every hit by its own cooler reading, so this does not shift the line; it shows "
+            "the supply's stability.",
+            "From the run's monitor record, sampled every 0.1 s; for a run without one, the "
+            "reading stored with each hit." + from_first))
+        self.Laser_Plot = plots.Plot('Laser frequency deviation', elapsed,
+                                     ('Wavemeter − setpoint (MHz)', None), (
+            "The wavemeter reading during the run relative to the laser setpoint stored in the "
+            "run header, which DENIS uses for the whole run. Through the Doppler shift, a "
+            "deviation moves the line.",
+            "The wavemeter's wavenumber less the header's setpoint, converted to MHz of the "
+            "measured light and sampled every 0.1 s. The Laser check converts it to scan volts "
+            "and to MHz at the ions, with the harmonic and geometry recorded with the run."
+            + from_first))
+        self.Plots = (self.Readback_Plot, self.Beam_Plot, self.Rate_Plot, self.Latency_Plot,
                       self.Cooler_Plot, self.Laser_Plot)
         for i, plot in enumerate(self.Plots):
             plot_grid.addWidget(plot, i // 2, i % 2)
@@ -137,8 +181,11 @@ class Performance_Tab(QWidget):
         self.Result = None
 
     def Set_Runs(self, paths, keep=None):
-        """The runs to choose from, newest first; ``keep`` stays selected."""
+        """The runs to choose from, newest first; ``keep`` stays selected, at
+        the top if it was opened from outside the data folder."""
         current = keep or self.Run_Combo.currentData()
+        if current and current not in paths:
+            paths = [current, *paths]
         self.Run_Combo.blockSignals(True)
         self.Run_Combo.clear()
         for path in paths:
@@ -149,6 +196,23 @@ class Performance_Tab(QWidget):
 
     def Selected(self):
         return self.Run_Combo.currentData()
+
+    def Inputs(self):
+        return [('follow', self.Follow_Check)]
+
+    def Clear(self, message):
+        """Nothing shown, and ``message`` saying why: a scan or the triggers
+        have the tabs."""
+        self.Result = None
+        self.Export_Button.setEnabled(False)
+        self.Verdict_Label.setText('—')
+        self.Summary_Label.setText('')
+        self.Checks_Tree.clear()
+        self.Detail_Label.setText('Select a check to read what it found.')
+        self.Flagged_Label.setText('')
+        for plot in self.Plots:
+            plot.clear()
+        self.Info_Label.setText(html.escape(message))
 
     def Begin(self, path):
         self.Info_Label.setText(f"Analysing {html.escape(os.path.basename(path))}...")
@@ -165,12 +229,11 @@ class Performance_Tab(QWidget):
         self.Info_Label.setText(html.escape(path))
         colour = theme.VERDICT_COLOURS[result['Verdict']]
         self.Verdict_Label.setText(f"<span style='color:{colour}'>{result['Verdict']}</span>")
-        self.Summary_Label.setText(html.escape(result['Summary']))
+        self.Summary_Label.setText(f"{html.escape(result['Summary'])}<br><br>"
+                                   f"{html.escape(result['Budget'])}")
         self._Fill_Checks(result['Sections'])
-        cuts = [f"scan {scan}: {'; '.join(reasons)}" for scan, reasons in result['Cuts'].items()]
-        if result['Leading_Bunches']:
-            cuts.append(f"the first {result['Leading_Bunches']} bunches of every step")
-        self.Cuts_Label.setText('<br>'.join(map(html.escape, cuts)) or 'None: keep every scan.')
+        self.Flagged_Label.setText('<br><br>'.join(map(html.escape, result['Flagged']))
+                                   or 'Nothing flagged for review.')
         self._Draw(result['Series'])
 
     def _Fill_Checks(self, sections):
@@ -195,21 +258,28 @@ class Performance_Tab(QWidget):
         pen, dots = plots.Pen(), plots.Dots()
         if 'Readback' in series:
             self.Readback_Plot.plot(*series['Readback'], **dots)
-        if 'Centroids' in series:
-            scans, centroids, errors, trend = series['Centroids']
-            self.Centroid_Plot.addItem(pg.ErrorBarItem(x=scans, y=centroids, height=2 * errors,
-                                                       pen=theme.PLOT_FOREGROUND))
-            self.Centroid_Plot.plot(scans, centroids, **dots)
-            self.Centroid_Plot.plot(scans, trend, pen=plots.Pen(theme.TRACE_ALT))
+        if 'Beam' in series:
+            # the beam against what each period's setpoints give: 1 is usual, and a
+            # period below the dashed half, beyond counting, is marked a loss
+            t, level, lost = series['Beam']
+            dashed = pg.mkPen(theme.PLOT_FOREGROUND, width=1, style=Qt.PenStyle.DashLine)
+            for at in (1.0, sp.TOLERANCES['BeamLossFraction']):
+                self.Beam_Plot.addItem(pg.InfiniteLine(at, angle=0, pen=dashed))
+            self.Beam_Plot.plot(t, level, pen=pen, connect='finite')
+            if lost.any():
+                self.Beam_Plot.plot(t[lost], level[lost],
+                                    **plots.Dots(theme.VERDICT_COLOURS[sp.FAIL]))
         if 'Rates' in series:
-            scans, rate, floor = series['Rates']
+            scans, rate, median = series['Rates']
             self.Rate_Plot.addItem(pg.BarGraphItem(x=scans, height=rate, width=0.8,
                                                    brush=theme.TRACE))
-            self.Rate_Plot.addItem(pg.InfiniteLine(floor, angle=0, pen=plots.Pen(
-                theme.VERDICT_COLOURS[sp.FAIL])))
+            self.Rate_Plot.addItem(pg.InfiniteLine(median, angle=0, pen=pg.mkPen(
+                theme.PLOT_FOREGROUND, width=1, style=Qt.PenStyle.DashLine)))
         if 'Latency' in series:
             self.Latency_Plot.plot(*series['Latency'], **dots)
         if 'Cooler' in series:
-            self.Cooler_Plot.plot(*series['Cooler'], pen=pen)
+            self.Cooler_Plot.addItem(plots.Dense_Curve(*series['Cooler'], pen=pen,
+                                                       connect='finite'))
         if 'Laser' in series:
-            self.Laser_Plot.plot(*series['Laser'], pen=pen)
+            self.Laser_Plot.addItem(plots.Dense_Curve(*series['Laser'], pen=pen,
+                                                      connect='finite'))

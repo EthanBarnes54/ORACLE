@@ -1,6 +1,6 @@
 """The Time graphs tab: counts against time, to watch the beam.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -25,7 +25,15 @@ class Time_Tab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         grid = QGridLayout(self)
-        self.Counts_Plot = plots.Plot('Time series', ('Time (s)', None), ('Counts per bin', None))
+        self.Counts_Plot = plots.Plot('Counts per time bin', ('Acquisition time (s)', None),
+                                      ('Counts per bin', None), (
+            "Photon counts in successive time bins, to follow the beam intensity during a scan "
+            "or while the triggers run; a fall to the background level indicates a loss of "
+            "beam.",
+            "Hits on the channels selected below whose time of flight lies inside the gate are "
+            "counted in bins of the chosen width. Time is the bunch count divided by the trigger "
+            "rate, so every bin holds the same number of bunches and the pauses while voltage "
+            "steps settle are left out."))
         self.Curve = plots.Dense_Curve(pen=plots.Pen())
         self.Counts_Plot.addItem(self.Curve)
         grid.addWidget(self.Counts_Plot, 0, 0, 1, 8)

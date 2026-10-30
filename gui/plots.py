@@ -1,6 +1,6 @@
 """The plots: their dark style, how they are handled, and the TOF plot that carries the gate.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -17,6 +17,11 @@ its edges moves it, and a double-click removes it; on the Scan tab's TOF
 plot the spectrum, the TOF-HFS map and the time graph count only hits
 inside it.
 
+Every plot carries a description: hovering over its title shows what it
+shows and how it is calculated, in the words of the collaboration's
+analysis, so a figure sent to the ELOG or shown at a meeting explains
+itself.
+
 A curve of far more points than the plot has pixels (a 50,000-bin TOF, a
 long cooler record) is a Dense_Curve: the same pixels, painted from only
 what is in view, and a histogram from the few vertices that fill them, so
@@ -24,6 +29,8 @@ it redraws in milliseconds instead of tens of them.
 
 Depends on: numpy, pyqtgraph, PySide6; gui.theme.
 """
+
+import html
 
 import numpy as np
 import pyqtgraph as pg
@@ -40,16 +47,26 @@ BUTTON_MARGIN = 6
 # half device pixel begins by this much, in half pixels
 HALF_PIXEL_OFFSET = 1 / 64
 GESTURES = ("Drag to pan, right-drag to stretch or squash, wheel to zoom (over an axis: that "
-            "axis alone), Shift-drag to zoom to a box.")
+            "axis alone), Shift-drag to zoom to a box. Hover over a plot's title for what it "
+            "shows and how it is calculated.")
 
 
-def Plot(title, x_axis, y_axis):
+def Plot(title, x_axis, y_axis, about):
     """A plot in DENIS's dark-plot style. Each axis is ``(label, units)``; an
     axis with units gets pyqtgraph's SI prefix (mV, kV), one without is
-    left unscaled."""
+    left unscaled. ``about`` is ``(what it shows, how it is calculated)``,
+    shown when the cursor rests on the title."""
     plot = Plot_Widget()
-    _Style(plot, title, x_axis, y_axis)
+    _Style(plot, title, x_axis, y_axis, about)
     return plot
+
+
+def About_Html(title, about):
+    """The title's description: the title, what the plot shows, and how it is
+    calculated, as rich text so the tooltip wraps."""
+    shows, method = about
+    return (f"<p><b>{html.escape(title)}</b></p><p>{html.escape(shows)}</p>"
+            f"<p><i>How it is calculated.</i> {html.escape(method)}</p>")
 
 
 class _View(pg.ViewBox):
@@ -100,8 +117,12 @@ class Plot_Widget(pg.PlotWidget):
         button.move(self.width() - button.sizeHint().width() - BUTTON_MARGIN, BUTTON_MARGIN)
 
 
-def _Style(plot, title, x_axis, y_axis):
+def _Style(plot, title, x_axis, y_axis, about):
     plot.setTitle(title, color=theme.PLOT_FOREGROUND)
+    # on the title alone: over the data, the cursor is for panning and zooming
+    label = plot.getPlotItem().titleLabel
+    label.setToolTip(About_Html(title, about))
+    label.setCursor(Qt.CursorShape.WhatsThisCursor)
     for side, (label, units) in (('bottom', x_axis), ('left', y_axis)):
         axis = plot.getAxis(side)
         axis.setPen(theme.PLOT_FOREGROUND)
@@ -272,19 +293,31 @@ class _Gate_View(_View):
         self.On_Change()
 
 
+TOF_TITLE = 'Time-of-flight spectrum'
+TOF_ABOUT = (
+    "The distribution of photon arrival times after the time-tagger trigger, accumulated over "
+    "the run for the selected detector channels. Ion bunches appear as a peak above the flat "
+    "background of detector dark counts and scattered laser light.",
+    "Every hit on the selected channels is histogrammed by its time-tagger timestamp, in bins "
+    "of the width set below the plot (widened if the window would need more than 50 000 bins). "
+    "The shaded gate selects the hits counted by the spectrum, the time-of-flight map and the "
+    "time graph: Ctrl-drag (Cmd-drag on macOS) to set it, drag its edges to move it, and "
+    "double-click to remove it.")
+
+
 class Gate_Plot(Plot_Widget):
     """A histogram and its gate: the TOF spectrum, unless told otherwise.
     ``Gate_Changed`` fires once a gate is set, moved or removed."""
 
     Gate_Changed = Signal()
 
-    def __init__(self, parent=None, title='TOF spectrum', x_axis=('Time of flight (µs)', None),
-                 what='TOF'):
+    def __init__(self, parent=None, title=TOF_TITLE, x_axis=('Time of flight (µs)', None),
+                 what='TOF', about=TOF_ABOUT):
         view = _Gate_View()
         super().__init__(parent, view)
         self._View = view
         view.On_Change = self.Gate_Changed.emit
-        _Style(self, title, x_axis, ('Counts', None))
+        _Style(self, title, x_axis, ('Counts per bin', None), about)
         self.setToolTip(f"Ctrl-drag (Cmd-drag on macOS) to set the {what} gate, drag its "
                         f"edges to move it, double-click it to remove it.")
         self.Curve = Dense_Curve(pen=Pen())

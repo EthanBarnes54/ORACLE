@@ -323,6 +323,40 @@ def test_Autoscale_All_Puts_Every_Plot_Back_To_Following_Its_Data(qapp, window):
     assert all(all(p.getViewBox().autoRangeEnabled()) for p in every)
 
 
+def test_Every_Plot_Says_What_It_Shows_And_How_It_Is_Calculated(qapp, window):
+    """Hovering over any plot's title describes it; every axis is labelled,
+    and a difference is written with a minus sign, not a hyphen."""
+    from gui import plots
+    every = window.findChildren(plots.Plot_Widget)
+    assert len(every) >= 19
+    for plot in every:
+        title = plot.getPlotItem().titleLabel
+        about = title.toolTip()
+        assert title.text and f"<b>{title.text}</b>" in about, title.text
+        assert 'How it is calculated.' in about, title.text
+        for side in ('bottom', 'left'):
+            label = plot.getAxis(side).labelText
+            assert label and ' - ' not in label, (title.text, side, label)
+
+
+def test_The_Whole_Window_Fits_A_Short_Screen_And_Scrolls_On_A_Shorter_One(qapp, window):
+    """Each tab's controls scroll, so the window fits a 1366 × 768 screen
+    less Windows' taskbar and title bar (it once needed 1130 px, and lost
+    its bottom edge even on a MacBook); it opens inside the screen; on a
+    shorter screen it scrolls, nothing squeezed, and with room it does not."""
+    page = window.centralWidget()
+    content = page.widget()
+    need = (content.minimumSizeHint().height() + window.menuBar().sizeHint().height()
+            + window.statusBar().sizeHint().height())
+    assert need <= 768 - 40 - 31
+    assert window.screen().availableGeometry().contains(window.geometry())
+    window.show()
+    for height, scrolls in ((400, True), (1000, False)):
+        window.resize(1100, height)
+        assert Pump(qapp, lambda: (page.verticalScrollBar().maximum() > 0) == scrolls)
+        assert content.height() >= content.minimumSizeHint().height()
+
+
 def test_A_Rack_Warning_Stays_In_The_Status_Bar(qapp, monkeypatch, tmp_path):
     warning = "The time tagger's wrapper times input 3 and 4 on input 2's falling edge."
     w = Open_Window(monkeypatch, tmp_path, warnings=(warning,))
@@ -488,7 +522,7 @@ def test_The_Line_Meter_Is_Read_Precisely_Against_The_Platforms_Setpoint(qapp, w
 
 # ── After the run ───────────────────────────────────────────────
 
-def test_A_Finished_Run_Is_Analysed_And_Exported_For_Denis(qapp, window):
+def test_A_Finished_Run_Is_Analysed_And_Its_Report_Exported(qapp, window):
     _Scan(qapp, window)
     _Finished(qapp, window)
     assert Pump(qapp, lambda: window.Performance.Result is not None)
@@ -497,7 +531,9 @@ def test_A_Finished_Run_Is_Analysed_And_Exported_For_Denis(qapp, window):
     exported = path[:-len('.asdf')] + '_performance.yaml'
     with open(exported, encoding='utf-8') as fh:
         report = yaml.safe_load(fh)
-    assert report['run'] == 'run_0001.asdf' and 'scan_filters' in report
+    # the report beside the run, and nothing in it cuts data
+    assert report['run'] == 'run_0001.asdf' and 'checks' in report and 'flagged' in report
+    assert 'scan_filters' not in report
     assert exported in window.statusBar().currentMessage()
 
 

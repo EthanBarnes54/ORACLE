@@ -3,6 +3,7 @@
 import itertools
 import time
 
+import numpy as np
 import pytest
 
 from cls_acquisition.calibration import Calibration_Error
@@ -116,3 +117,81 @@ def test_Cooler_Meter_Polls():
     time.sleep(0.3)
     assert inst.Reads > 0
     meter.Close()
+
+
+def test_An_Overloaded_Reading_Is_Never_Taken_For_A_Voltage():
+    # 9.9E37 is the meter's mark for a reading beyond its range
+    meter, inst = _Meter(simulated.Keysight(lambda: 50.0))
+    time.sleep(0.3)
+    assert np.isnan(meter.Voltage)
+    meter.Step_Config()
+    with pytest.raises(Scpi_Error, match="marked 1 of 1 readings .* over range or invalid"):
+        meter.Read_Settled(0.0)
+    meter.Release()
+    meter.Close()
+
+
+def test_Only_A_Truevolt_Meter_Is_Taken_And_Its_Memory_Is_Asked():
+
+    class Other(simulated.Keysight):
+
+        def query(self, command):
+            if command == '*IDN?':
+                return 'Agilent Technologies,34401A,0,1\n'
+            return super().query(command)
+
+    with pytest.raises(Scpi_Error, match="34401A.*not a Keysight 3446x or 3447x"):
+        _Meter(Other(lambda: 0.0))
+
+    class With_Memory(simulated.Keysight):
+
+        def query(self, command):
+            return 'MEM,DIG\n' if command == '*OPT?' else super().query(command)
+
+    meter, _ = _Meter(With_Memory(lambda: 0.0))
+    assert meter.Memory == keysight.MEM_MEMORY
+    meter.Close()
+
+
+def test_A_Timed_Capture_Uses_The_Interval_The_Meter_Set():
+    meter, inst = _Meter(simulated.Keysight(lambda: 1e-3))
+    # at a 1 ms aperture the meter cannot sample every 0.5 ms
+    interval = meter.Capture(10, interval_s=0.0005, aperture_s=0.001)
+    assert interval == pytest.approx(0.001 + 2e-5) == meter.Capture_Interval_S
+    assert inst._Settings['VOLT:ZERO:AUTO'] == 'OFF'
+    meter.Release()
+    meter.Close()
+
+
+def test_A_Streamed_Capture_Is_Read_Out_While_It_Runs():
+    meter, _ = _Meter(simulated.Keysight(lambda: 3e-3))
+    meter.Capture(60, interval_s=0.002, aperture_s=0.0002, stream=True)
+    meter.Autocal()
+    meter.Arm()
+    values, deadline = [], time.monotonic() + 5.0
+    while len(values) < 60 and time.monotonic() < deadline:
+        values.extend(meter.Read_Available(25))
+        time.sleep(0.02)
+    assert len(values) == 60 and np.allclose(values, 3e-3)
+    assert len(meter.Read_Available(25)) == 0       # erased as it was read
+    meter.Release()
+    meter.Close()
+
+
+def test_A_Meter_Is_Left_Reset_As_It_Closes():
+    """As the bench tool leaves it, so the next program finds it at power-on."""
+
+    class Recording(simulated.Keysight):
+        def __init__(self):
+            super().__init__(lambda: 1e-3)
+            self.Written = []
+
+        def write(self, command):
+            self.Written.append(command)
+            super().write(command)
+
+    meter, inst = _Meter(Recording())
+    meter.Capture(10, 0.001, aperture_s=2e-4)
+    inst.Written.clear()
+    meter.Close()
+    assert inst.Written == ['ABOR', '*RST', '*CLS']

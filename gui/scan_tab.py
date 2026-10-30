@@ -1,6 +1,6 @@
 """The Scan tab: scan and buncher parameters, run control, the ELOG panel and the live plots.
 
-Date:    2026-10-29
+Date:    2026-10-30
 Version: 0.2.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -16,6 +16,9 @@ settable in DC mode; only the bunched timing is greyed out there. A TOF
 bin finer than MAX_TOF_BINS across the gate is widened to it, as the old
 DAQ's was, so a small bin cannot ask the window for gigabytes.
 
+The parameters box has a second page, the scan queue (gui.scan_queue):
+scans laid out ahead, each set up here as it starts.
+
 A run is drawn with its own tagger window and trigger rate, which a run
 file's record keeps, not with the boxes as they stand. Its view (the TOF
 bin, the gate, the channels, the map) is recorded as it starts and held
@@ -26,7 +29,7 @@ of them.
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
 cls_acquisition.hardware.timetagger, cls_acquisition.run_file,
 cls_acquisition.scan_plan, cls_acquisition.triggers, gui.plots,
-gui.shared_widgets.
+gui.scan_queue, gui.shared_widgets, gui.theme.
 """
 
 import numpy as np
@@ -41,8 +44,9 @@ from cls_acquisition.acquisition import SCAN_TYPES
 from cls_acquisition.hardware.timetagger import MAX_WINDOW_US, Check_Window
 from cls_acquisition.run_file import ORACLE_KEY
 from cls_acquisition.scan_plan import Scan_Plan
-from gui import plots
-from gui.shared_widgets import Spin
+from gui import plots, theme
+from gui.scan_queue import ORDERS, Scan_Queue
+from gui.shared_widgets import Scroll_Column, Spin
 
 RANGES = 7
 CHANNELS = (1, 2, 3, 4)
@@ -71,22 +75,33 @@ class Scan_Tab(QWidget):
     def __init__(self, limit_v, parent=None):
         super().__init__(parent)
         self._Limit_V = limit_v
-        layout = QGridLayout(self)
-        layout.addWidget(self._Build_Parameters(), 0, 0)
-        layout.addWidget(self._Build_Buncher(), 1, 0)
-        layout.addWidget(self._Build_Control(), 2, 0)
-        layout.addLayout(self._Build_Elog(), 3, 0)
-        layout.addWidget(self._Build_Plots(), 0, 1, 4, 1)
-        layout.setColumnStretch(1, 1)
+        column = QVBoxLayout()
+        column.addWidget(self._Build_Parameters())
+        column.addWidget(self._Build_Buncher())
+        column.addWidget(self._Build_Control())
+        column.addLayout(self._Build_Elog())
+        layout = QHBoxLayout(self)
+        layout.addWidget(Scroll_Column(column))
+        layout.addWidget(self._Build_Plots(), 1)
         self._Drawn = None
         self.Bunched_Radio.toggled.connect(self._Mode_Changed)
+        self.Dwell_Box.valueChanged.connect(self._Timing_Changed)
+        self.Queue.Add_Button.clicked.connect(lambda: self.Queue.Add_Entry(self.Entry_Now()))
+        self.Queue.Show_Requested.connect(lambda entry: self.Show_Entry(entry, show=True))
         self._Mode_Changed()
 
     # ── Layout ───────────────────────────────────────────────────
 
     def _Build_Parameters(self):
-        self.Params_Group = QGroupBox('Scan parameters')
+        """The scan parameters and the scan queue, as pages of one box titled
+        with both, as DENIS's optimiser tools are."""
+        self.Params_Group = QWidget()
+        self.Queue = Scan_Queue(self._Limit_V)
+        self.Parameter_Pages = theme.Title_Tabs()
+        self.Parameter_Pages.addTab(self.Params_Group, 'Scan parameters')
+        self.Parameter_Pages.addTab(self.Queue, 'Scan queue')
         grid = QGridLayout(self.Params_Group)
+        grid.setContentsMargins(0, 0, 0, 0)
         self.Type_Combo = QComboBox()
         self.Type_Combo.addItems(SCAN_TYPES)
         self.Per_Step_Label = QLabel()
@@ -111,7 +126,7 @@ class Scan_Tab(QWidget):
             self.Range_Checks.append(check)
             self.From_Boxes.append(low)
             self.To_Boxes.append(high)
-        return self.Params_Group
+        return self.Parameter_Pages
 
     def _Build_Buncher(self):
         self.Buncher_Group = QGroupBox('Buncher controls')
@@ -175,18 +190,33 @@ class Scan_Tab(QWidget):
     def _Build_Plots(self):
         group = QGroupBox('Plots')
         grid = QGridLayout(group)
-        self.Spectrum_Plot = plots.Plot('HFS spectrum', ('Scanning voltage', 'V'),
-                                        ('Counts', None))
+        self.Spectrum_Plot = plots.Plot('Hyperfine-structure spectrum', ('Scanning voltage', 'V'),
+                                        ('Counts per setpoint', None), (
+            "Photon counts against the scanning voltage, accumulated over every scan of the "
+            "run being taken, or of the run opened for display.",
+            "Hits on the selected detector channels whose time of flight lies inside the gate "
+            "(every hit, if no gate is set) are histogrammed in one bin per voltage setpoint. "
+            "The voltage is the setpoint commanded on the DAC, before the calibration and the "
+            "per-hit cooler correction that DENIS applies; counts are not normalised to the "
+            "number of scans."))
         self.Spectrum_Curve = plots.Dense_Curve(pen=plots.Pen())
         self.Spectrum_Plot.addItem(self.Spectrum_Curve)
         self.Tof_Plot = plots.Gate_Plot()
-        self.Map_Plot = plots.Plot('TOF-HFS', ('Scanning voltage', 'V'),
-                                   ('Time of flight (µs)', None))
+        self.Map_Plot = plots.Plot('Time of flight against scanning voltage',
+                                   ('Scanning voltage', 'V'), ('Time of flight (µs)', None), (
+            "A two-dimensional histogram of hits by scanning voltage and time of flight; the "
+            "colour gives the counts in each cell, on an automatically scaled inferno scale. "
+            "Resonant fluorescence appears as a localised spot at the line's voltage and the "
+            "ion bunch's arrival time.",
+            "Hits on the selected channels inside the time-of-flight gate, binned by setpoint "
+            "and by time of flight; to bound the memory it takes, cells are merged to at most "
+            "2000 along each axis. It is computed only while the map is switched on below the "
+            "plot."))
         self.Map_Image = pg.ImageItem(colorMap=pg.colormap.get('inferno'))
         self.Map_Plot.addItem(self.Map_Image)
         self.Bin_Box = Spin(1.0, 0.0005, 10000.0, 4, ' µs')
         self.Bin_Box.setKeyboardTracking(False)
-        self.Map_Check = QCheckBox('TOF vs V plot')
+        self.Map_Check = QCheckBox('Show time-of-flight map')
         self.Channel_Checks = [QCheckBox(f'Channel {c}', checked=True) for c in CHANNELS]
         # each plot's own control sits in a strip under it, on one row, so the two
         # plots stay the same size; the channels filter every plot and run under both
@@ -211,6 +241,37 @@ class Scan_Tab(QWidget):
         self.Per_Step_Box.setValue(1.0 if bunched else 0.1)
         for box in self._Bunched_Boxes:
             box.setEnabled(bunched)
+        self._Timing_Changed()
+
+    def _Timing_Changed(self):
+        """The queue counts its bunches and its time in the mode and at the
+        trigger rate set here."""
+        self.Queue.Set_Timing(self.Bunched(), self.Trigger_Hz())
+
+    def Entry_Now(self):
+        """The scan the parameters page holds, as a queued scan's entry: one
+        scan of it, or of its order for a sawtooth or triangle."""
+        ticked = [i for i, check in enumerate(self.Range_Checks) if check.isChecked()]
+        kind = self.Type_Combo.currentText()
+        return {'ranges': [[self.From_Boxes[i].value(), self.To_Boxes[i].value()]
+                           for i in ticked],
+                'step': self.Step_Box.value(), 'per_step': self.Per_Step_Box.value(),
+                'order': kind if kind in ORDERS else ORDERS[0], 'scans': 1}
+
+    def Show_Entry(self, entry, show=False):
+        """A queued scan's ``entry`` on the parameters page, as a scan is set
+        up to start; with ``show``, the page brought forward."""
+        for i, (check, low, high) in enumerate(zip(self.Range_Checks, self.From_Boxes,
+                                                   self.To_Boxes)):
+            check.setChecked(i < len(entry['ranges']))
+            if i < len(entry['ranges']):
+                low.setValue(entry['ranges'][i][0])
+                high.setValue(entry['ranges'][i][1])
+        self.Step_Box.setValue(entry['step'])
+        self.Per_Step_Box.setValue(entry['per_step'])
+        self.Type_Combo.setCurrentText('Single scan' if entry['scans'] == 1 else entry['order'])
+        if show:
+            self.Parameter_Pages.setCurrentWidget(self.Params_Group)
 
     def Plan(self):
         """The Scan_Plan of the ticked ranges; raises Scan_Plan_Error."""
@@ -336,7 +397,8 @@ class Scan_Tab(QWidget):
                 ('gate_length', self.Gate_Length_Box), ('tof_bin', self.Bin_Box),
                 ('tof_gate', self.Tof_Plot), ('map', self.Map_Check),
                 *((f"channel_{c}", check) for c, check in zip(CHANNELS, self.Channel_Checks)),
-                ('elog_text', self.Elog_Edit)]
+                ('elog_text', self.Elog_Edit), ('queue_mode', self.Queue.Mode_Combo),
+                ('queue', self.Queue)]
 
     def Draw(self, live):
         """The plots from ``live``, redrawn only if it or the map's box has
