@@ -385,6 +385,6 @@ def test_A_Large_Jump_Holds_The_Window_Shut_For_Longer(loop):
 
 
 def test_A_Missed_Trigger_Is_Counted(loop):
-    loop.Loop._Check_Count(10, 0)
-    loop.Loop._Check_Count(13, 1)                           # the tagger moved on 3, we on 1
+    loop.Loop._Check_Count(np.array([10.0]))
+    loop.Loop._Check_Count(np.array([13.0, 14.0]))          # 11 and 12 never came
     assert loop.State.Skipped.value == 2

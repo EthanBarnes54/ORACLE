@@ -112,6 +112,56 @@ def test_A_Setting_The_Meter_Did_Not_Take_Is_Refused():
     meter.Close()
 
 
+class External_Keysight(Counting_Keysight):
+    """A meter on its trigger input that will not leave it, even for *RST."""
+
+    DEFAULTS = dict(simulated.Keysight.DEFAULTS, **{'TRIG:SOUR': 'EXT'})
+
+    def __init__(self):
+        super().__init__(ignore='TRIG:SOUR')
+
+
+def test_A_Meter_On_Its_Trigger_Input_Is_Refused_In_Every_Mode():
+    # the line meter's trigger input is the buncher's line: on it, the meter reads on the
+    # bunch clock rather than when asked, which is how the old DAQ's readings slipped
+    with pytest.raises(Scpi_Error, match="TRIG:SOUR EXT"):
+        _Meter(External_Keysight())
+    meter, inst = _Meter(Counting_Keysight())
+    inst.Ignore, inst._Settings['TRIG:SOUR'] = 'TRIG:SOUR', 'EXT'
+    with pytest.raises(Scpi_Error, match="TRIG:SOUR EXT"):
+        meter.Capture(5, aperture_s=0.0002)
+    meter.Mode = 'continuous'
+    with pytest.raises(Scpi_Error, match="TRIG:SOUR reads EXT"):
+        meter.Step_Config()
+    inst.Ignore = None
+    meter.Release()
+    assert meter.Mode == 'continuous'
+    meter.Close()
+
+
+def test_Every_Reading_In_Every_Mode_Is_Taken_On_Command():
+    sent = []
+
+    class Recording(simulated.Keysight):
+
+        def write(self, command):
+            sent.append(command.strip().upper())
+            super().write(command)
+
+    meter, _ = _Meter(Recording(lambda: 1.0e-3))
+    meter.Step_Config()
+    meter.Read_Settled(0.0)
+    meter.Release()
+    meter.Capture(3, interval_s=0.001, aperture_s=0.0002)
+    meter.Arm()
+    meter.Fetch_When_Done(3, 5.0)
+    meter.Release()
+    meter.Capture(3, nplc=1, stream=True)
+    meter.Release()
+    meter.Close()
+    assert {c for c in sent if c.startswith('TRIG:SOUR')} == {'TRIG:SOUR IMM'}
+
+
 def test_Cooler_Meter_Polls():
     meter, inst = _Meter(Counting_Keysight(), keysight.Cooler_Meter)
     time.sleep(0.3)

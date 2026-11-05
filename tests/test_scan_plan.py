@@ -37,3 +37,11 @@ def test_Bin_Edges_Centre_On_Setpoints():
     plan = Scan_Plan([0], [10], 2)
     edges = plan.Bin_Edges()
     assert np.allclose(0.5 * (edges[1:] + edges[:-1]), plan.Setpoints)
+
+
+@pytest.mark.parametrize('stop, last', [(474, 474), (475, 474), (476, 476), (477, 476)])
+def test_A_Range_Never_Runs_Past_Its_Stop(stop, last):
+    # counted to the nearest step, -450 to 477 V at 2 V ended at 478 V, the old DAQ's
+    # spurious final point back, while -450 to 475 V ended at 474 V
+    plan = Scan_Plan([-450], [stop], 2)
+    assert plan.Setpoints[-1] == last and len(plan) == (last + 450) // 2 + 1

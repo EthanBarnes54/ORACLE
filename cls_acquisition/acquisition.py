@@ -1,7 +1,7 @@
 """The acquisition process: the loop that drives the DAC, the triggers and the tagger.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The loop runs in its own process, so the tagger is read on time however
@@ -36,10 +36,20 @@ setpoints are.
 
 The bunch column of the data is therefore the loop's own count of
 accepted bunches from 0, exactly ``bunches_per_step`` a step, which is
-what DENIS assumes when it numbers scans. The tagger's own count is
-checked against it on every bunch with hits: a difference means a read
-missed a trigger, or timed out with none and was counted anyway (the
-collinear DAQ's D5), and is counted and logged.
+what DENIS assumes when it numbers scans. A bunch is a trigger the
+tagger saw, counted by the tagger's own number for it, never by the
+loop's reads: a read hands over every trigger the card has ready,
+several if the loop fell behind, each marked, so each is its own bunch
+and those past the step's quota are dropped. Counting reads, as the old
+DAQ did, joined a software counter to the card's by position, the root
+of its Mode B. A read that times out holds no trigger and is no bunch
+(the collinear DAQ stepped on regardless, its D5), so a step holds its
+bunches however long the cycle and however long the tagger goes quiet.
+A tagger with no trigger for longer than a few cycles is shared with
+the window, which says so and names the likely cause, while the scan
+holds its setpoint until triggers return. A number the tagger skipped
+is a trigger whose packet never reached the loop, and is counted and
+logged.
 
 Data leave on their own queue as ``('scan' | 'stream', rows)`` packets in
 the run file's columns, and a scan's end is marked ``('scan_end', None)``
@@ -48,8 +58,9 @@ them are in it. If the loop dies, its last word is a reply with id 0
 saying why. 'Ping' answers with what the devices found wrong as they
 opened (the tagger's wrapper, say), for the window to show.
 
-Depends on: numpy; cls_acquisition.calibration, .triggers, and
-cls_acquisition.hardware inside the process.
+Depends on: numpy; cls_acquisition.calibration, .triggers,
+.hardware.timetagger (MARK), and cls_acquisition.hardware inside the
+process.
 """
 
 import logging
@@ -63,10 +74,13 @@ import numpy as np
 
 from cls_acquisition import triggers
 from cls_acquisition.calibration import Settle_For
+from cls_acquisition.hardware.timetagger import MARK
 
 SCAN_TYPES = ('Sawtooth', 'Triangle', 'Single scan')
 IDLE_WAIT_S = 0.05          # longest an idle loop waits on the instruction queue
-TAGGER_TIMEOUT_S = 1.0      # a read with no trigger: counted as a bunch, records nothing
+READ_WAIT_S = 0.05          # longest a read waits on the tagger before instructions are taken
+NO_TRIGGER_CYCLES = 3       # cycles without a trigger before the window is told
+NO_TRIGGER_S = 2.0          # and never sooner: a dwell can be as short as 1 ms
 REPLY_TIMEOUT_S = 10.0
 
 log = logging.getLogger('oracle.acquisition')
@@ -81,6 +95,14 @@ def Ramp(start, stop, step_v):
     itself left out."""
     count = max(int(np.ceil(abs(stop - start) / step_v)), 1)
     return np.linspace(start, stop, count + 1)[1:].tolist()
+
+
+def No_Trigger(silent_s):
+    """The sentence for a tagger that has seen no trigger for ``silent_s``."""
+    return (f"No trigger has reached the time tagger for {silent_s:.0f} s, so no bunch is "
+            f"being counted and a scan holds its setpoint: possible malfunction or "
+            f"misconnection of PulseBlaster channel {triggers.CH_TAGGER}, the window gate or "
+            f"the tagger's trigger input.")
 
 
 class _Refused(Exception):
@@ -101,7 +123,8 @@ class Shared_State():
         self.Round = context.Value('i', 0)
         self.Bunches = context.Value('q', 0)
         self.Dropped = context.Value('q', 0)        # bunches dropped while a step settled
-        self.Skipped = context.Value('q', 0)        # bunches the tagger's count and ours part by
+        self.Skipped = context.Value('q', 0)        # triggers numbered that never reached us
+        self.Silent = context.Value('d', 0.0)       # seconds without a trigger, once too long
 
 
 class Acquisition_Loop():
@@ -122,7 +145,10 @@ class Acquisition_Loop():
         # 15.6 ms on Windows before Python 3.13, a third of a step's settling
         self._Settled_At = None
         self._Accepted = 0                  # bunches taken since the scan or stream began
-        self._Tagger_Ref = None             # (tagger's bunch, ours) at the last hits
+        self._Taken = 0                     # bunches taken at this step
+        self._Tagger_Ref = None             # the tagger's number for the last trigger read
+        self._Heard_At = 0.0                # perf_counter time a trigger was last due
+        self._Quiet_S = NO_TRIGGER_S        # longest the tagger may go without one
         self._Running = True
         # what the devices found wrong when they opened, for the window to show
         self._Warnings = [warning for device in (dac, pulses, tagger, gate)
@@ -283,7 +309,12 @@ class Acquisition_Loop():
 
     def _Stop_Calibration(self, ramp_step_v=None, ramp_rate_v_s=None):
         """Out of calibration; a hardware calibration first ramps the platform
-        down, since the idle loop would put 0 V on it in one move."""
+        down, since the idle loop would put 0 V on it in one move. With no
+        calibration running it does nothing: the GUI sends it after any
+        failed 'Calibrate', which may have been refused because a scan owns
+        the DAC."""
+        if not self._State.Calibrating.is_set():
+            return {}
         if ramp_step_v and self._Volts:
             for volts in Ramp(self._Volts, 0.0, ramp_step_v):
                 time.sleep(ramp_step_v / ramp_rate_v_s)
@@ -308,8 +339,9 @@ class Acquisition_Loop():
     # ── Data taking ─────────────────────────────────────────────
 
     def _Scan_Step(self):
-        """Wait out the step's settling, then its bunches, then on to the next
-        setpoint."""
+        """Wait out the step's settling, then read until the step holds its
+        bunches, then on to the next setpoint. One read a pass, so
+        instructions are taken between reads however long a bunch takes."""
         if self._Settled_At is not None:
             remaining = self._Settled_At - time.perf_counter()
             if remaining > 0:
@@ -318,11 +350,13 @@ class Acquisition_Loop():
             self._Drop()
             self._Gate.Open()
             self._Settled_At = None
-        for _ in range(self._Bunches_Per_Step):
-            self._Take_Instructions()
-            if not self._State.Scanning.is_set():
-                return
-            self._Record('scan')
+            self._Heard_At = time.perf_counter()    # the window was shut on purpose
+        self._Take_Instructions()
+        if not self._State.Scanning.is_set():
+            return
+        self._Taken += self._Record('scan', self._Bunches_Per_Step - self._Taken)
+        if self._Taken < self._Bunches_Per_Step:
+            return
         self._Index += 1
         if self._Index == len(self._Plan):
             self._Index = 0
@@ -341,11 +375,12 @@ class Acquisition_Loop():
         self._Gate.Close()
         self._Drop()
         self._Write(volts)
+        self._Taken = 0
         self._Settled_At = time.perf_counter() + (Settle_For(self._Settle, jump) if jump else 0.0)
 
     def _Drop(self):
         self._State.Dropped.value += self._Tagger.Drain()
-        self._Tagger_Ref = None             # the tagger counted bunches we did not take
+        self._Tagger_Ref = None             # the tagger numbered triggers we did not read
 
     def _End_Scan(self):
         self._State.Scanning.clear()
@@ -354,35 +389,68 @@ class Acquisition_Loop():
         self._Stop_Triggers()
         self._Data.put(('scan_end', None))
 
-    def _Record(self, kind):
-        """Read one bunch and send its hits, tagged with the voltage they were
-        taken at and the cooler voltage."""
-        hits = self._Tagger.Read(TAGGER_TIMEOUT_S)
-        self._State.Bunches.value += 1
-        bunch, self._Accepted = self._Accepted, self._Accepted + 1
-        if hits is None or not len(hits):
-            return
-        self._Check_Count(int(hits[0, 0]), bunch)
-        rows = np.empty((len(hits), 6))
-        rows[:, 0] = round(time.time(), 2)
-        rows[:, 1] = self._Volts
-        rows[:, 2] = bunch
-        rows[:, 3:5] = hits[:, 1:]
-        rows[:, 5] = self._State.Cooler.value
-        self._Data.put((kind, rows))
+    def _Record(self, kind, room=None):
+        """Read the triggers the tagger has ready and send each one's hits as
+        one bunch, tagged with the voltage they were taken at and the cooler
+        voltage; returns how many bunches were taken. Those past ``room``
+        are past their step's quota and dropped. A read that times out holds
+        no trigger, and no bunch is counted."""
+        rows = self._Tagger.Read(READ_WAIT_S)
+        if rows is None:
+            self._No_Trigger()
+            return 0
+        self._Heard()
+        marked = rows[:, 1] == MARK
+        numbers = rows[marked, 0]
+        self._Check_Count(numbers)
+        if room is not None and len(numbers) > room:
+            self._State.Dropped.value += len(numbers) - room
+            numbers = numbers[:room]
+        if not len(numbers):
+            return 0
+        first = self._Accepted
+        self._Accepted += len(numbers)
+        self._State.Bunches.value += len(numbers)
+        hits = rows[~marked]
+        hits = hits[hits[:, 0] <= numbers[-1]]
+        if len(hits):
+            out = np.empty((len(hits), 6))
+            out[:, 0] = round(time.time(), 2)
+            out[:, 1] = self._Volts
+            out[:, 2] = first + np.searchsorted(numbers, hits[:, 0])
+            out[:, 3:5] = hits[:, 1:]
+            out[:, 5] = self._State.Cooler.value
+            self._Data.put((kind, out))
+        return len(numbers)
 
-    def _Check_Count(self, tagger_bunch, bunch):
-        """The tagger's count must have moved on as far as ours since the
-        last bunch with hits. Further, and a read missed a trigger; less, and
-        a read that timed out with none was counted as a bunch."""
-        if self._Tagger_Ref is not None:
-            parted = (tagger_bunch - self._Tagger_Ref[0]) - (bunch - self._Tagger_Ref[1])
-            if parted:
-                if not self._State.Skipped.value:
-                    log.warning("The tagger's bunch count and the loop's parted by %d; every "
-                                "hit stays with the setpoint it was read at", parted)
-                self._State.Skipped.value += abs(parted)
-        self._Tagger_Ref = (tagger_bunch, bunch)
+    def _No_Trigger(self):
+        """Tell the window once the tagger has been quiet for longer than its
+        cycle allows; until a trigger comes, nothing is counted."""
+        silent = time.perf_counter() - self._Heard_At
+        if silent < self._Quiet_S:
+            return
+        if not self._State.Silent.value:
+            log.warning("%s", No_Trigger(silent))
+        self._State.Silent.value = silent
+
+    def _Heard(self):
+        if self._State.Silent.value:
+            log.info("Triggers reach the time tagger again, after %.1f s without one",
+                     time.perf_counter() - self._Heard_At)
+            self._State.Silent.value = 0.0
+        self._Heard_At = time.perf_counter()
+
+    def _Check_Count(self, numbers):
+        """The tagger numbers every trigger it sees, so a number missing since
+        the last read is a trigger whose packet never reached the loop."""
+        start = numbers[0] if self._Tagger_Ref is None else self._Tagger_Ref + 1
+        lost = int(numbers[-1] - start) + 1 - len(numbers)
+        if lost > 0:
+            if not self._State.Skipped.value:
+                log.warning("%d triggers the tagger numbered never reached the acquisition "
+                            "loop; no bunch was counted for them", lost)
+            self._State.Skipped.value += lost
+        self._Tagger_Ref = int(numbers[-1])
 
     def _Write(self, volts, force=False):
         """Put ``volts`` on the platform if it is not there already; returns
@@ -415,17 +483,21 @@ class Acquisition_Loop():
             self._Tagger.Configure(timing['gate_start_us'], timing['gate_stop_us'])
         except ValueError as e:
             raise _Refused(f"{e} The triggers were not started.") from None
-        for counter in (self._State.Bunches, self._State.Dropped, self._State.Skipped):
+        for counter in (self._State.Bunches, self._State.Dropped, self._State.Skipped,
+                        self._State.Silent):
             counter.value = 0
         self._Accepted = 0
         self._Tagger_Ref = None
+        self._Quiet_S = max(NO_TRIGGER_CYCLES * triggers.Period_Ns(pattern) / 1e9, NO_TRIGGER_S)
         self._Pulses.Program(pattern)
         self._Tagger.Start()
         self._Pulses.Start()
+        self._Heard_At = time.perf_counter()
 
     def _Stop_Triggers(self):
         self._Pulses.Stop()
         self._Tagger.Stop()
+        self._State.Silent.value = 0.0
 
 
 def Run_Loop(spec, instructions, replies, data, state, logs):

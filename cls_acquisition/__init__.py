@@ -1,7 +1,7 @@
 """ORACLE's core: everything that runs without Qt.
 
-Date:    2026-10-30
-Version: 0.3.1
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The scan plan, the step-and-confirm calibration and its gate, the

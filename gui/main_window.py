@@ -1,7 +1,7 @@
 """ORACLE's main window and entry point.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
@@ -43,7 +43,7 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.3.1'
+__version__ = '0.4.0'
 
 import contextlib
 import ctypes
@@ -70,7 +70,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, Q
 
 from cls_acquisition import (calibration, hardware_calibration, run_file, scan_performance,
                              settings)
-from cls_acquisition.acquisition import Acquisition_Error, Rack_Link
+from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
 from cls_acquisition.hardware import Rack
@@ -518,6 +518,9 @@ class Main_Window(QMainWindow):
                 + ''.join(f"  {c['Verdict']}  {c['Check']}: {c['Message']}\n"
                           for c in report['Checks'] if c['Verdict'] != calibration.PASS))
         if report['Verdict'] == calibration.REJECT:
+            # the session log keeps why, with the ELOG off too, as no run file will
+            log.warning("Run %d's calibration was refused by the gate; no file written, no "
+                        "scan started:\n%s", pending['run'], calibration.Rejections(report))
             self._Elog.Append(text + "RUN REJECTED: no file written, no scan started.\n",
                               self._Experiment())
             self.Shown_Label.setText(f"run_{pending['run']:04d}'s calibration, refused by "
@@ -1134,6 +1137,9 @@ class Main_Window(QMainWindow):
         self.Round_Label.setText(str(state.Round.value if self._Shown_Round is None
                                      else self._Shown_Round))
         self.Mode_Label.setText('Bunched' if self.Scan.Bunched() else 'DC')
+        if state.Silent.value and (scanning or triggering):
+            # held on the bar for as long as the tagger stays quiet
+            self.statusBar().showMessage(No_Trigger(state.Silent.value), 2 * TICK_MS)
 
         scan = self.Scan
         scan.Params_Group.setEnabled(not (scanning or triggering or calibrating))

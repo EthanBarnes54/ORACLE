@@ -1,25 +1,32 @@
 """The cronologic TimeTagger4, through the rack's compiled wrapper (timetagger4).
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The wrapper hands back, per trigger, rows of [bunch, channel, time] with
-channels counted from 1 and times in TDC bins of 500 ps; this module
-hands the loop microseconds. A trigger that carried no hits is an empty
-array, and no trigger within the timeout is None.
+A read hands over every trigger the card has ready, several if the
+reader fell behind, as rows of [trigger, channel, time]: the trigger is
+the card's own number for it, channels count from 1 and times are in
+TDC bins of 500 ps, which this module turns into microseconds. Each
+trigger also has one row of its own on channel MARK, hits or none, so
+the loop counts triggers by the card's numbers, never by its reads (the
+old DAQ counted reads, a second counter joined to the card's by
+position). No trigger within the timeout is None.
 
-Three faults in the old DAQ's wrapper (collinear_daq_driver_wrap.cpp)
+Four faults in the old DAQ's wrapper (collinear_daq_driver_wrap.cpp)
 change what is recorded and cannot be fixed from Python. Inputs 3 and 4
 take input 2's edge instead of their own, so with the rack's thresholds
 the UV PMTs are timed on their falling edge. It never reads a hit's
 flags, so the rollover marks the card sends past the 24-bit timestamp
-range would be recorded as hits. And a card that fails to open is
-reported only on the console. ORACLE keeps every window inside the
-timestamp range, and says at start-up when the edges asked for are not
-the edges the old wrapper gives; the corrected wrapper, built from
-cls_acquisition/hardware/timetagger4_wrapper, mends all three and marks
-itself ORACLE_WRAPPER.
+range would be recorded as hits. A card that fails to open is reported
+only on the console. And it marks no trigger, so a trigger with no hits
+leaves no row: this module numbers the old wrapper's triggers from its
+packet numbers, which count empty ones too, and only a read holding
+nothing but empty triggers is taken for one. ORACLE keeps every window
+inside the timestamp range, and says at start-up what the old wrapper
+gets wrong; the corrected wrapper, built from
+cls_acquisition/hardware/timetagger4_wrapper, mends all four and marks
+itself ORACLE_WRAPPER 2.
 
 Depends on: numpy; timetagger4, from the folder settings name
 (instruments: tagger_driver) or the import path.
@@ -33,6 +40,8 @@ import time
 import numpy as np
 
 BIN_US = 0.0005                     # one TDC bin
+MARK = 0                            # a trigger's own row; inputs are 1 to 4
+MARKED_WRAPPER = 2                  # the ORACLE_WRAPPER that marks every trigger
 TIMESTAMP_BITS = 24                 # a hit's timestamp; past it the card marks a rollover
 MAX_WINDOW_US = (2 ** TIMESTAMP_BITS - 1) * BIN_US
 POLL_S = 0.00005                    # between polls of the card while waiting
@@ -63,6 +72,24 @@ def Edge_Fault(levels, corrected):
             f"cls_acquisition/hardware/timetagger4_wrapper.")
 
 
+def Unmarked():
+    """The sentence for a wrapper that marks no trigger."""
+    return ("The time tagger's wrapper marks no trigger, so a read holding only triggers with "
+            "no hits is counted as one bunch however many it held; rebuild it from "
+            "cls_acquisition/hardware/timetagger4_wrapper.")
+
+
+def Mark(rows, last):
+    """The old wrapper's ``rows`` with each trigger marked. Its packet numbers
+    count every trigger from 0 as the card opens, empty ones too, so every
+    number after ``last`` (the last trigger read) up to the highest here is a
+    trigger; with no rows, the next one. Returns ``(rows, last)``."""
+    top = max(int(rows[:, 0].max()) if len(rows) else last + 1, last + 1)
+    numbers = np.arange(last + 1, top + 1, dtype=float)
+    marks = np.column_stack([numbers, np.full(len(numbers), MARK), np.zeros(len(numbers))])
+    return np.vstack([marks, rows]), top
+
+
 class Time_Tagger():
 
     def __init__(self, levels, trigger_level, driver_dir=''):
@@ -84,8 +111,13 @@ class Time_Tagger():
         self._Window = WINDOW_US
         self._Card = None
         self._Reading = False
-        fault = Edge_Fault(self._Levels, getattr(timetagger4, 'ORACLE_WRAPPER', False))
+        self._Last = -1                    # the old wrapper's last trigger read
+        version = getattr(timetagger4, 'ORACLE_WRAPPER', 0)
+        self._Marked = version >= MARKED_WRAPPER
+        fault = Edge_Fault(self._Levels, bool(version))
         self.Warnings = [fault] if fault else []
+        if not self._Marked:
+            self.Warnings.append(Unmarked())
         for warning in self.Warnings:
             log.warning("%s", warning)
         self._Open()                    # fails now, at start-up, if the card is absent
@@ -96,6 +128,7 @@ class Time_Tagger():
 
     def _Open(self):
         self.Stop()
+        self._Last = -1                    # a new card counts its packets from 0
         start, stop = (int(round(t / BIN_US)) for t in self._Window)
         options = {'trigger_level': self._Trigger_Level, 'trigger_rising': True}
         for channel, level in enumerate(self._Levels):
@@ -116,23 +149,28 @@ class Time_Tagger():
         while time.monotonic() < deadline:
             status, hits = self._Card.getPackets()
             if status == 0:
-                rows = np.array(hits, dtype=float).reshape(-1, 3)
-                rows[:, 2] *= BIN_US
-                return rows
+                return self._Rows(hits)
             if status != 1:
                 raise RuntimeError(f"The time tagger reported status {status} while being "
                                    f"read.")
             time.sleep(POLL_S)
         return None
 
+    def _Rows(self, hits):
+        rows = np.array(hits, dtype=float).reshape(-1, 3)
+        rows[:, 2] *= BIN_US
+        if not self._Marked:
+            rows, self._Last = Mark(rows, self._Last)
+        return rows
+
     def Drain(self):
-        """Drop every packet waiting; returns how many there were."""
+        """Drop every trigger waiting; returns how many there were."""
         dropped = 0
         while self._Card is not None:
-            status, _ = self._Card.getPackets()
+            status, hits = self._Card.getPackets()
             if status != 0:
                 return dropped
-            dropped += 1
+            dropped += int(np.count_nonzero(self._Rows(hits)[:, 1] == MARK))
         return dropped
 
     def Stop(self):

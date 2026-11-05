@@ -198,10 +198,42 @@ def test_Tagger_Configures_Each_Input_And_Reads_Microseconds(monkeypatch):
     assert options['channel_0_rising'] is False and options['channel_1_rising'] is True
     assert (options['channel_1_start'], options['channel_1_stop']) == (20000, 420000)
     rows = tagger.Read(timeout=1.0)
-    assert rows.tolist() == [[7, 3, 1.0], [7, 4, 2.0]]
+    # the old wrapper numbers packets from 0, empty ones too: triggers 0 to 7, and 7's hits
+    assert rows[rows[:, 1] == timetagger.MARK, 0].tolist() == list(range(8))
+    assert rows[rows[:, 1] != timetagger.MARK].tolist() == [[7, 3, 1.0], [7, 4, 2.0]]
     assert tagger.Read(timeout=0.01) is None                    # no trigger: a timeout
     tagger.Stop()
     tagger.Stop()
+
+
+def _Tagger_With(monkeypatch, replies, version):
+    card = type('Card', (Card_Stub,), {})
+    monkeypatch.setitem(sys.modules, 'timetagger4',
+                        types.SimpleNamespace(TimeTagger=card, ORACLE_WRAPPER=version))
+    tagger = timetagger.Time_Tagger([-0.2, 0.1], 2.5)
+    tagger.Start()
+    card.Made[-1].Replies = list(replies)
+    return tagger
+
+
+def _Triggers(rows):
+    return rows[rows[:, 1] == timetagger.MARK, 0].tolist()
+
+
+def test_A_Read_Says_How_Many_Triggers_It_Holds_Empty_Ones_Too(monkeypatch):
+    # the card hands over every packet it has ready; counting reads as triggers was a
+    # second counter joined to the card's by position
+    marked = _Tagger_With(monkeypatch, [(0, [[0, 0, 0], [0, 2, 2000], [1, 0, 0], [2, 0, 0]]),
+                                        (0, [[3, 0, 0]]), (0, [[4, 0, 0], [5, 0, 0]])], 2)
+    rows = marked.Read(timeout=1.0)
+    assert _Triggers(rows) == [0, 1, 2] and rows[rows[:, 1] == 2].tolist() == [[0, 2, 1.0]]
+    assert _Triggers(marked.Read(timeout=1.0)) == [3]
+    assert marked.Drain() == 2                                  # triggers, not reads
+    # the old wrapper's packet numbers count empty triggers: a gap is triggers with no hits
+    old = _Tagger_With(monkeypatch, [(0, [[2, 1, 2000]]), (0, []), (0, [[6, 3, 4000]])], 0)
+    assert _Triggers(old.Read(timeout=1.0)) == [0, 1, 2]
+    assert _Triggers(old.Read(timeout=1.0)) == [3]              # all empty: taken for one
+    assert _Triggers(old.Read(timeout=1.0)) == [4, 5, 6]
 
 
 def test_The_Tagger_Window_Stays_Inside_The_Timestamp_Range(monkeypatch):
@@ -217,9 +249,13 @@ def test_The_Old_Wrappers_Edge_Fault_Is_Said_At_Start_Up(monkeypatch):
     rack_levels = [-0.2, -0.6, 0.1, 0.1]
     old = types.SimpleNamespace(TimeTagger=Card_Stub)
     monkeypatch.setitem(sys.modules, 'timetagger4', old)
-    [warning] = timetagger.Time_Tagger(rack_levels, 2.5).Warnings
-    assert "input 3 and 4 on input 2's falling edge" in warning
-    corrected = types.SimpleNamespace(TimeTagger=Card_Stub, ORACLE_WRAPPER=1)
+    edges, unmarked = timetagger.Time_Tagger(rack_levels, 2.5).Warnings
+    assert "input 3 and 4 on input 2's falling edge" in edges
+    assert unmarked == timetagger.Unmarked()
+    first = types.SimpleNamespace(TimeTagger=Card_Stub, ORACLE_WRAPPER=1)
+    monkeypatch.setitem(sys.modules, 'timetagger4', first)
+    assert timetagger.Time_Tagger(rack_levels, 2.5).Warnings == [timetagger.Unmarked()]
+    corrected = types.SimpleNamespace(TimeTagger=Card_Stub, ORACLE_WRAPPER=2)
     monkeypatch.setitem(sys.modules, 'timetagger4', corrected)
     assert timetagger.Time_Tagger(rack_levels, 2.5).Warnings == []
     assert timetagger.Edge_Fault([-0.2, -0.6, -0.1, -0.3], False) is None

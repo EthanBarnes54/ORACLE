@@ -6,6 +6,7 @@ from datetime import datetime
 import asdf
 import numpy as np
 import pytest
+from asdf import AsdfFile
 
 from cls_acquisition import run_file
 
@@ -75,3 +76,28 @@ def test_Oracles_Record_Sits_Beside_The_Archives_Keys_And_Reads_Back_As_Written(
     assert header[run_file.ORACLE_KEY] == record and raw.shape == (2, 6)
     older = run_file.Create(str(tmp_path), _Header(8))      # one written before the record
     assert run_file.ORACLE_KEY not in run_file.Read(older)[0]
+
+
+def _Old_Daq_Run(directory, run, when=datetime(2026, 10, 25, 12, 0)):
+    """A run as the old DAQ wrote it: no DAC correction keys."""
+    folder = os.path.join(directory, f"{when.year}", f"{when.month:02d}", f"{when.day:02d}")
+    os.makedirs(folder, exist_ok=True)
+    tree = {'Run': run, 'CalSet': np.arange(3.0), 'CalReadback': np.arange(3.0) / 1000}
+    AsdfFile(tree).write_to(os.path.join(folder, f"run_{run:04d}.asdf"))
+
+
+def test_A_Calibration_Is_Set_Only_Against_Runs_Calibrated_The_Same_Way(tmp_path):
+    # the old DAQ paired some readings with the wrong setpoint, and a DAC correction moves
+    # every setpoint: across either, two calibrations differ with nothing wrong in either
+    directory = str(tmp_path)
+    _Old_Daq_Run(directory, 1)
+    _Old_Daq_Run(directory, 2)
+    paths = {}
+    for run, correction in ((3, 'none'), (4, 'measured 2026-11-01'), (5, 'none'), (6, 'none')):
+        header = _Header(run)
+        header['DacCorrection'] = correction
+        paths[run] = run_file.Create(directory, header)
+    assert [c[0] for c in run_file.Earlier_Calibrations(paths[6], directory)] == [5, 3]
+    assert run_file.Earlier_Calibrations(paths[4], directory) == []
+    old = paths[3].replace('run_0003', 'run_0002')
+    assert [c[0] for c in run_file.Earlier_Calibrations(old, directory)] == [1]

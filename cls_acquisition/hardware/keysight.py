@@ -1,7 +1,7 @@
 """The two Keysight 34465A meters: the line meter on the HV divider, and the cooler's.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Both are polled on their owner thread for the display, and both are a
@@ -14,6 +14,14 @@ back is :meth:`_Meter.Release`, through idle, from any mode and as often
 as it is called, and it sets the meter up afresh. The poll reads only in
 'continuous' and checks that on the owner thread, so nothing can land
 between the check and its READ?.
+
+Every reading is taken on command, in every mode, and never on the bunch
+trigger. The line meter's trigger input is wired to PulseBlaster channel
+17, which releases the buncher: the old DAQ gated its calibration burst
+on it, so the meter sampled on the bunch clock while the software
+stepped the DAC on its own, and the two slipped apart (Mode B). Each mode
+reads the trigger source back and refuses a meter that is not on
+immediate, rather than trust the command was taken.
 
 A meter is reset when it is opened (another program, the bench tool or
 the old DAQ, may have left it streaming, in binary or on another
@@ -138,6 +146,15 @@ class _Meter():
             inst.Write(command)
         inst.Query("*OPC?")
         self._Refuse_On(inst.Errors(), "rejected its configuration")
+        self._Refuse_External(inst)
+
+    def _Refuse_External(self, inst):
+        """Raise Scpi_Error unless the meter triggers on command (IMM)."""
+        source = inst.Query("TRIG:SOUR?").upper()
+        if not source.startswith('IMM'):
+            raise Scpi_Error(f"The meter at {self._Session.Resource} reads TRIG:SOUR {source} "
+                             f"where IMM was sent, so it would read on its trigger input (the "
+                             f"buncher's line), not when asked.")
 
     def _Refuse_On(self, errors, what):
         """Raise Scpi_Error naming the meter if its error queue held anything."""
@@ -212,6 +229,7 @@ class _Meter():
             inst.Query("*OPC?")
             samples = int(float(inst.Query("SAMP:COUN?")))
             self._Refuse_On(inst.Errors(), "rejected the capture configuration")
+            self._Refuse_External(inst)
             if samples != count:
                 raise Scpi_Error(f"The meter at {self._Session.Resource} reads SAMP:COUN "
                                  f"{samples} where {count} was sent.")

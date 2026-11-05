@@ -1,7 +1,7 @@
 """The simulated rack: a software bench the whole DAQ runs on without hardware.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Only the instruments are simulated. The acquisition loop, the DAC
@@ -52,7 +52,7 @@ from cls_acquisition import triggers
 from cls_acquisition.calibration import DIVIDER
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER, OVERLOAD, RANGE_V
 from cls_acquisition.hardware.mcc_dac import AMPLIFIER_GAIN, CH_NEG, CH_POS
-from cls_acquisition.hardware.timetagger import BIN_US, Check_Window
+from cls_acquisition.hardware.timetagger import BIN_US, MARK, Check_Window
 
 # the step response, fitted to the bench's 1 kV and 2 kV steps
 TAU_RISE_S = 0.00018
@@ -289,7 +289,9 @@ def Cooler_Meter_Source():
 
 
 class Tagger():
-    """The tagger as the loop sees it, one packet per trigger edge."""
+    """The tagger as the loop sees it: one packet per trigger edge, its mark
+    and its hits, and a read hands over every packet ready, as the driver
+    does, so a loop that falls behind gets several triggers in one."""
 
     def __init__(self, platform):
         self._Platform = platform
@@ -314,18 +316,20 @@ class Tagger():
 
     def Read(self, timeout):
         try:
-            return self._Packets.get(timeout=timeout)
+            packets = [self._Packets.get(timeout=timeout)]
         except queue.Empty:
             return None
+        while True:
+            try:
+                packets.append(self._Packets.get_nowait())
+            except queue.Empty:
+                return np.vstack(packets)
 
     def Drain(self):
         dropped = 0
-        while True:
-            try:
-                self._Packets.get_nowait()
-            except queue.Empty:
-                return dropped
-            dropped += 1
+        while (rows := self.Read(0.0)) is not None:
+            dropped += int(np.count_nonzero(rows[:, 1] == MARK))
+        return dropped
 
     def Edge(self, period_s):
         """One trigger: the ions and background of one period, the ions
@@ -344,8 +348,9 @@ class Tagger():
             rng.uniform(start, stop, rng.poisson(BACKGROUND_RATE_HZ * period_s))])
         times = np.rint(times / BIN_US) * BIN_US
         times = times[(times >= start) & (times < stop)]
-        self._Packets.put(np.column_stack([np.full(len(times), float(self._Bunch)),
-                                           rng.integers(1, 5, len(times)), times]))
+        hits = np.column_stack([np.full(len(times), float(self._Bunch)),
+                                rng.integers(1, 5, len(times)), times])
+        self._Packets.put(np.vstack([[self._Bunch, MARK, 0.0], hits]))
 
 
 class Window_Gate():

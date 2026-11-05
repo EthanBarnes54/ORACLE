@@ -1,7 +1,7 @@
 """Scan performance: how the rack's behaviour during a run shaped its spectrum.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 A spectrum is counts against the scanning voltage, and every part of the
@@ -312,7 +312,8 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     {'harmonic', 'geometry', 'charge'}, used if the run does not record its
     own; ``settle_model`` estimates an old DAQ run's settling; ``history``
     holds earlier runs' calibrations, ``(run, CalSet, CalReadback)``,
-    newest first."""
+    newest first, of runs calibrated as this one was
+    (run_file.Earlier_Calibrations)."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -724,9 +725,9 @@ def _Timing(report, bunch, times, header, record, monitor, per_step, sequence, t
     if monitor is not None and 'skipped' in monitor:
         parted = int(monitor['skipped'][-1])
         report.Add(TIMING, 'Tagger count', WARN if parted else PASS, parted,
-                   f"The tagger's bunch count and the loop's parted by {parted}: a read missed a "
-                   f"trigger, or timed out with none. Every hit still carries the setpoint it "
-                   f"was read at.")
+                   f"{parted} triggers the tagger numbered never reached the acquisition loop, "
+                   f"so no bunch was counted for them and none of their hits is in the run. "
+                   f"Every hit that is still carries the setpoint it was read at.")
     return period, bunched
 
 

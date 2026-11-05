@@ -1,7 +1,7 @@
 """Step-and-confirm calibration, and the gate every calibration must pass.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Calibration pairs each commanded platform voltage with what the line
@@ -17,17 +17,28 @@ lag is zero by construction; the PulseBlaster and the tagger take no part.
 
 The gate (:func:`Quality_Report`) tests properties every healthy
 calibration has -- it tracks the command, spans the commanded range, was
-read settled, matches the plan -- rather than the signatures of faults
-already seen, so a new fault is still refused if it breaks one of them.
-A REJECT writes no file and starts no scan.
+read settled, matches the plan, and its last reading is what the platform
+reads when held there -- rather than the signatures of faults already
+seen, so a new fault is still refused if it breaks one of them. A REJECT
+writes no file and starts no scan.
+
+The last of those is the guard on the pairing itself. Once the last point
+is read, the DAC stays where it is and the meter reads that setpoint again,
+held, well past its settling: readings with no stepping, so with no pairing
+to get wrong. Were reading i holding setpoint i - k for any reason, as the
+old DAQ's Mode B did, the calibration's last reading would sit k steps
+from them; neither tracking nor span can see a shifted ramp, and no lag is
+estimated or undone here, only refused.
 
 SETTLE is the DAQ's only definition of settled. An amplifier slower than
 it cannot be detected by timing, and on a uniform ramp not in the
 readings either: partial settling shifts every reading by the same
 fraction of a step. Where the Settle time page has measured the
 amplifier, its settle model says how long a jump of a given size takes
-(:func:`Settle_For`), and the first point of a calibration, usually the
-largest jump, waits that long.
+(:func:`Settle_For`), and a point whose jump needs longer than SETTLE
+waits that long: the first, from where the platform stood, and the
+first of each range after a gap are the largest. The wait and the stamp
+test use the same number for each point, and the gate checks it again.
 
 Depends on: numpy.
 """
@@ -56,6 +67,18 @@ THRESHOLDS = {
     # otherwise re-request every point and quietly double the run time
     'MaxRetriesPerCalibration': 10,
     'RetryMarginS': 0.005,          # added to a re-request's measured shortfall
+    # the last setpoint read again, held, after the calibration: four SETTLEs on,
+    # ten readings, against which the calibration's own last reading may sit half
+    # a step off (a lag of one is a whole step) or six times their scatter, if
+    # more (t on 9 degrees of freedom: 2e-4 of healthy calibrations)
+    'HeldWaitS': 0.2,
+    'HeldReadings': 10,
+    'MaxHeldSteps': 0.5,
+    'HeldSigma': 6.0,
+    # and they must agree with each other: the bench's readings scatter 0.065 V and
+    # the archive's healthy ones 0.175 V about their line, but answers that trail
+    # their requests read a held setpoint as a ramp, three steps rms
+    'MaxHeldScatterV': 0.5,
 }
 
 DIVIDER = 1000.0                    # platform volts per volt at the line meter
@@ -73,16 +96,19 @@ class Calibration_Error(RuntimeError):
 class Calibration():
     """One reading per planned setpoint, in plan order: the step records the
     acquisition process confirmed, the meter's readings (volts at the meter),
-    how long after its write each reading was taken, and how many setpoints
-    had to be read again."""
+    how long after its write each reading was taken and how long its jump
+    needed to settle, how many setpoints had to be read again, and the last
+    setpoint's readings held."""
 
-    def __init__(self, steps, readings, stamps_ns, retried, dac):
+    def __init__(self, steps, readings, stamps_ns, settle_ns, retried, dac, held):
         self.Indices = np.array([s['Index'] for s in steps], dtype=int)
         self.Commanded = np.array([s['Volts'] for s in steps], dtype=float)
         self.Readings = np.array(readings, dtype=float)
         self.Gaps_Ns = (np.array(stamps_ns, dtype=np.int64)
                         - np.array([s['T_Command_Ns'] for s in steps], dtype=np.int64))
+        self.Settle_Ns = np.array(settle_ns, dtype=np.int64)
         self.Retried = retried
+        self.Held = np.array(held, dtype=float)
         self.Dac_Status = dac['Dac_Status']
         self.Dac_Correction = dac['Dac_Correction']
 
@@ -118,13 +144,14 @@ def Calibrating(link, meter, setup, setpoints, stop=None):
     'Calibrate' reply is yielded. However the body ends, the acquisition
     process leaves calibration (by ``stop()`` if given) and the meter goes
     back to its live poll; a cleanup that fails after another failure is
-    logged, never raised over it."""
+    logged, never raised over it. A 'Calibrate' that fails is stopped too:
+    one that timed out may still be carried out, and a stop changes
+    nothing in a process that is not calibrating."""
     stop = stop or (lambda: link.Send('Stop_Calibration'))
     try:
         setup()
-        dac = link.Send('Calibrate', setpoints=np.asarray(setpoints, dtype=float).tolist())
         try:
-            yield dac
+            yield link.Send('Calibrate', setpoints=np.asarray(setpoints, dtype=float).tolist())
         except BaseException:
             _Quietly(stop)
             raise
@@ -141,26 +168,26 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None):
     ``link`` is the acquisition process, which alone drives the DAC;
     ``meter`` is the line meter; ``progress(index, volts, reading)`` is
     called after each kept point. Every exit leaves the meter on its live
-    poll and the acquisition process out of calibration. The first point
-    waits as long as ``settle_model`` says its jump from where the platform
-    stood takes, if that is longer than SETTLE: it is usually the largest.
+    poll and the acquisition process out of calibration. A point waits
+    SETTLE, or as long as ``settle_model`` says its jump takes if that is
+    longer: the first, from where the platform stood, and the first of a
+    range after a gap usually are.
 
-    The retry rule. A reading stamped less than SETTLE after its write was
-    confirmed is inconclusive: it is discarded, and the reading (not the
-    write, which would restart the settling) is requested again after the
-    measured shortfall plus a margin. Waiting on this side's own clock from
-    the confirmation makes that rare; it covers what the wait cannot see,
-    since the two stamps come from two processes. A stamp before its write
-    means the clocks disagree and aborts at once, as does any other fault.
-    Each point is read at most MaxAttemptsPerPoint times and a calibration
-    re-requests at most MaxRetriesPerCalibration readings, so the retry path
-    terminates and adds at most that many waits of SETTLE + margin.
+    The retry rule. A reading stamped less than its point's settling after
+    its write was confirmed is inconclusive: it is discarded, and the
+    reading (not the write, which would restart the settling) is requested
+    again after the measured shortfall plus a margin. Waiting on this side's
+    own clock from the confirmation makes that rare; it covers what the wait
+    cannot see, since the two stamps come from two processes. A stamp before
+    its write means the clocks disagree and aborts at once, as does any
+    other fault. Each point is read at most MaxAttemptsPerPoint times and a
+    calibration re-requests at most MaxRetriesPerCalibration readings, so
+    the retry path terminates and adds at most that many waits of a point's
+    settling + margin.
     """
-    settle_s = THRESHOLDS['SettleS']
-    settle_ns = round(settle_s * 1e9)
-    first_s = max(settle_s, Settle_For(settle_model, abs(plan.Setpoints[0]
-                                                         - link.State.Voltage.value)))
-    steps, readings, stamps = [], [], []
+    jumps = np.abs(np.diff(plan.Setpoints, prepend=link.State.Voltage.value))
+    needs_s = [max(THRESHOLDS['SettleS'], Settle_For(settle_model, jump)) for jump in jumps]
+    steps, readings, stamps, needs_ns = [], [], [], []
     retried = re_requests = 0
 
     with Calibrating(link, meter, meter.Step_Config, plan.Setpoints) as dac:
@@ -172,7 +199,8 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None):
                     f"The acquisition process confirmed setpoint {step['Index']} when "
                     f"setpoint {index} was sent, so the calibration stopped rather than "
                     f"pair a reading with the wrong voltage.")
-            wait_s, attempt = (first_s if index == 0 else settle_s), 0
+            settle_s = wait_s = needs_s[index]
+            settle_ns, attempt = round(settle_s * 1e9), 0
             while True:
                 attempt += 1
                 stamp, value = meter.Read_Settled(wait_s)
@@ -204,9 +232,13 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None):
             steps.append(step)
             readings.append(value)
             stamps.append(stamp)
+            needs_ns.append(settle_ns)
             if progress is not None:
                 progress(index, volts, value)
-    return Calibration(steps, readings, stamps, retried, dac)
+        # the DAC still holds the last setpoint, and the loop leaves it there
+        held = [meter.Read_Settled(THRESHOLDS['HeldWaitS'] if i == 0 else 0.0)[1]
+                for i in range(THRESHOLDS['HeldReadings'])]
+    return Calibration(steps, readings, stamps, needs_ns, retried, dac, held)
 
 
 def Line_Fit(x, y):
@@ -277,14 +309,16 @@ def Quality_Report(cal, plan):
         checks.append(('polarity', PASS, f"the branches agree to {step:+.3f} V"))
 
     # the stamp test again, on the arrays that will be written
-    settle_ns = round(THRESHOLDS['SettleS'] * 1e9)
-    early = int(np.sum(cal.Gaps_Ns < settle_ns))
+    shortfall = cal.Settle_Ns - cal.Gaps_Ns
+    early = int(np.sum(shortfall > 0))
     shortest_ms = float(cal.Gaps_Ns.min()) / 1e6
     if early:
+        worst = int(np.argmax(shortfall))
         checks.append(('settle', REJECT,
-                       f"{early} readings were taken less than {settle_ns / 1e6:.0f} ms after "
-                       f"their write (the shortest {shortest_ms:.1f} ms), so the voltage may "
-                       f"not have settled."))
+                       f"{early} readings were taken before their jump had settled, the worst "
+                       f"at {commanded[worst]:.2f} V {cal.Gaps_Ns[worst] / 1e6:.1f} ms after "
+                       f"its write against the {cal.Settle_Ns[worst] / 1e6:.0f} ms it needs, "
+                       f"so the voltage may not have settled."))
     elif cal.Retried:
         checks.append(('settle', WARN,
                        f"{cal.Retried} setpoints were read early and read again; every kept "
@@ -292,6 +326,29 @@ def Quality_Report(cal, plan):
     else:
         checks.append(('settle', PASS, f"every reading at least {shortest_ms:.1f} ms after "
                                        f"its write"))
+
+    # the last reading against the same setpoint read held: a lag of k sets it k steps off
+    held = cal.Held * DIVIDER
+    scatter = float(np.std(held, ddof=1))
+    apart = float(readback[-1] - np.mean(held))
+    allowed = max(THRESHOLDS['MaxHeldSteps'] * plan.Step,
+                  THRESHOLDS['HeldSigma'] * scatter * np.sqrt(1.0 + 1.0 / len(held)))
+    if scatter > THRESHOLDS['MaxHeldScatterV']:
+        checks.append(('held', REJECT,
+                       f"{len(held)} readings of the last setpoint ({commanded[-1]:.2f} V), held "
+                       f"{THRESHOLDS['HeldWaitS']:g} s on, scatter by {scatter:.3f} V, beyond the "
+                       f"{THRESHOLDS['MaxHeldScatterV']:g} V allowed: the meter is not answering "
+                       f"the reading asked for (a lag), or the platform is not steady."))
+    elif abs(apart) > allowed:
+        checks.append(('held', REJECT,
+                       f"The last setpoint ({commanded[-1]:.2f} V) read {apart:+.3f} V "
+                       f"({apart / plan.Step:+.1f} steps) from {len(held)} readings of it held "
+                       f"{THRESHOLDS['HeldWaitS']:g} s on, beyond the {allowed:.2f} V allowed: "
+                       f"the readings are not filed against the setpoints they were taken at "
+                       f"(a lag), or the voltage had not settled."))
+    else:
+        checks.append(('held', PASS, f"the last setpoint read {apart:+.3f} V from itself held "
+                                     f"(allowed {allowed:.2f} V)"))
 
     deviation = float(np.max(np.abs(commanded - plan.Setpoints)))
     if not np.array_equal(cal.Indices, np.arange(len(plan))):
@@ -306,8 +363,9 @@ def Quality_Report(cal, plan):
     checks.append(('dac_calibration', *cal.Dac_Status))
 
     report = _Report(checks)
+    # the run keeps the numbers it was judged by, not only the verdict
     report.update(TrackingR=tracking_r, FitGradient=gradient, FitResidualRmsV=residual_rms,
-                  ShortestGapMs=shortest_ms)
+                  ShortestGapMs=shortest_ms, HeldApartV=apart, Thresholds=dict(THRESHOLDS))
     return report
 
 

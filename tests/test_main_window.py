@@ -79,7 +79,7 @@ def test_A_Scan_Is_Calibrated_Gated_Written_And_Closed(qapp, window):
     assert window.Performance.Run_Combo.currentData() == path
 
 
-def test_A_Dead_Readback_Is_Refused_And_Nothing_Is_Written(qapp, window, monkeypatch):
+def test_A_Dead_Readback_Is_Refused_And_Nothing_Is_Written(qapp, window, monkeypatch, caplog):
 
     def dead_meter(wait_s):
         # Mode A: the meter reads the platform at rest whatever is commanded
@@ -91,6 +91,31 @@ def test_A_Dead_Readback_Is_Refused_And_Nothing_Is_Written(qapp, window, monkeyp
     assert _Pump(qapp, lambda: window.Dialogs)
     title, text = window.Dialogs[0]
     assert title == 'Run rejected' and 'tracking' in text
+    assert _Run_Files(window) == [] and not window._Link.State.Scanning.is_set()
+    # no run file keeps it, so the session log does, ELOG or not
+    [refused] = [r.getMessage() for r in caplog.records if 'refused by the gate' in r.getMessage()]
+    assert refused.startswith("Run 1's calibration") and 'tracking:' in refused
+
+
+def test_A_Calibration_Lagged_By_Twelve_Starts_No_Scan(qapp, window, monkeypatch):
+    # Mode B with k = 12, here a meter whose answers trail its requests by twelve: the ramp
+    # still tracks and spans, and the gate refuses it on the setpoint read held
+    read, answers = window._Line.Read_Settled, []
+
+    def lagging(wait_s):
+        stamp, volts = read(wait_s)
+        answers.append(volts)
+        return stamp, answers[max(len(answers) - 13, 0)]
+
+    monkeypatch.setattr(window._Line, 'Read_Settled', lagging)
+    window.Scan.From_Boxes[0].setValue(-150.0)
+    window.Scan.To_Boxes[0].setValue(150.0)
+    window.Scan.Start_Button.click()
+    assert _Pump(qapp, lambda: window.Dialogs)
+    title, text = window.Dialogs[0]
+    # its held readings are as stale as the rest, and read the held setpoint as a ramp
+    assert title == 'Run rejected' and text.startswith('held:') and 'a lag' in text
+    assert 'tracking' not in text and 'span' not in text
     assert _Run_Files(window) == [] and not window._Link.State.Scanning.is_set()
 
 

@@ -12,6 +12,7 @@ file, the records, the settings and the ELOG were given.
 
 import os
 import re
+import types
 
 import asdf
 import numpy as np
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import QLabel, QMessageBox
 
 from cls_acquisition import hardware_calibration as hc
 from cls_acquisition import run_file, settings
+from cls_acquisition.acquisition import No_Trigger
 from cls_acquisition.hardware import simulated
 from cls_acquisition.hardware.visa_session import Scpi_Error
 from gui import main_window
@@ -172,6 +174,22 @@ def test_Triggers_Stream_To_The_Plots_But_Never_To_A_File(qapp, window):
     assert Pump(qapp, lambda: not state.Triggering.is_set())
     assert Pump(qapp, lambda: window.Scan.Control_Group.isEnabled())
     assert Run_Files(window) == []
+
+
+def test_A_Tagger_Without_Triggers_Is_Reported_On_The_Status_Bar(qapp, window):
+    state = window._Link.State
+    window.Trigger_Button.click()
+    assert Pump(qapp, lambda: state.Triggering.is_set())
+    # the silence as the loop publishes it, stood in for on this side alone: the loop
+    # clears the real one at its next bunch
+    real, state.Silent = state.Silent, types.SimpleNamespace(value=12.0)
+    try:
+        window._Show_State()
+        assert window.statusBar().currentMessage() == No_Trigger(12.0)
+    finally:
+        state.Silent = real
+    window.Trigger_Button.click()
+    assert Pump(qapp, lambda: not state.Triggering.is_set())
 
 
 def test_Quick_Tune_Puts_Its_Voltage_On_The_Platform_And_Takes_It_Off(qapp, window):

@@ -1,7 +1,7 @@
 """The run file, in the ASDF format the archive and its readers expect.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The header's keys and their meaning are frozen: cls_tools and DENIS read
@@ -115,11 +115,23 @@ def Runs(directory):
 
 def Earlier_Calibrations(path, directory, count=3):
     """The start-of-run calibrations of the ``count`` runs numbered before
-    ``path`` in ``directory``, newest first, as ``(run, CalSet,
-    CalReadback)``: only those keys are read, never the events. A run that
-    cannot be read is passed over."""
+    ``path`` in ``directory`` that were calibrated as it was, newest first,
+    as ``(run, CalSet, CalReadback)``: only those keys are read, never the
+    events. A run that cannot be read is passed over.
+
+    As it was means by the same DAQ under the same DAC correction (the
+    DacCorrection text, which the old DAQ's runs do not have). Across
+    either the two calibrations measure different things: the old DAQ
+    paired some readings with the wrong setpoint (Mode B), and a correction
+    moves every setpoint's platform voltage. Set against each other they
+    would differ with nothing wrong in either."""
     found = _RUN_NAME.search(path)
     if found is None or not os.path.isdir(directory):
+        return []
+    try:
+        with asdf.open(path, memmap=False) as af:
+            correction = af.tree.get('DacCorrection')
+    except (OSError, ValueError):
         return []
     number, calibrations = int(found.group(1)), []
     for run, other in _Numbered(directory):
@@ -127,6 +139,8 @@ def Earlier_Calibrations(path, directory, count=3):
             continue
         try:
             with asdf.open(other, memmap=False) as af:
+                if af.tree.get('DacCorrection') != correction:
+                    continue
                 calibrations.append((run, np.array(af.tree['CalSet'], dtype=float),
                                      np.array(af.tree['CalReadback'], dtype=float)))
         except (OSError, KeyError, ValueError, TypeError):

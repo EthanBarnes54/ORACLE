@@ -7,6 +7,7 @@ import time
 import numpy as np
 import pytest
 
+from cls_acquisition import acquisition
 from cls_acquisition.acquisition import Acquisition_Error, Rack_Link
 from cls_acquisition.hardware import mcc_dac
 from cls_acquisition.scan_plan import Scan_Plan
@@ -55,6 +56,17 @@ def test_Nothing_Starts_While_Something_Else_Runs(loop):
     assert not ok and why == "Cannot calibrate while the triggers are running."
     assert not _Scan(loop, [0.0, 1.0])[0]
     assert loop.Send('Stop_Triggering')[0]
+
+
+def test_Nothing_Can_Pulse_The_Bunch_Line_During_A_Calibration(loop):
+    # the bunch trigger and the calibration's readings stay apart: while the meter pairs
+    # readings with setpoints the PulseBlaster, and the buncher with it, stays off
+    assert loop.Send('Calibrate', setpoints=[0.0, 10.0])[0]
+    ok, why = loop.Send('Start_Triggering', timing=TIMING)
+    assert not ok and why == "Cannot start the triggers while a calibration is running."
+    assert not _Scan(loop, [0.0, 10.0])[0]
+    assert not loop.Pulses._Running
+    assert loop.Send('Stop_Calibration')[0]
 
 
 def test_Single_Scan_Tags_Each_Hit_With_Its_Setpoint_And_Ends_Marked(loop):
@@ -114,6 +126,74 @@ def test_Stop_Now_Lands_Within_A_Bunch(loop):
     assert _Scan(loop, [30.0, 31.0], scan_type='Sawtooth', bunches=100000)[0]
     assert loop.Send('Stop_Now')[0]
     assert loop.Packets(until_end=True, timeout=2.0)[-1] == ('scan_end', None)
+
+
+def _Rows(packets):
+    return np.vstack([rows for kind, rows in packets if kind == 'scan'] or [np.empty((0, 6))])
+
+
+def test_A_Trigger_Outage_Holds_The_Step_And_Says_Why(loop, monkeypatch):
+    # the collinear DAQ's D5: a read that timed out moved the scan on with no trigger behind it
+    monkeypatch.setattr(acquisition, 'NO_TRIGGER_S', 0.3)
+    assert _Scan(loop, [30.0, 31.0], bunches=40)[0]
+    time.sleep(0.1)
+    loop.Pulses.Stop()                              # the triggers stop reaching the tagger
+    time.sleep(0.1)                                 # what was in flight is read
+    held = loop.State.Bunches.value
+    time.sleep(1.5)
+    assert loop.State.Bunches.value == held         # no trigger, no bunch
+    assert loop.State.Scanning.is_set() and loop.State.Silent.value > 0.3
+    loop.Pulses.Start()
+    rows = _Rows(loop.Packets(until_end=True))
+    assert loop.State.Silent.value == 0.0 and loop.State.Skipped.value == 0
+    # each step holds its own forty bunches, every one a trigger the tagger saw
+    assert set(np.unique(rows[:, 2])) <= set(range(80))
+    assert np.all(rows[rows[:, 2] < 40, 1] == 30.0) and np.all(rows[rows[:, 2] >= 40, 1] == 31.0)
+
+
+def test_The_Outage_Sentence_Names_The_Likely_Cause():
+    sentence = acquisition.No_Trigger(12.4)
+    assert sentence.startswith("No trigger has reached the time tagger for 12 s")
+    assert "possible malfunction or misconnection of PulseBlaster channel 18" in sentence
+
+
+def test_A_Cycle_Longer_Than_A_Read_Still_Takes_Exactly_Its_Bunches(loop):
+    # with a dwell of up to 100 s, most reads end with no trigger yet; none is a bunch
+    slow = dict(TIMING, rep_rate_hz=1.0 / (3 * acquisition.READ_WAIT_S))
+    assert _Scan(loop, [30.0, 31.0], bunches=2, timing=slow)[0]
+    rows = _Rows(loop.Packets(until_end=True))
+    assert loop.State.Bunches.value == 4 and loop.State.Skipped.value == 0
+    assert np.all(rows[rows[:, 2] < 2, 1] == 30.0) and np.all(rows[rows[:, 2] >= 2, 1] == 31.0)
+
+
+def test_A_Read_Holding_Several_Triggers_Takes_Each_As_Its_Own_Bunch(loop, monkeypatch):
+    # the tagger hands over every trigger it has ready, so a loop that falls behind gets
+    # several in one read. Counted as one bunch, as the old DAQ counted reads, a step ran
+    # on more triggers than its quota and their hits shared one bunch number
+    take = loop.Loop._Take_Instructions
+    monkeypatch.setattr(loop.Loop, '_Take_Instructions',
+                        lambda wait=0.0: (time.sleep(0.02), take(wait)))
+    setpoints = [30.0, 31.0, 32.0]
+    assert _Scan(loop, setpoints, bunches=20)[0]            # a 5 ms cycle, read every 20 ms
+    rows = _Rows(loop.Packets(until_end=True))
+    state, leftover = loop.State, loop.Tagger.Drain()
+    assert state.Bunches.value == 60 and state.Skipped.value == 0
+    # every trigger the tagger saw was taken as one bunch or dropped, none merged
+    assert loop.Tagger._Bunch == state.Bunches.value + state.Dropped.value + leftover
+    for k, volts in enumerate(setpoints):
+        assert np.all(rows[(rows[:, 2] >= 20 * k) & (rows[:, 2] < 20 * (k + 1)), 1] == volts)
+
+
+def test_A_Stray_Stop_Calibration_Leaves_The_Dac_Alone(loop):
+    # the GUI stops any 'Calibrate' that failed, and a running scan is one reason it fails:
+    # with no calibration in progress the stop must not ramp the platform anywhere
+    assert loop.Send('Output_Volts', on=True)[0]
+    loop.State.Requested.value = 300.0
+    loop.Packets()
+    writes = len(loop.Writes)
+    assert loop.Send('Stop_Calibration', ramp_step_v=50.0, ramp_rate_v_s=1000.0) == (True, {})
+    loop.Packets()
+    assert len(loop.Writes) == writes and loop.State.Voltage.value == 300.0
 
 
 def test_Shutdown_Leaves_The_Platform_At_Zero(loop):

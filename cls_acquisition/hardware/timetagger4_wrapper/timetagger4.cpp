@@ -1,23 +1,27 @@
 // The TimeTagger4 wrapper ORACLE's driver (cls_acquisition/hardware/timetagger.py) reads.
 //
-// Date:    2026-10-27
-// Version: 0.2.0
+// Date:    2026-11-05
+// Version: 0.4.0
 // Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 //
 // The old DAQ's wrapper (collinear_daq_driver_wrap.cpp, by the collinear
-// group), with the same Python interface and three faults mended:
+// group), with the same Python interface and four faults mended:
 //
 //   * inputs 3 and 4 (C and D) took input 2's edge setting, not their own;
 //   * a hit's flags were never read, so the rollover marks the card sends
 //     past the 24-bit timestamp range were recorded as hits;
 //   * a card that failed to open, configure or start was reported only on
-//     the console, and the next call used a dead handle.
+//     the console, and the next call used a dead handle;
+//   * a trigger with no hits left no row, so a read holding several triggers
+//     (the card hands over every packet it has ready) could not say how many,
+//     and a reader counting reads as triggers lost step with the card.
 //
 // Every failure now raises a RuntimeError naming the step and the driver's
 // message. The module carries ORACLE_WRAPPER, so ORACLE knows the edges it
-// asks for are the edges it gets. getPackets() hands back (status, rows):
-// status 0 with rows of [packet number, input (from 1), timestamp in TDC
-// bins] for every trigger read, 1 when there is none yet.
+// asks for are the edges it gets (from 2, that every trigger is marked).
+// getPackets() hands back (status, rows): status 0 with, for every trigger
+// read, a mark [packet number, 0, 0] and then its hits [packet number, input
+// (from 1), timestamp in TDC bins]; 1 when there is none yet.
 //
 // Depends on: pybind11; the cronologic TimeTagger4 driver (TimeTagger4_interface.h,
 // xtdc4_driver_64). Build it with build_wrapper.py, as README.md says.
@@ -38,6 +42,7 @@ namespace py = pybind11;
 namespace {
 
 const int INPUTS = 4;
+const int MARK = 0;                         // a trigger's own row; inputs are 1 to INPUTS
 const int CHANNEL_MASK = 0xf;               // a hit's input, from 0
 const int FLAGS_SHIFT = 4;
 const int FLAGS_MASK = 0xf;
@@ -115,6 +120,8 @@ public:
             }
             const volatile unsigned int* data =
                 reinterpret_cast<const volatile unsigned int*>(p->data);
+            // one per trigger, hits or none: the reader counts triggers by these
+            rows.push_back({packet_number_, MARK, 0});
             for (int i = 0; i < hits; ++i) {
                 unsigned int hit = data[i];
                 int channel = hit & CHANNEL_MASK;
@@ -173,7 +180,7 @@ private:
 };
 
 PYBIND11_MODULE(timetagger4, m) {
-    m.attr("ORACLE_WRAPPER") = 1;
+    m.attr("ORACLE_WRAPPER") = 2;
     py::class_<Time_Tagger>(m, "TimeTagger")
         .def(py::init([](bool channel_0_used, bool channel_1_used, bool channel_2_used,
                          bool channel_3_used, bool trigger_rising, bool channel_0_rising,

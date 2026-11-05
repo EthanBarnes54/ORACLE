@@ -1,20 +1,26 @@
 """The scan plan: which setpoints a scan visits, and in what order.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-11-05
+Version: 0.4.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Each range's points are counted before they are laid down, so rounding
 in a floating-point step can never add one (an accumulated ``arange``
-made 464 points where 463 were planned). Where a range starts on the
-last point of the one before, that point is laid down once. The plan is
-checked when it is built, so a plan that exists is a valid one, and the
-same plan drives both the calibration and the scan.
+made 464 points where 463 were planned). A range that is not a whole
+number of steps ends on its last whole step, never past its stop: a
+count rounded to the nearest put the old DAQ's spurious point back for
+some ranges and not others (-450 to 477 V at 2 V ended at 478 V, -450 to
+475 V at 474 V). Where a range starts on the last point of the one
+before, that point is laid down once. The plan is checked when it is
+built, so a plan that exists is a valid one, and the same plan drives
+both the calibration and the scan.
 
 Depends on: numpy.
 """
 
 import numpy as np
+
+WHOLE_STEP = 1e-9                   # steps short of a whole one that still count as one
 
 
 class Scan_Plan_Error(ValueError):
@@ -34,7 +40,8 @@ class Scan_Plan():
 
         points = []
         for low, high in self.Ranges:
-            count = int(round((high - low) / self.Step)) + 1
+            # a step's float error must not lose the stop itself: (46.2 - 0) / 0.1 is 461.99..
+            count = int(np.floor((high - low) / self.Step + WHOLE_STEP)) + 1
             if count < 2:
                 raise Scan_Plan_Error(
                     f"The range {low:g} to {high:g} V holds fewer than two points "
