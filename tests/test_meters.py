@@ -228,6 +228,20 @@ def test_A_Streamed_Capture_Is_Read_Out_While_It_Runs():
     meter.Close()
 
 
+def test_A_Timed_Capture_Reads_At_The_Instants_Its_Timer_Sets(monkeypatch):
+    # the meter's timer is hardware; the simulation's thread is not, and on a loaded
+    # CI machine it woke late, smearing the cooler's ripple out of its spectrum
+    instants, sleep = [], time.sleep
+    monkeypatch.setattr(simulated.time, 'sleep', lambda s: sleep(s + 0.003))
+    meter, _ = _Meter(simulated.Keysight(lambda t: instants.append(t) or 1.0e-3))
+    meter.Capture(20, interval_s=0.002, aperture_s=0.0002)
+    meter.Arm()
+    meter.Fetch_When_Done(20, 5.0)
+    meter.Release()
+    meter.Close()
+    assert np.diff(instants[-20:]) == pytest.approx(0.002, abs=1e-9)
+
+
 def test_A_Meter_Is_Left_Reset_As_It_Closes():
     """As the bench tool leaves it, so the next program finds it at power-on."""
 

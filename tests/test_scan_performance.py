@@ -241,6 +241,21 @@ def test_A_Calibration_Is_Judged_As_DENIS_Fits_It():
     assert any(f.startswith('Calibration points at 0 V') for f in result['Flagged'])
 
 
+def test_Arithmetic_Dust_On_A_Clean_Calibration_Never_Stands_Out(monkeypatch):
+    # Windows' maths library left a noise-free line's residuals as dust of a few parts
+    # in 1e15 whose spread was smaller than its largest grains, and the robust rule
+    # put grains beside the true outlier at 0 V
+    cal_set = np.unique(PLAN)
+    readback = cal_set + np.where(cal_set == 0.0, 3.0, 0.0)
+    dust = np.where(np.arange(len(cal_set)) % 2, 1e-15, -1e-15)
+    dust[[1, len(dust) // 2 + 3, -2]] = 3e-14
+    zero = [int(np.flatnonzero(cal_set == 0.0)[0])]
+    monkeypatch.setattr(sp, 'NUMERICAL_SCATTER', 0.0)              # the rule as it was
+    assert len(sp._Suspects(cal_set, readback + dust)) > 1
+    monkeypatch.undo()
+    assert sp._Suspects(cal_set, readback + dust) == zero
+
+
 def test_A_Calibration_Is_Set_Against_The_Runs_Before_It():
     header, raw, monitor = _Run()
     same = [(6, PLAN, PLAN / 1000.0)]

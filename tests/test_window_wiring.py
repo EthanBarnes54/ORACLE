@@ -737,6 +737,9 @@ def test_A_Queued_Scan_Stopped_By_Hand_Stops_The_Queue(qapp, window):
     queue = _Queue(window, ([[20.0, 40.0]], 5), ([[40.0, 50.0]], 1))
     queue.Start_Button.click()
     assert Pump(qapp, lambda: window._Link.State.Scanning.is_set())
+    # Stop is live as the scan is: on Windows' CI a click before the next tick fell on a
+    # disabled button, and all five scans ran
+    assert window.Scan.Stop_Button.isEnabled()
     assert not queue.Add_Button.isEnabled()                 # held while the queue runs
     assert queue.Start_Button.text() == 'Stop queue after this scan'
     window.Scan.Stop_Button.click()

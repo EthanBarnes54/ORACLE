@@ -1,7 +1,7 @@
 """Scan performance: how the rack's behaviour during a run shaped its spectrum.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.4.2
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 A spectrum is counts against the scanning voltage, and every part of the
@@ -62,6 +62,8 @@ from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 FAIL, NA = 'FAIL', 'N/A'
 RANK = {NA: -1, PASS: 0, WARN: 1, FAIL: 2}
 VOLTAGE, TIMING, BEAM, SOURCES = 'Voltage scan', 'Timing', 'Beam and spectrum', 'Sources'
+
+NUMERICAL_SCATTER = 1e-9                # of a calibration's span: below it, no scatter at all
 
 # Every number the analysis decides on. A pair is (WARN above, FAIL above).
 TOLERANCES = {
@@ -538,7 +540,9 @@ def _Suspects(cal_set, readback):
         residuals = readback - (gain * cal_set + offset)
         used = residuals[keep]
         scatter = 1.4826 * float(np.median(np.abs(used - np.median(used))))
-        if scatter <= 0:
+        # a scatter a billionth of the span is arithmetic, not measurement: on a clean
+        # line, which points it puts beyond SuspectSigma depends on the maths library
+        if scatter <= NUMERICAL_SCATTER * max(float(np.ptp(readback)), 1.0):
             break
         new = {int(i) for i in np.flatnonzero(np.abs(residuals) > TOLERANCES['SuspectSigma']
                                               * scatter)} - excluded

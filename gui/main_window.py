@@ -1,7 +1,7 @@
 """ORACLE's main window and entry point.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.4.2
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
@@ -43,7 +43,7 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.4.1'
+__version__ = '0.4.2'
 
 import contextlib
 import ctypes
@@ -578,6 +578,9 @@ class Main_Window(QMainWindow):
         self.Shown_Label.setText(f"{os.path.basename(self._Run)}, live: written to its file "
                                  f"as it comes in")
         log.info("Run %d started: %s", pending['run'], self._Run)
+        # Stop is live the moment the scan is, not at the next tick: a click in between
+        # would otherwise fall on a disabled button and the scan run on
+        self._Show_State()
 
     def _End_Run(self):
         finished = self._Run

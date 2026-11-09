@@ -1,7 +1,7 @@
 """The simulated rack: a software bench the whole DAQ runs on without hardware.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.4.2
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Only the instruments are simulated. The acquisition loop, the DAC
@@ -42,6 +42,7 @@ Depends on: numpy; cls_acquisition.calibration, .keysight, .mcc_dac,
 .timetagger and cls_acquisition.triggers.
 """
 
+import inspect
 import queue
 import threading
 import time
@@ -127,9 +128,10 @@ class Platform():
             now = CLOCK()
             self._State[:] = [self._At(now), volts, now]
 
-    def Volts(self):
+    def Volts(self, t=None):
+        """At CLOCK time ``t``, or now."""
         with self._State.get_lock():
-            return self._At(CLOCK())
+            return self._At(CLOCK() if t is None else t)
 
     def _At(self, now):
         start, target, since = self._State[:]
@@ -163,7 +165,9 @@ class Converters():
 
 class Keysight():
     """A 3446xA as a VISA session sees it. ``source()`` is the voltage at its
-    input; ``noise_v`` its scatter per reading at a 200 us aperture."""
+    input, or ``source(t)`` at CLOCK time ``t`` if it takes one, as a timed
+    capture reads it; ``noise_v`` its scatter per reading at a 200 us
+    aperture."""
 
     DEFAULTS = {'TRIG:SOUR': 'IMM', 'TRIG:COUN': '1', 'SAMP:COUN': '1', 'SAMP:SOUR': 'IMM',
                 'SAMP:TIM': '0.001', 'VOLT:APER:ENAB': 'OFF', 'VOLT:DC:APER': '0.0002',
@@ -171,6 +175,7 @@ class Keysight():
 
     def __init__(self, source, noise_v=0.0):
         self._Source, self._Noise_V = source, noise_v
+        self._Timed = bool(inspect.signature(source).parameters)
         self._Rng = np.random.default_rng()
         self._Settings = dict(self.DEFAULTS)
         self._Errors = []
@@ -182,8 +187,8 @@ class Keysight():
             return float(self._Settings['VOLT:DC:APER'])
         return float(self._Settings['VOLT:DC:NPLC']) / 50.0
 
-    def _Reading(self):
-        value = self._Source()
+    def _Reading(self, t=None):
+        value = self._Source(t) if t is not None and self._Timed else self._Source()
         if self._Noise_V:
             value += self._Rng.normal(0.0, self._Noise_V * np.sqrt(
                 NOISE_APERTURE_S / self._Integration_S()))
@@ -260,10 +265,13 @@ class Keysight():
         interval = float(self._Settings['SAMP:TIM']) if timed else READ_TIME_S
         start = time.perf_counter()
         for i in range(self._Count('SAMP:COUN')):
-            time.sleep(max(start + i * interval - time.perf_counter(), 0.0))
+            due = start + i * interval
+            time.sleep(max(due - time.perf_counter(), 0.0))
             if self._Block is not block:
                 return
-            block.append(self._Reading())
+            # read at the instant the meter's timer sets, however late this thread
+            # woke: the analyses take a record as evenly spaced, as the meter's is
+            block.append(self._Reading(due))
 
     def clear(self):
         pass
@@ -273,14 +281,14 @@ class Keysight():
 
 
 def Line_Meter_Source(platform):
-    return lambda: platform.Volts() / DIVIDER
+    return lambda t=None: platform.Volts(t) / DIVIDER
 
 
 def Cooler_Meter_Source():
     start = CLOCK()
 
-    def cooler():
-        t = CLOCK()
+    def cooler(t=None):
+        t = CLOCK() if t is None else t
         volts = COOLER_V + COOLER_DRIFT_V_S * (t - start)
         volts += sum(a * np.sin(2.0 * np.pi * f * t) for f, a in COOLER_TONES)
         return volts / COOLER_DIVIDER
