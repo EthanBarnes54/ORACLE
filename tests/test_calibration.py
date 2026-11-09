@@ -57,8 +57,8 @@ class Fake_Rack():
         return {'Index': index + (index == self.Misconfirm), 'Volts': self.Plan.Setpoints[index],
                 'T_Command_Ns': self.T_Command}
 
-    def Step_Config(self):
-        self.Mode = 'stepping'
+    def Step_Config(self, nplc=None):
+        self.Mode, self.Nplc = 'stepping', nplc
 
     def Read_Settled(self, wait_s):
         self.Waits.append(wait_s)
@@ -219,6 +219,58 @@ class Stale_Meter(Fake_Rack):
         stamp, volts = super().Read_Settled(wait_s)
         self.Answers.append(volts)
         return stamp, self.Answers[max(len(self.Answers) - 1 - self.K, 0)]
+
+
+class Noisy_Meter(Stale_Meter):
+    """A meter whose readings scatter by ``sigma_v`` at the platform, and whose
+    answers trail its requests by ``k`` (0: healthy)."""
+
+    def __init__(self, plan, k, sigma_v, rng):
+        super().__init__(plan, k)
+        self.Sigma_V, self.Rng = sigma_v, rng
+
+    def Read_Settled(self, wait_s):
+        stamp, _ = Fake_Rack.Read_Settled(self, wait_s)
+        self.Answers.append((self.Plan.Setpoints[self.Index]
+                             + self.Rng.normal(0.0, self.Sigma_V)) / DIVIDER)
+        return stamp, self.Answers[max(len(self.Answers) - 1 - self.K, 0)]
+
+
+def test_The_Held_Check_Refuses_Two_In_Ten_Thousand_Healthy_Calibrations_At_Any_Noise():
+    """Its allowance is the readings' own scatter, so its false refusals are
+    t on 9 degrees of freedom whatever the integration: the rule, on a
+    million healthy calibrations, at steps too small for the half-step floor."""
+    rng = np.random.default_rng(11)
+    for sigma in (0.0069, 0.075):
+        last = rng.normal(0.0, sigma, 1000000)
+        held = rng.normal(0.0, sigma, (1000000, HELD))
+        scatter = held.std(axis=1, ddof=1)
+        allowed = np.maximum(THRESHOLDS['MaxHeldSteps'] * 0.001, THRESHOLDS['HeldSigma'] * scatter
+                             * np.sqrt(1.0 + 1.0 / HELD))
+        refused = np.mean(np.abs(last - held.mean(axis=1)) > allowed)
+        assert refused < 3e-4 and np.all(scatter < THRESHOLDS['MaxHeldScatterV'])
+
+
+def test_Whole_Cycle_Readings_Catch_A_Lag_Of_One_That_200_Us_Readings_Missed():
+    # 1 V steps: at the poll's 200 us (75 mV) the held readings' scatter set the allowance
+    # past the step more often than not; at NPLC 1 (7 mV) the half-step floor does
+    plan, rng = Scan_Plan([0], [20], 1), np.random.default_rng(12)
+    caught = {}
+    for sigma in (0.0069, 0.175):
+        verdicts = [_Verdict(Quality_Report(Run_Calibration(rack, rack, plan), plan), 'held')
+                    for rack in (Noisy_Meter(plan, 1, sigma, rng) for _ in range(200))]
+        caught[sigma] = verdicts.count(REJECT) / len(verdicts)
+        healthy = [_Verdict(Quality_Report(Run_Calibration(rack, rack, plan), plan), 'held')
+                   for rack in (Noisy_Meter(plan, 0, sigma, rng) for _ in range(200))]
+        assert healthy.count(REJECT) == 0
+    assert caught[0.0069] == 1.0 and caught[0.175] < 0.7
+
+
+def test_A_Calibration_Notes_Its_Integration_And_How_Long_It_Took(plan):
+    rack = Fake_Rack(plan)
+    cal = Run_Calibration(rack, rack, plan, nplc=1)
+    assert rack.Nplc == 1 and cal.Nplc == 1 and cal.Duration_S > 0.0
+    assert Run_Calibration(rack, rack, plan).Nplc is None and rack.Nplc is None
 
 
 @pytest.mark.parametrize('k', [1, 3, 12])

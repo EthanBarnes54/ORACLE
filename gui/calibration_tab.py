@@ -66,7 +66,8 @@ class Calibration_Tab(QWidget):
             "commanded. A working high-voltage chain lies on a straight line of unit slope.",
             "Each setpoint is written to the DAC and, once the amplifier has settled, the line "
             "meter reads the platform through the scan divider (1000:1 unless the settings "
-            "say otherwise); a reading taken before the step had settled is repeated. The "
+            "say otherwise), integrating whole power line cycles so the mains on the divider "
+            "averages out; a reading taken before the step had settled is repeated. The "
             "run's calibration is the straight line fitted to these points."))
         self.Difference_Plot = plots.Plot('Readback deviation from setpoint', set_axis,
                                           ('Readback − setpoint', 'V'), (

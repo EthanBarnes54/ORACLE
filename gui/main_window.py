@@ -154,6 +154,7 @@ class Main_Window(QMainWindow):
         self._Wanted = None             # the run Scan Performance is to show
         self._Laser = config['laser']
         self._Rolling_S = float(config['cooler']['rolling_s'])
+        self._Nplc = config['calibration']['nplc']
         self._Channels = config['instruments']['tagger_channels']
         self._Monitor = []              # monitor rows of the run, not yet written
         self._Shown_Timing = None       # the shown run's trigger timing; None: the boxes'
@@ -590,7 +591,8 @@ class Main_Window(QMainWindow):
                             'Entered': pending['setup']['PmtHv']},
                   'TaggerLevels': self._Tagger_Levels,
                   # the window the analysis takes the cooler's rolling mean over
-                  'CoolerRollingS': self._Rolling_S}
+                  'CoolerRollingS': self._Rolling_S,
+                  'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S}}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
@@ -799,7 +801,7 @@ class Main_Window(QMainWindow):
         def job(progress, stopped):
             cal = calibration.Run_Calibration(self._Link, self._Line, plan,
                                               lambda *point: progress(point), self._Settle_Model,
-                                              self._Scan_Divider)
+                                              self._Scan_Divider, self._Nplc)
             return cal, calibration.Quality_Report(cal, plan)
 
         self._Worker = Job_Worker(job, self)

@@ -9,9 +9,10 @@ The acquisition process owns the DAC, the PulseBlaster and the tagger
 (:meth:`Rack.Open_Meters`), since calibration times the line meter's
 readings on the GUI's side. The drivers import their vendor libraries
 only when the hardware rack is opened, so a simulated rack needs none.
-A platform limit set above the amplifier's rating, or a divider ratio
-or the cooler's rolling window that is not a positive number, is
-refused before anything opens.
+A platform limit set above the amplifier's rating, a divider ratio or
+the cooler's rolling window that is not a positive number, or power
+line cycles the line meter does not take, is refused before anything
+opens.
 
 :meth:`Rack.Identity` is the rack as it names itself (the meters'
 *IDN?, the DAC board's unique ID, the tagger's wrapper) and as the
@@ -50,6 +51,12 @@ class Rack():
             raise ValueError(f"The settings give the cooler's rolling mean a window of "
                              f"{window!r}; it must be a positive number of seconds (cooler: "
                              f"rolling_s).")
+        nplc = settings['calibration']['nplc']
+        if nplc not in keysight.NPLC_CHOICES:
+            raise ValueError(f"The settings ask for calibration readings of {nplc!r} power "
+                             f"line cycles; the 34465A takes "
+                             f"{', '.join(f'{n:g}' for n in keysight.NPLC_CHOICES)} "
+                             f"(calibration: nplc).")
         self.Scan_Divider = float(self._Hardware['scan_divider']['ratio'])
         self.Cooler_Divider = float(self._Hardware['cooler_divider']['ratio'])
         self._Correction = settings['dac_correction'] or mcc_dac.CORRECTION
@@ -66,7 +73,7 @@ class Rack():
         if self.Simulated:
             line = lambda _: simulated.Keysight(
                 simulated.Line_Meter_Source(self._Platform, self.Scan_Divider),
-                simulated.LINE_NOISE_V)
+                simulated.LINE_NOISE_V, simulated.LINE_MAINS_V)
             cooler = lambda _: simulated.Keysight(
                 simulated.Cooler_Meter_Source(self.Cooler_Divider), simulated.COOLER_NOISE_V)
         else:

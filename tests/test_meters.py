@@ -259,3 +259,46 @@ def test_A_Meter_Is_Left_Reset_As_It_Closes():
     inst.Written.clear()
     meter.Close()
     assert inst.Written == ['ABOR', '*RST', '*CLS']
+
+
+def test_Calibration_Readings_Integrate_Whole_Mains_Cycles_And_The_Poll_Returns_After():
+    sent = []
+
+    class Recording(simulated.Keysight):
+
+        def write(self, command):
+            sent.append(command.strip().upper())
+            super().write(command)
+
+    meter, inst = _Meter(Recording(lambda: 1.0e-3))
+    meter.Step_Config(nplc=1)
+    assert 'VOLT:APER:ENAB OFF' in sent and 'VOLT:DC:NPLC 1' in sent
+    assert inst._Integration_S() == pytest.approx(0.02) and meter._Integration_S == 0.02
+    meter.Read_Settled(0.0)
+    meter.Release()
+    # the poll reads at its own 200 us aperture again
+    assert inst._Settings['VOLT:APER:ENAB'] == 'ON' and inst._Integration_S() == 0.0002
+    meter.Close()
+
+
+def test_A_Meter_That_Does_Not_Take_The_Integration_Is_Refused():
+    meter, inst = _Meter(Counting_Keysight(ignore='VOLT:DC:NPLC'))
+    with pytest.raises(Scpi_Error, match="VOLT:DC:NPLC 10, where 0 and 1 were sent"):
+        meter.Step_Config(nplc=1)
+    meter.Release()
+    assert meter.Mode == 'continuous'
+    meter.Close()
+
+
+@pytest.mark.parametrize('integration, expected_v', [
+    (('ON', '0.0002'), 0.075),      # the bench's 0.069 V noise and 0.041 V of mains
+    (('OFF', '0.2'), 0.031),        # a fifth of a cycle still catches 94 % of it
+    (('OFF', '1'), 0.0069),         # a whole cycle takes it out
+    (('OFF', '10'), 0.0022)])
+def test_The_Simulated_Line_Meter_Scatters_As_Its_Integration_Says(integration, expected_v):
+    inst = simulated.Keysight(lambda: 0.0, simulated.LINE_NOISE_V, simulated.LINE_MAINS_V)
+    inst._Settings['VOLT:APER:ENAB'], value = integration
+    inst._Settings['VOLT:DC:APER' if integration[0] == 'ON' else 'VOLT:DC:NPLC'] = value
+    times = np.random.default_rng(2).uniform(0.0, 1.0, 20000)
+    readings = np.array([inst._Reading(t) for t in times]) * 1000.0
+    assert np.std(readings) == pytest.approx(expected_v, rel=0.1)

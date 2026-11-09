@@ -87,6 +87,9 @@ DEFAULTS = {
         'cooler_divider': {'model': '', 'serial': '', 'ratio': 10000.0, 'ppm': 100.0},
         'amplifier': {'model': 'Trek 609E-6', 'serial': ''},
     },
+    # each calibration reading integrates this many power line cycles (20 ms each),
+    # which takes out the mains on the divider; the poll keeps its 200 us aperture
+    'calibration': {'nplc': 1},
     # the cooler as the analysis takes it: the rolling mean of its readings over this
     # window (A. Raggio, November 2026), recorded with each run; Scan Performance
     # judges a run by it and plots it over the readings

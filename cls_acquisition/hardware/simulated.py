@@ -20,8 +20,10 @@ found there:
   setpoint on knots 50 V apart: each converter's gain and integral
   non-linearity, and the amplifier's offset of about -1 V, which is
   where 0 V sits whichever converter was driven last;
-* the line meter scatters by 0.065 V at the platform at a 200 us
-  aperture, less as the integration lengthens;
+* the line meter scatters by 0.069 V at the platform at a 200 us
+  aperture, falling as the root of the integration time, and picks up
+  0.041 V of the 50 Hz mains, which a reading averages over its
+  integration, so whole power line cycles take it out;
 * the cooler sits at 29884.8 V with the mains ripple and harmonics the
   cooler monitor recorded, a slow drift, and 0.17 V of noise.
 
@@ -51,7 +53,7 @@ import numpy as np
 
 from cls_acquisition import triggers
 from cls_acquisition.calibration import DIVIDER
-from cls_acquisition.hardware.keysight import COOLER_DIVIDER, OVERLOAD, RANGE_V
+from cls_acquisition.hardware.keysight import COOLER_DIVIDER, MAINS_HZ, OVERLOAD, RANGE_V
 from cls_acquisition.hardware.mcc_dac import AMPLIFIER_GAIN, CH_NEG, CH_POS
 from cls_acquisition.hardware.timetagger import BIN_US, MARK, Check_Window
 
@@ -82,9 +84,13 @@ ERROR_V = (
 )
 END_SLOPES = (-0.000490, -0.000613)     # d(readback - set)/d(set) past each end
 
-# per reading at a 200 us aperture, in volts at each meter's input
+# per reading at a 200 us aperture, in volts at each meter's input; the line
+# meter's from the bench's settled steps (the 1 kV and 2 kV traces, 0.3 s each),
+# where a 50 Hz fit leaves 0.069 V and takes out 0.041 V of mains, the 0.075 V
+# a run's readback scatters by
 NOISE_APERTURE_S = 0.0002
-LINE_NOISE_V = 0.065 / DIVIDER
+LINE_NOISE_V = 0.069 / DIVIDER
+LINE_MAINS_V = 0.041 / DIVIDER
 COOLER_NOISE_V = 0.17 / COOLER_DIVIDER
 READ_TIME_S = 0.002                 # one back-to-back reading and the bus
 STREAM_MAX = 1000000                # readings the meter takes in one streamed record
@@ -167,14 +173,15 @@ class Keysight():
     """A 3446xA as a VISA session sees it. ``source()`` is the voltage at its
     input, or ``source(t)`` at CLOCK time ``t`` if it takes one, as a timed
     capture reads it; ``noise_v`` its scatter per reading at a 200 us
-    aperture."""
+    aperture, and ``mains_v`` the amplitude of the mains it picks up, each
+    reading the mean of it over its integration."""
 
     DEFAULTS = {'TRIG:SOUR': 'IMM', 'TRIG:COUN': '1', 'SAMP:COUN': '1', 'SAMP:SOUR': 'IMM',
                 'SAMP:TIM': '0.001', 'VOLT:APER:ENAB': 'OFF', 'VOLT:DC:APER': '0.0002',
                 'VOLT:DC:NPLC': '10', 'VOLT:ZERO:AUTO': 'ON', 'FORM:DATA': 'ASC'}
 
-    def __init__(self, source, noise_v=0.0):
-        self._Source, self._Noise_V = source, noise_v
+    def __init__(self, source, noise_v=0.0, mains_v=0.0):
+        self._Source, self._Noise_V, self._Mains_V = source, noise_v, mains_v
         self._Timed = bool(inspect.signature(source).parameters)
         self._Rng = np.random.default_rng()
         self._Settings = dict(self.DEFAULTS)
@@ -185,13 +192,19 @@ class Keysight():
     def _Integration_S(self):
         if self._Settings['VOLT:APER:ENAB'] == 'ON':
             return float(self._Settings['VOLT:DC:APER'])
-        return float(self._Settings['VOLT:DC:NPLC']) / 50.0
+        return float(self._Settings['VOLT:DC:NPLC']) / MAINS_HZ
 
     def _Reading(self, t=None):
         value = self._Source(t) if t is not None and self._Timed else self._Source()
+        integration = self._Integration_S()
         if self._Noise_V:
             value += self._Rng.normal(0.0, self._Noise_V * np.sqrt(
-                NOISE_APERTURE_S / self._Integration_S()))
+                NOISE_APERTURE_S / integration))
+        if self._Mains_V:
+            # the mains' mean over the integration from t: none over whole cycles
+            start, w = (CLOCK() if t is None else t), 2.0 * np.pi * MAINS_HZ
+            value += self._Mains_V * (np.cos(w * start) - np.cos(w * (start + integration))) / (
+                w * integration)
         return OVERLOAD if abs(value) > 1.2 * RANGE_V else value
 
     def write(self, command):
@@ -253,6 +266,10 @@ class Keysight():
             return f"{float(STREAM_MAX):+.8E}\n"
         if head == 'SAMP:TIM?':
             return f"{float(self._Settings['SAMP:TIM']):+.8E}\n"
+        if head == 'VOLT:APER:ENAB?':
+            return ('1' if self._Settings['VOLT:APER:ENAB'] == 'ON' else '0') + '\n'
+        if head in ('VOLT:DC:NPLC?', 'VOLT:DC:APER?'):
+            return f"{float(self._Settings[head[:-1]]):+.8E}\n"
         if head == 'SAMP:TIM? MIN':
             return f"{self._Integration_S() + 2e-5:+.8E}\n"
         self._Errors.append('-113,"Undefined header"')

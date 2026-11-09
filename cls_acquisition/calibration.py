@@ -40,11 +40,21 @@ waits that long: the first, from where the platform stood, and the
 first of each range after a gap are the largest. The wait and the stamp
 test use the same number for each point, and the gate checks it again.
 
+Each reading integrates over whole power line cycles (``nplc``, 1 by
+default, settings: calibration), which takes out the mains the divider
+picks up: a 200 us reading caught it at a random phase, 76 mV a point
+in a run against about 5 mV on the bench (A. Raggio, November 2026). A
+cycle costs 20 ms a point. Until cls_tools applies the bench table,
+every setpoint is still read: its polynomial through sparse points
+would land on the converters' sawtooth.
+
 Depends on: numpy.
 """
 
 import contextlib
 import logging
+import time
+from functools import partial
 
 import numpy as np
 
@@ -70,14 +80,18 @@ THRESHOLDS = {
     # the last setpoint read again, held, after the calibration: four SETTLEs on,
     # ten readings, against which the calibration's own last reading may sit half
     # a step off (a lag of one is a whole step) or six times their scatter, if
-    # more (t on 9 degrees of freedom: 2e-4 of healthy calibrations)
+    # more (t on 9 degrees of freedom: 2e-4 of healthy calibrations). Both are set
+    # by the readings' own scatter and the step, so they hold at any integration:
+    # at NPLC 1 (7 mV) a lag of one is caught at any step above 0.1 V, where at
+    # 200 us (75 mV) it was missed at 1 V steps more often than not
     'HeldWaitS': 0.2,
     'HeldReadings': 10,
     'MaxHeldSteps': 0.5,
     'HeldSigma': 6.0,
-    # and they must agree with each other: the bench's readings scatter 0.065 V and
-    # the archive's healthy ones 0.175 V about their line, but answers that trail
-    # their requests read a held setpoint as a ramp, three steps rms
+    # and they must agree with each other: the bench's readings scatter 0.075 V at
+    # 200 us and 7 mV at NPLC 1, the archive's healthy ones 0.175 V about their line,
+    # but answers that trail their requests read a held setpoint as a ramp, three
+    # steps rms
     'MaxHeldScatterV': 0.5,
 }
 
@@ -102,15 +116,18 @@ class Calibration():
     at the meter) and the divider that scales them to the platform, how
     long after its write each reading was taken and how long its jump
     needed to settle, how many setpoints had to be read again, the last
-    setpoint's readings held, and the DAC correction in force."""
+    setpoint's readings held, the DAC correction in force, the power line
+    cycles each reading integrated (None: the meter's poll aperture), and
+    how long the calibration took."""
 
     def __init__(self, steps, readings, stamps_ns, settle_ns, retried, dac, held,
-                 divider=DIVIDER):
+                 divider=DIVIDER, nplc=None, duration_s=None):
         self.Indices = np.array([s['Index'] for s in steps], dtype=int)
         self.Commanded = np.array([s['Volts'] for s in steps], dtype=float)
         self.Channels = np.array([s.get('Channel', -1) for s in steps], dtype=int)
         self.Codes = np.array([s.get('Code', -1) for s in steps], dtype=int)
         self.Divider = float(divider)
+        self.Nplc, self.Duration_S = nplc, duration_s
         self.Readings = np.array(readings, dtype=float)
         self.Gaps_Ns = (np.array(stamps_ns, dtype=np.int64)
                         - np.array([s['T_Command_Ns'] for s in steps], dtype=np.int64))
@@ -171,13 +188,15 @@ def Calibrating(link, meter, setup, setpoints, stop=None):
     meter.Release()
 
 
-def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider=DIVIDER):
+def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider=DIVIDER,
+                    nplc=None):
     """Calibrate ``plan`` by step and confirm; returns a :class:`Calibration`.
 
     ``link`` is the acquisition process, which alone drives the DAC;
     ``meter`` is the line meter, on a divider of ``divider`` platform volts
-    per volt; ``progress(index, volts, reading)`` is called after each
-    kept point. Every exit leaves the meter on its live poll and the
+    per volt, each reading integrating ``nplc`` power line cycles (None:
+    its poll aperture); ``progress(index, volts, reading)`` is called after
+    each kept point. Every exit leaves the meter on its live poll and the
     acquisition process out of calibration. A point waits
     SETTLE, or as long as ``settle_model`` says its jump takes if that is
     longer: the first, from where the platform stood, and the first of a
@@ -199,8 +218,10 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider
     needs_s = [max(THRESHOLDS['SettleS'], Settle_For(settle_model, jump)) for jump in jumps]
     steps, readings, stamps, needs_ns = [], [], [], []
     retried = re_requests = 0
+    started = time.perf_counter()
+    setup = partial(meter.Step_Config, nplc) if nplc else meter.Step_Config
 
-    with Calibrating(link, meter, meter.Step_Config, plan.Setpoints) as dac:
+    with Calibrating(link, meter, setup, plan.Setpoints) as dac:
         for index in range(len(plan)):
             step = link.Send('Calibration_Step', index=index)
             volts = step['Volts']
@@ -248,7 +269,8 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider
         # the DAC still holds the last setpoint, and the loop leaves it there
         held = [meter.Read_Settled(THRESHOLDS['HeldWaitS'] if i == 0 else 0.0)[1]
                 for i in range(THRESHOLDS['HeldReadings'])]
-    return Calibration(steps, readings, stamps, needs_ns, retried, dac, held, divider)
+    return Calibration(steps, readings, stamps, needs_ns, retried, dac, held, divider, nplc,
+                       time.perf_counter() - started)
 
 
 def Line_Fit(x, y):

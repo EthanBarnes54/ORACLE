@@ -144,6 +144,14 @@ def test_A_Rolling_Window_That_Is_Not_A_Positive_Time_Is_Refused():
             Rack(config, multiprocessing.get_context('spawn'))
 
 
+def test_Calibration_Readings_Of_A_Length_The_Meter_Does_Not_Take_Are_Refused():
+    assert settings.DEFAULTS['calibration']['nplc'] == 1
+    for nplc in (0.5, 0, '1'):
+        config = settings._Merged(settings.DEFAULTS, {'calibration': {'nplc': nplc}})
+        with pytest.raises(ValueError, match="calibration: nplc"):
+            Rack(config, multiprocessing.get_context('spawn'))
+
+
 def test_Pvs_With_No_Name_Are_Not_Asked_Of_Epics(monkeypatch):
     made = []
     epics = types.ModuleType('epics')

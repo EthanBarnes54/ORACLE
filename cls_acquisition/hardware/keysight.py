@@ -32,6 +32,14 @@ its power-on state, not part way through a capture. Every reading is checked for
 overload (+-9.9E37) and invalid (9.91E37) markers, so a bad reading
 raises instead of passing for a voltage.
 
+A calibration's readings integrate over whole power line cycles (NPLC),
+not the poll's 200 us aperture, which catches the mains pickup on the
+divider at a random phase: on the bench that is 0.041 V of 50 Hz on top
+of 0.069 V of noise at the platform, about the 76 mV a run's readback
+scatters by (A. Raggio, November 2026), against about 7 mV at NPLC 1.
+The integration is read back before the first reading, as the trigger
+is, and the poll's aperture is set again once the calibration ends.
+
 A capture is armed (INIT) and fetched (FETC?) in two transactions, so
 the caller can change the voltage while the meter is sampling: that is
 how a step response is caught. A capture on the meter's sample timer
@@ -61,6 +69,10 @@ LINE_CONFIG = ("CONF:VOLT:DC 10,0.00003", "VOLT:APER:ENAB ON", "VOLT:DC:APER 200
 COOLER_CONFIG = ("CONF:VOLT:DC 10,0.00003", "VOLT:APER:ENAB ON", "VOLT:DC:APER 500E-06",
                  "VOLT:IMP:AUTO ON", "SAMP:COUN 1")
 RANGE_V = 10.0                      # both meters' fixed range; they read to 120 % of it
+MAINS_HZ = 50.0                     # one power line cycle is 20 ms at JYFL
+# the 34465A's integrations in power line cycles, without the DIG option's finer ones;
+# below one, a reading still catches the mains
+NPLC_CHOICES = (0.02, 0.06, 0.2, 1, 10, 100)
 # cooler platform volts per volt at its meter, unless the settings say otherwise
 # (hardware: cooler_divider), and for every run that does not record its own
 COOLER_DIVIDER = 10000.0
@@ -360,33 +372,46 @@ class Line_Meter(_Meter):
 
     def __init__(self, session):
         super().__init__(session, LINE_CONFIG)
+        self._Integration_S = 0.0       # the stepping readings' integration, past the wait
 
-    def Step_Config(self):
+    def Step_Config(self, nplc=None):
         """Single readings on command: immediate trigger, one sample, no
-        delay, so a reading's stamp is when it was taken. Every setting is
-        read back and the error queue drained before the first reading."""
+        delay, so a reading's stamp is when it was taken, each integrating
+        ``nplc`` power line cycles (None: the poll's aperture). Every setting
+        is read back and the error queue drained before the first reading."""
         self._Move('stepping')
 
         def config(inst):
             inst.Clear()
             inst.Write("*CLS")
-            for command in ("TRIG:SOUR IMM", "TRIG:COUN 1", "SAMP:COUN 1", "TRIG:DEL 0"):
+            integration = (("VOLT:APER:ENAB OFF", f"VOLT:DC:NPLC {nplc:g}") if nplc else ())
+            for command in (*integration, "TRIG:SOUR IMM", "TRIG:COUN 1", "SAMP:COUN 1",
+                            "TRIG:DEL 0"):
                 inst.Write(command)
             inst.Query("*OPC?")
             source = inst.Query("TRIG:SOUR?").upper()
             count = int(float(inst.Query("TRIG:COUN?")))
             samples = int(float(inst.Query("SAMP:COUN?")))
+            if nplc:
+                aperture = int(float(inst.Query("VOLT:APER:ENAB?")))
+                cycles = float(inst.Query("VOLT:DC:NPLC?"))
             self._Refuse_On(inst.Errors(), "rejected the stepping configuration")
             if not source.startswith('IMM') or count != 1 or samples != 1:
                 raise Scpi_Error(f"The line meter did not take the stepping configuration: "
                                  f"TRIG:SOUR reads {source}, TRIG:COUN {count} and SAMP:COUN "
                                  f"{samples}, where IMM, 1 and 1 were sent.")
+            if nplc and (aperture or not np.isclose(cycles, nplc)):
+                raise Scpi_Error(f"The line meter did not take the calibration's integration: "
+                                 f"it reads VOLT:APER:ENAB {aperture} and VOLT:DC:NPLC "
+                                 f"{cycles:g}, where 0 and {nplc:g} were sent.")
+            return nplc / MAINS_HZ if nplc else 0.0
 
-        self._Session.Transaction(config)
+        self._Integration_S = self._Session.Transaction(config)
 
     def Read_Settled(self, wait_s):
         """Wait ``wait_s``, then take one reading: ``(stamp_ns, volts)``, the
-        stamp from perf_counter_ns just before READ? goes out.
+        stamp from perf_counter_ns just before READ? goes out, the reading
+        integrating after it.
 
         READ? is a synchronous query, so a reading the caller discards leaves
         nothing behind in the instrument.
@@ -401,7 +426,8 @@ class Line_Meter(_Meter):
             reply = inst.Query("READ?")
             return stamp, reply, inst.Errors()
 
-        stamp, reply, errors = self._Session.Transaction(read, timeout=wait_s + READ_TIMEOUT_S)
+        stamp, reply, errors = self._Session.Transaction(
+            read, timeout=wait_s + self._Integration_S + READ_TIMEOUT_S)
         self._Refuse_On(errors, "reported errors on a calibration reading")
         values = Readings(reply, self._Session.Resource, 'a calibration reading')
         if len(values) != 1:

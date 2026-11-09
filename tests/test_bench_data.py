@@ -250,7 +250,16 @@ def test_The_Simulated_Cooler_And_Line_Meter_Are_The_Benchs():
     for harmonic in (1, 3):
         peak = next(p for p in cooler['peaks'] if p['mains_harmonic'] == harmonic)
         assert tones[50.0 * harmonic] == pytest.approx(peak['amplitude_v'], abs=0.005)
-    # the line meter's scatter at a 200 us aperture, from the bench's pre-step baselines
-    baselines = _Load('settle.npz')['hv_v'][:, :80]
-    scatter = np.median(np.std(baselines, axis=1))
-    assert simulated.LINE_NOISE_V * 1000 == pytest.approx(scatter, rel=0.2)
+    # the line meter at a 200 us aperture, from the last 0.3 s of each bench step, long
+    # settled: the 50 Hz it picks up, and the noise a fit of it leaves
+    d = _Load('settle.npz')
+    t = float(d['interval_s']) * np.arange(600)
+    fit = np.column_stack([np.ones_like(t), t, np.sin(2 * np.pi * 50 * t),
+                           np.cos(2 * np.pi * 50 * t)])
+    mains, noise = [], []
+    for trace in d['hv_v']:
+        coefficients, *_ = np.linalg.lstsq(fit, trace[-600:], rcond=None)
+        mains.append(np.hypot(*coefficients[2:]))
+        noise.append(np.std(trace[-600:] - fit @ coefficients))
+    assert simulated.LINE_NOISE_V * 1000 == pytest.approx(np.median(noise), rel=0.05)
+    assert simulated.LINE_MAINS_V * 1000 == pytest.approx(np.median(mains), rel=0.05)
