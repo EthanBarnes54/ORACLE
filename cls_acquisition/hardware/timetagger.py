@@ -1,34 +1,23 @@
 """The cronologic TimeTagger4, through the rack's compiled wrapper (timetagger4).
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A read hands over every trigger the card has ready, several if the
-reader fell behind, as rows of [trigger, channel, time]: the trigger is
-the card's own number for it, channels count from 1 and times are in
-TDC bins of 500 ps, which this module turns into microseconds. Each
-trigger also has one row of its own on channel MARK, hits or none, so
-the loop counts triggers by the card's numbers, never by its reads (the
-old DAQ counted reads, a second counter joined to the card's by
-position). No trigger within the timeout is None.
+A read hands over every trigger the card has ready as rows of [trigger,
+channel, time]: the card's own number, inputs from 1, times turned from
+500 ps bins into microseconds, and a MARK row per trigger, so the loop
+counts triggers by the card's numbers, never by its reads. No trigger
+within the timeout is None.
 
-Four faults in the old DAQ's wrapper (collinear_daq_driver_wrap.cpp)
-change what is recorded and cannot be fixed from Python. Inputs 3 and 4
-take input 2's edge instead of their own, so with the rack's thresholds
-the UV PMTs are timed on their falling edge. It never reads a hit's
-flags, so the rollover marks the card sends past the 24-bit timestamp
-range would be recorded as hits. A card that fails to open is reported
-only on the console. And it marks no trigger, so a trigger with no hits
-leaves no row: this module numbers the old wrapper's triggers from its
-packet numbers, which count empty ones too, and only a read holding
-nothing but empty triggers is taken for one. ORACLE keeps every window
-inside the timestamp range, and says at start-up what the old wrapper
-gets wrong; the corrected wrapper, built from
-cls_acquisition/hardware/timetagger4_wrapper, mends all four and marks
-itself ORACLE_WRAPPER 2. Which wrapper took a run is part of its record
-(:attr:`Time_Tagger.Identity`), as the edges it timed hang on it; the
-wrapper does not give the card's serial.
+The old DAQ's wrapper has four faults Python cannot mend: inputs 3 and 4
+take input 2's edge, hit flags are never read (rollover marks become
+hits), a failed open is only printed, and no trigger is marked (this
+module rebuilds marks from its packet numbers). ORACLE keeps every window
+inside the timestamp range and warns of the old wrapper at start-up; the
+corrected one (timetagger4_wrapper) mends all four and marks itself
+ORACLE_WRAPPER 2. Which wrapper took a run is in its record
+(:attr:`Time_Tagger.Identity`); the wrapper gives no card serial.
 
 Depends on: numpy; timetagger4, from the folder settings name
 (instruments: tagger_driver) or the import path.

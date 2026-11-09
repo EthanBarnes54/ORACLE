@@ -1,55 +1,29 @@
 """The two Keysight 34465A meters: the line meter on the HV divider, and the cooler's.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Both are polled on their owner thread for the display, and both are a
-small state machine, so an illegal move is refused rather than half
-done: 'continuous' while polled, 'capturing' while a hardware
-calibration takes timed readings, and 'idle' between. The line meter
-also has 'stepping', for a calibration's single readings on command.
-Neither stepping nor capturing goes straight back to continuous; the way
-back is :meth:`_Meter.Release`, through idle, from any mode and as often
-as it is called, and it sets the meter up afresh. The poll reads only in
-'continuous' and checks that on the owner thread, so nothing can land
-between the check and its READ?.
+Each meter is polled on its owner thread for the display, and is a small
+state machine ('continuous', 'capturing', 'idle', and for the line meter
+'stepping'), so an illegal move is refused rather than half done; the
+way back is :meth:`_Meter.Release`, through idle, safe to repeat.
 
-Every reading is taken on command, in every mode, and never on the bunch
-trigger. The line meter's trigger input is wired to PulseBlaster channel
-17, which releases the buncher: the old DAQ gated its calibration burst
-on it, so the meter sampled on the bunch clock while the software
-stepped the DAC on its own, and the two slipped apart (Mode B). Each mode
-reads the trigger source back and refuses a meter that is not on
-immediate, rather than trust the command was taken.
+Every reading is taken on command, never on the bunch trigger: the line
+meter's trigger input is wired to PulseBlaster channel 17 (the buncher's
+release), on which the old DAQ's meter sampled while the software stepped
+the DAC on its own clock (Mode B). Each mode reads TRIG:SOUR back and
+refuses anything but IMM. Calibration readings integrate whole power line
+cycles (NPLC), read back too, which takes out the 50 Hz the divider picks
+up (0.041 V on the bench); the poll keeps its 200 us aperture.
 
-A meter is reset when it is opened (another program, the bench tool or
-the old DAQ, may have left it streaming, in binary or on another
-trigger) and must answer *IDN? as a 3446x or 3447x; its *OPT? says how
-many readings its memory holds. It is reset again when it is closed, as
-the bench tool leaves it, so whichever program opens it next finds it in
-its power-on state, not part way through a capture. Every reading is checked for the meter's
-overload (+-9.9E37) and invalid (9.91E37) markers, so a bad reading
-raises instead of passing for a voltage.
-
-A calibration's readings integrate over whole power line cycles (NPLC),
-not the poll's 200 us aperture, which catches the mains pickup on the
-divider at a random phase: on the bench that is 0.041 V of 50 Hz on top
-of 0.069 V of noise at the platform, about the 76 mV a run's readback
-scatters by (A. Raggio, November 2026), against about 7 mV at NPLC 1.
-The integration is read back before the first reading, as the trigger
-is, and the poll's aperture is set again once the calibration ends.
-
-A capture is armed (INIT) and fetched (FETC?) in two transactions, so
-the caller can change the voltage while the meter is sampling: that is
-how a step response is caught. A capture on the meter's sample timer
-uses the interval the meter says it set, never the one asked for, which
-it raises to its minimum for the integration time. A streamed capture
-is read out and erased while it runs (R?), so it can be longer than the
-meter's memory.
-
-A poll that fails logs once and shows NaN until the meter answers again;
-it never stops polling.
+A meter is reset as it opens and as it closes, must answer *IDN? as a
+3446x or 3447x, and every reading is checked for the overload (+-9.9E37)
+and invalid (9.91E37) markers. A capture is armed (INIT) and fetched
+(FETC?) in two transactions, so the voltage can change meanwhile; on the
+meter's timer it uses the interval the meter set, read back; streamed
+(R?) it can outlast the meter's memory. A failing poll logs once and
+shows NaN until the meter answers again.
 
 Depends on: numpy; .visa_session; cls_acquisition.calibration.
 """

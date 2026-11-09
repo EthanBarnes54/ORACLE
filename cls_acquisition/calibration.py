@@ -1,52 +1,31 @@
 """Step-and-confirm calibration, and the gate every calibration must pass.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Calibration pairs each commanded platform voltage with what the line
-meter reads through the divider. The old DAQ let the meter sample on the
-PulseBlaster's clock while the software stepped the DAC on the tagger's,
-and lined the two up afterwards: when they slipped, setpoint i was paired
-with reading i + k (Mode B), and a race could leave the burst ungated
-(Mode A). Here there is one clock. For each setpoint the acquisition
-process writes the DAC and confirms, the meter waits SETTLE and takes
-exactly one reading on command, and only then does the next setpoint go
-out. Reading i cannot be requested before write i is confirmed, so the
-lag is zero by construction; the PulseBlaster and the tagger take no part.
+Each commanded voltage is paired with the line meter's reading through
+the divider on one clock: the acquisition process writes and confirms,
+the meter waits the point's settling and takes exactly one reading on
+command, and only then does the next setpoint go out. Reading i cannot be
+requested before write i is confirmed, so the lag is zero by
+construction (the old DAQ's Mode B, a setpoint paired with reading i + k,
+cannot happen). Readings integrate whole power line cycles (``nplc``),
+which takes out the mains a 200 us reading caught (76 mV a point, A.
+Raggio, November 2026); every setpoint is read until cls_tools applies
+the bench table.
 
 The gate (:func:`Quality_Report`) tests properties every healthy
-calibration has -- it tracks the command, spans the commanded range, was
-read settled, matches the plan, and its last reading is what the platform
-reads when held there -- rather than the signatures of faults already
-seen, so a new fault is still refused if it breaks one of them. A REJECT
-writes no file and starts no scan.
+calibration has: it tracks the command, spans it, was read settled,
+matches the plan, and its last reading is what the platform reads held
+there afterwards, with no stepping to pair wrongly. A lag shifts the
+ramp, which tracking and span cannot see, but sets the last reading k
+steps from the held ones. A REJECT writes no file and starts no scan.
 
-The last of those is the guard on the pairing itself. Once the last point
-is read, the DAC stays where it is and the meter reads that setpoint again,
-held, well past its settling: readings with no stepping, so with no pairing
-to get wrong. Were reading i holding setpoint i - k for any reason, as the
-old DAQ's Mode B did, the calibration's last reading would sit k steps
-from them; neither tracking nor span can see a shifted ramp, and no lag is
-estimated or undone here, only refused.
-
-SETTLE is the DAQ's only definition of settled. An amplifier slower than
-it cannot be detected by timing, and on a uniform ramp not in the
-readings either: partial settling shifts every reading by the same
-fraction of a step. Where the Settle time page has measured the
-amplifier, its settle model says how long a jump of a given size takes
-(:func:`Settle_For`), and a point whose jump needs longer than SETTLE
-waits that long: the first, from where the platform stood, and the
-first of each range after a gap are the largest. The wait and the stamp
-test use the same number for each point, and the gate checks it again.
-
-Each reading integrates over whole power line cycles (``nplc``, 1 by
-default, settings: calibration), which takes out the mains the divider
-picks up: a 200 us reading caught it at a random phase, 76 mV a point
-in a run against about 5 mV on the bench (A. Raggio, November 2026). A
-cycle costs 20 ms a point. Until cls_tools applies the bench table,
-every setpoint is still read: its polynomial through sparse points
-would land on the converters' sawtooth.
+SETTLE is the only definition of settled; where the Settle time page has
+measured the amplifier, a jump waits as long as its model says
+(:func:`Settle_For`), and the wait and the stamp test use the same
+number.
 
 Depends on: numpy.
 """
@@ -192,28 +171,20 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider
                     nplc=None):
     """Calibrate ``plan`` by step and confirm; returns a :class:`Calibration`.
 
-    ``link`` is the acquisition process, which alone drives the DAC;
-    ``meter`` is the line meter, on a divider of ``divider`` platform volts
-    per volt, each reading integrating ``nplc`` power line cycles (None:
-    its poll aperture); ``progress(index, volts, reading)`` is called after
-    each kept point. Every exit leaves the meter on its live poll and the
-    acquisition process out of calibration. A point waits
-    SETTLE, or as long as ``settle_model`` says its jump takes if that is
-    longer: the first, from where the platform stood, and the first of a
-    range after a gap usually are.
+    ``link`` is the acquisition process (it alone drives the DAC), ``meter``
+    the line meter on a ``divider``, each reading integrating ``nplc`` power
+    line cycles (None: its poll aperture); ``progress(index, volts,
+    reading)`` follows each kept point. A point waits SETTLE, or longer if
+    ``settle_model`` says its jump needs it. Every exit leaves the meter on
+    its poll and the acquisition process out of calibration.
 
-    The retry rule. A reading stamped less than its point's settling after
-    its write was confirmed is inconclusive: it is discarded, and the
-    reading (not the write, which would restart the settling) is requested
-    again after the measured shortfall plus a margin. Waiting on this side's
-    own clock from the confirmation makes that rare; it covers what the wait
-    cannot see, since the two stamps come from two processes. A stamp before
-    its write means the clocks disagree and aborts at once, as does any
-    other fault. Each point is read at most MaxAttemptsPerPoint times and a
-    calibration re-requests at most MaxRetriesPerCalibration readings, so
-    the retry path terminates and adds at most that many waits of a point's
-    settling + margin.
-    """
+    A reading stamped before its point had settled is discarded and the
+    reading (not the write, which would restart the settling) requested
+    again after the shortfall plus a margin; the two stamps come from two
+    processes, so this covers what the wait cannot see. A stamp before its
+    write means the clocks disagree, and aborts. Retries are bounded per
+    point (MaxAttemptsPerPoint) and per calibration
+    (MaxRetriesPerCalibration), so the path terminates."""
     jumps = np.abs(np.diff(plan.Setpoints, prepend=link.State.Voltage.value))
     needs_s = [max(THRESHOLDS['SettleS'], Settle_For(settle_model, jump)) for jump in jumps]
     steps, readings, stamps, needs_ns = [], [], [], []

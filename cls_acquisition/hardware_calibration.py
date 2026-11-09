@@ -1,56 +1,35 @@
 """The hardware calibrations: the amplifier's settling, the converters' linearity, the cooler.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-These answer the briefing's open questions about the rack itself, which
-no software change can. They are the bench calibration tool (cls-cal,
-A. Raggio) brought into ORACLE: its measurements and its analyses,
-driven the way ORACLE drives the DAC.
+The bench calibration tool (cls-cal, A. Raggio) in ORACLE: its
+measurements and analyses, driven as ORACLE drives the DAC.
 
-The settle test steps the platform while the line meter samples it on
-its own timer, and measures how long the amplifier takes to settle: the
-number SETTLE stands in for, and from which the scan's settle model is
-made. Times in a step response are from its 10 % crossing, on the
-meter's own clock, so they need nothing from the PC's; the lag from the
-command to that crossing compares the two clocks, and is approximate:
-it assumes the meter's first sample is taken as INIT goes out. An
-optional drift tail, read at a long integration once the fast capture
-ends, shows whether the platform still creeps after it has settled.
+The settle test steps the platform while the line meter samples on its
+own timer; times are from the step's 10 % crossing on the meter's clock,
+the lag from the command approximate (it assumes the first sample as
+INIT goes out). It gives the settle model, and the wait a linearity sweep
+should take (:func:`Recommended_Wait`). An optional drift tail shows a
+platform still creeping after it settled.
 
-The linearity sweep reads each converter branch over its range: a
-count-based ladder, up, down, both, or in random order (which separates
-drift from shape), with a finer grid across 0 V where the branches hand
-over, and 0 V read again every few points to follow the drift. It fits
-the whole line, each branch and where their lines meet 0 V (Mode C's
-seam), the curvature, the hysteresis and the drift of the 0 V checks,
-and from a dense enough sweep the integral non-linearity on knots 25 V
-apart. The correction it
-proposes cancels each branch's gain and offset, and that non-linearity
-where it was measured, and carries its date and an expiry: the
-branches' offsets drift apart by up to about 0.1 V a day, though the
-shape holds. Every write lands on a converter code, 0.305 V apart at
-the platform, so readings scatter by up to half a code about any smooth
-curve; that part no correction can remove, and it is reported apart.
+The linearity sweep reads each converter branch on a count-based ladder
+(up, down, both or random, which separates drift from shape), finer
+across 0 V, with 0 V read every few points. It fits the line, each branch
+and where they meet 0 V (Mode C's seam), the curvature, hysteresis and
+0 V drift, and from a dense sweep the integral non-linearity on 25 V
+knots; the correction it proposes is dated and expires, as the branches'
+offsets drift by up to 0.1 V a day. Code rounding (0.305 V a code) is
+reported apart, since no correction removes it.
 
-The cooler monitor streams the cooler's voltage off the meter's timer
-for as long as asked, with no gaps, and finds its level, its drift, its
-noise by frequency band, the oscillations in it (mains harmonics named)
-and its spectrum.
+The cooler monitor streams the cooler off the meter's timer and gives
+its level, drift, noise by band, oscillations (mains harmonics named) and
+spectrum. :func:`Precise_Reading` is the bench tool's 'Read DMM'.
 
-As in the bench tool, a settle test recommends the linearity sweep's
-wait after each step (:func:`Recommended_Wait`), and the platform can be
-read precisely at any time (:func:`Precise_Reading`, its 'Read DMM') to
-check the wiring and polarity against the setpoint.
-
-The DAC is driven as in calibration, by step and confirm through the
-acquisition process ('Calibrate', 'Calibration_Step', 'Stop_Calibration'),
-so only a plan validated whole against the DAC's limit is ever written.
-Moves between measured points are ramped, and every exit ramps the
-platform back to 0 V and leaves the meter on its live poll. Each
-measurement writes its record as it goes (:class:`Record`), so one that
-fails or is stopped part way keeps what it took.
+The DAC is stepped and confirmed through the acquisition process, every
+move between points ramped, every exit back to 0 V with the meter on its
+poll; each measurement writes its record as it goes (:class:`Record`).
 
 Depends on: numpy; cls_acquisition.acquisition, .calibration, .scan_plan
 and .hardware.mcc_dac.
@@ -665,18 +644,14 @@ def _Spectral_Floor(amplitude):
 
 def Noise_Analysis(volts, interval_s, integration_s=0.0, line_hz=POWER_LINE_HZ, peaks=PEAKS,
                    snr=PEAK_SNR):
-    """What an evenly spaced record of a nominally steady voltage holds: its
-    level and drift, its noise before and after the drift is taken out, the
-    noise in each decade of frequency, the oscillations in it, and its
-    spectrum.
-
-    Oscillations come from the Hann-windowed spectrum of the whole record
-    (its finest resolution); each must stand ``snr`` times above the
-    spectrum's local median, its amplitude is the power in its main lobe
-    (so it does not depend on where the tone falls between bins), mains
-    harmonics are named, and ``integration_s`` gives the meter's own
-    attenuation of each, sinc(f T). The averaged spectrum (Welch) gives the
-    white-noise floor."""
+    """An evenly spaced record of a nominally steady voltage: its level and
+    drift, its noise before and after the drift is taken out, by decade of
+    frequency, its oscillations and its spectrum. An oscillation stands
+    ``snr`` times above the Hann-windowed spectrum's local median; its
+    amplitude is its main lobe's power (wherever it falls between bins),
+    mains harmonics are named, and ``integration_s`` gives the meter's own
+    attenuation of each, sinc(f T). The Welch spectrum gives the white-noise
+    floor."""
     volts = np.asarray(volts, dtype=float)
     count = len(volts)
     if count < MIN_SPECTRUM_READINGS:

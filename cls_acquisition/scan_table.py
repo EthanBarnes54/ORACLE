@@ -1,35 +1,28 @@
 """The bench table: the platform voltage each DAC code really gives, measured slowly and kept.
 
-Date:    2026-11-09
+Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The DAC does not follow a straight line: adjacent codes are 0.305 V
-apart at the platform, and its integral non-linearity puts it a few
-hundred mV off any line, each converter (one a branch) its own way. A.
-Raggio's bench table (November 2026) measures it point by point, slowly
-and away from the mains (5 x 200 ms a point), with 0 V checks between,
-and each run is then fitted to it, V = a + b*T (:func:`Fit_Run`, WP5):
-that took a linear calibration's 262 mV rms to about 10 mV, day to day.
+The DAC is no straight line: codes are 0.305 V apart and its integral
+non-linearity a few hundred mV off any line, each converter its own way.
+A. Raggio's bench table (November 2026) measures it slowly, with 0 V
+checks between, and each run is fitted to it, V = a + b*T
+(:func:`Fit_Run`): 262 mV rms for a linear calibration became about 10 mV.
 
-A table is built from a linearity sweep's record (hardware_calibration):
-each sweep point's reading less the platform's 0 V level at its time,
-interpolated between the 0 V checks (the level warms up by 0.2 V in the
-first hour), averaged by converter and code. The codes are what the
-converters held (mcc_dac.Quantised of what each write returned), so the
-table is indexed by them, as each run records its codes (DacCodes). A
-code the sweep did not visit is interpolated between its neighbours on
-the same converter, and said to be; nothing is extrapolated.
+A table is built from a linearity record: each reading less the 0 V level
+interpolated between the checks (it warms up by 0.2 V in the first
+hour), averaged by converter and code, the codes being what the
+converters held, as each run records them (DacCodes). A code not visited
+is interpolated and said to be; nothing is extrapolated.
 
-Tables are kept in a library under ``<data>/tables``, one file each,
-named by date and the first eight characters of their content's hash,
-which is the table's ID: never overwritten, so a run that names its table
-names exactly the numbers it was fitted to. The file is a CSV, one row per
-converter and code, with its measurement's details as ``#`` lines above
-(the format proposed for cls_tools, for A. Raggio to review). The active
-table is named in the settings (``scan_table``); one measured on another
-rack is warned of, never refused, since it is only applied after
-collection.
+The library under ``<data>/tables`` keeps one CSV per table, its details
+as ``#`` lines above the rows (the format proposed for cls_tools), named
+by date and the first eight characters of its ID, the SHA-256 of every
+number in it: never overwritten, so a run that names its table names
+exactly what it was fitted to. The table in force is named in the
+settings (``scan_table``); one from another rack is warned of, never
+refused, since it is only applied after collection.
 
 Depends on: numpy; cls_acquisition.hardware.mcc_dac.
 """

@@ -1,29 +1,19 @@
 """The Scan Performance tab: how the rack behaved during a run, and how that shaped its spectrum.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Down the left, the run (the latest by default, or any in the data folder
-or chosen from disk), the verdict with the line's width and what moved
-it, every check grouped by the part of the pipeline it judges, and what
-the analysis flagged for review. Nothing is cut: the operator decides
-in DENIS, and the report exports beside the run. On the right, one plot
-for each systematic: the HV against its calibration, the beam over time
-against what its setpoints give, the beam rate scan by scan, how far
-reads trailed the first of their step, the cooler (each reading, and
-the rolling mean the analysis takes over them), the laser, and each
-PMT's afterpulsing: the time to the previous count on itself and on the
-others against chance, and its counts' scatter against dead time, as
-A. Raggio's slide 9 shows them. Under the checks, the run's
-systematics' inputs (cls_acquisition.systematics), which can be posted
-to the ELOG whole. A
-check's sentence shows under the list when it is selected, and in its
-tooltip.
-
-It shows the run every other tab shows: Show and analyse puts the chosen
-run on all of them, and a scan or the triggers clear it here as they
-clear the plots, until the run they make is saved and analysed.
+Down the left: the run (the latest, any in the data folder, or one from
+disk), the verdict with the line's width and what moved it, every check
+grouped by the part of the pipeline it judges (its sentence under the
+list and in its tooltip), what was flagged for review, and the run's
+systematics' inputs, which can be posted to the ELOG whole. Nothing is
+cut; the report exports beside the run. On the right, a plot per
+systematic: the HV against its calibration, the beam over time and scan
+by scan, read delays, the cooler (readings, and the rolling mean the
+analysis takes), the laser, and each PMT's afterpulsing as A. Raggio's
+slide 9 shows it. It shows the run every other tab shows.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.scan_performance,
 cls_acquisition.systematics, gui.plots, gui.shared_widgets, gui.theme.
@@ -36,14 +26,14 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout,
-                               QLabel, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QLabel,
+                               QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from cls_acquisition import scan_performance as sp
 from cls_acquisition import systematics
 from gui import plots, theme
-from gui.shared_widgets import (Muted, Report_Html, Report_Label, Report_Table, Scroll_Column,
+from gui.shared_widgets import (Muted, Report_Html, Report_Label, Report_Table, Side_By_Side,
                                 Verdict_Html)
 
 PANEL_WIDTH = 400                   # px: the checks' names and values side by side
@@ -133,20 +123,14 @@ class Performance_Tab(QWidget):
         column.addWidget(self.Systematics_Label)
         column.addWidget(self.Elog_Button)
 
-        left = QVBoxLayout()
-        for group, stretch in ((self.Dataset_Group, 0), (self.Verdict_Group, 0),
-                               (self.Checks_Group, 1), (self.Flagged_Group, 0),
-                               (self.Systematics_Group, 0)):
-            left.addWidget(group, stretch)
-        side = Scroll_Column(left)
-        side.setFixedWidth(PANEL_WIDTH)
 
         plot_group = QGroupBox('Systematics')
         plot_grid = QGridLayout(plot_group)
-        elapsed = ('Elapsed time', 's')
+        elapsed = ('Elapsed time <i>t</i>', 's')
         from_first = " Elapsed time runs from the run's first recorded hit."
-        self.Readback_Plot = plots.Plot('HV readback against its calibration', elapsed,
-                                        ('Readback − calibration', 'V'), (
+        self.Readback_Plot = plots.Plot('Scan-voltage readback relative to calibration',
+                                        elapsed, (f"{plots.U_RB} − {plots.Sym('U', 'cal')}",
+                                                  'V'), (
             "How far the platform voltage was, through the run, from where the start-of-run "
             "calibration places it. Zero means no change since the calibration; a trend is "
             "drift.",
@@ -155,7 +139,7 @@ class Performance_Tab(QWidget):
             "setpoint. DENIS applies the calibration as it was taken, so a non-zero value "
             "shifts the line by the same voltage." + from_first))
         self.Beam_Plot = plots.Plot('Beam intensity over time', elapsed,
-                                    ('Relative intensity', None), (
+                                    ('Relative intensity <i>I</i>/⟨<i>I</i>⟩', None), (
             "The beam intensity relative to the run's usual level, period by period: 1 is the "
             "usual level and the lower dashed line half of it. Periods marked in red fell below "
             "half beyond what counting statistics explain, and are flagged for review.",
@@ -163,21 +147,21 @@ class Performance_Tab(QWidget):
             "count rate at each setpoint the period visited, summed, so the spectrum's own "
             "structure cancels. A period lasts long enough to expect about 20 hits, and at "
             "least 10 s." + from_first))
-        self.Rate_Plot = plots.Plot('Count rate per scan', ('Scan number', None),
-                                    ('Hits per bunch', None), (
+        self.Rate_Plot = plots.Plot('Count rate per scan', ('Scan number <i>k</i>', None),
+                                    ('Counts per bunch <i>N</i>/<i>n</i><sub>b</sub>', None), (
             "The count rate of each complete scan. Every scan visits every setpoint equally, so "
             "the scans compare directly; the dashed line is their median.",
             "The hits in the scan divided by the bunches it took (setpoints × bunches per "
             "step). Not shown when the run's scan numbers are unreliable."))
         self.Latency_Plot = plots.Plot('Read delay within each step', elapsed,
-                                       ('Read delay', 's'), (
+                                       ('Read delay δ<i>t</i>', 's'), (
             "How far each bunch's read trailed the earliest read in its voltage step. A flat "
             "band near zero means the acquisition kept pace with the triggers.",
             "The read time less the bunch number × the trigger period, less the smallest such "
             "value in the step. The run file's timestamps are rounded to 10 ms, which sets the "
             "resolution." + from_first))
         self.Cooler_Plot = plots.Plot('Cooler platform voltage', elapsed,
-                                      ('Cooler voltage − run median', 'V'), (
+                                      (f"{plots.U_COOL} − med({plots.U_COOL})", 'V'), (
             "The cooler platform voltage during the run: each reading (faint) and the rolling "
             "mean the analysis takes as the voltage the ions were accelerated by (bold). The "
             "mean follows the supply's slow drift, which the analysis takes out; the readings' "
@@ -189,7 +173,8 @@ class Performance_Tab(QWidget):
             "where the window reaches past the readings at the run's start, end or a gap, and "
             "so holds one side only." + from_first))
         self.Laser_Plot = plots.Plot('Laser frequency deviation', elapsed,
-                                     ('Wavemeter − setpoint (MHz)', None), (
+                                     ('<i>ν</i><sub>WM</sub> − <i>ν</i><sub>set</sub> (MHz)',
+                                      None), (
             "The wavemeter reading during the run relative to the laser setpoint stored in the "
             "run header, which DENIS uses for the whole run. Through the Doppler shift, a "
             "deviation moves the line.",
@@ -197,9 +182,10 @@ class Performance_Tab(QWidget):
             "measured light and sampled every 0.1 s. The Laser check converts it to scan volts "
             "and to MHz at the ions, with the harmonic and geometry recorded with the run."
             + from_first))
-        self.Afterpulse_Plot = plots.Plot('Time to the previous count on a PMT',
-                                          ('Time since the previous count', 'µs'),
-                                          ('Pairs ÷ chance', None), (
+        self.Afterpulse_Plot = plots.Plot('Time to the previous count, relative to chance',
+                                          ('Time since the previous count Δ<i>t</i>', 'µs'),
+                                          ('<i>N</i>(Δ<i>t</i>)/<i>N</i><sub>chance</sub>'
+                                           '(Δ<i>t</i>)', None), (
             "For each PMT (by colour), how often a count follows the previous count on the same "
             "PMT (solid) and on any other PMT (dashed) after each time, relative to chance: 1 is "
             "chance. Afterpulsing raises the solid curve at short times alone; light and the "
@@ -211,8 +197,9 @@ class Performance_Tab(QWidget):
         self.Afterpulse_Plot.setLogMode(y=True)
         self.Afterpulse_Plot.addLegend(offset=(-10, 10), labelTextColor=theme.PLOT_FOREGROUND,
                                           brush=LEGEND_BRUSH)
-        self.Dispersion_Plot = plots.Plot('Count scatter against dead time', ('Dead time', 'µs'),
-                                          ('Variance ÷ mean', None), (
+        self.Dispersion_Plot = plots.Plot('Index of dispersion versus dead time',
+                                          ('Dead time <i>τ</i>', 'µs'),
+                                          ('Index of dispersion <i>σ</i>²/<i>μ</i>', None), (
             "For each PMT (by colour), how far its counts scatter from scan to scan beyond "
             "Poisson's, with no dead time and with each candidate one: 1 is Poisson. "
             "Afterpulsing raises it, and a dead time that removes the afterpulses brings it "
@@ -229,9 +216,9 @@ class Performance_Tab(QWidget):
         for i, plot in enumerate(self.Plots):
             plot_grid.addWidget(plot, i // 2, i % 2)
 
-        layout = QHBoxLayout(self)
-        layout.addWidget(side)
-        layout.addWidget(plot_group, 1)
+        Side_By_Side(self, ((self.Dataset_Group, 0), (self.Verdict_Group, 0),
+                            (self.Checks_Group, 1), (self.Flagged_Group, 0),
+                            (self.Systematics_Group, 0)), plot_group).setFixedWidth(PANEL_WIDTH)
         self.Result = None
 
     def Set_Runs(self, paths, keep=None):

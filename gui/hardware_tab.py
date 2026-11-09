@@ -1,41 +1,26 @@
 """The Hardware Calibration tab: settle time, linearity, the cooler monitor and the bench table.
 
-Date:    2026-11-09
+Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The bench calibration tool's measurements, each on a page of its own in
-the Scan Calibration tab's layout: the parameters and the start and stop
-buttons on the left, the result under them, and the plots filling as the
-measurement runs. The ramp between measured points, and the limit every
-setpoint is held to, sit above the pages and apply to all of them.
+The bench calibration tool's measurements, each a page laid out as the
+Scan Calibration tab: parameters and buttons on the left with the result
+under them, plots on the right. The ramp between points and the limit
+every setpoint is held to apply to all pages.
 
-Each page reads its own widgets into its measurement's parameters
-(``Params``, which refuses what cannot run with a sentence), says the
-most it will put on the platform (``Max_Volts``, which the window asks
-the operator to arm on the rack), names the records it writes as it
-runs (``RECORDS``: kind to columns), the rows its result adds once it
-ends (``Rows``: the cooler's spectrum) and what of its result closes
-them (``Results``). A measurement that fails part way is still analysed
-as far as it went (``Partial``), as the bench tool's results_partial
-was. The main window runs every page's measurement the same way, off
-the GUI thread, keeping everything that could drive the DAC or the
-meters disabled until it has finished.
-
-Each page reports its result in titled sections of labelled figures
-(shared_widgets.Report_Html), ending with the files it saved, each a
-link; what happens to the result afterwards (a correction put in force,
-a record opened rather than taken) is added as a section of its own.
+Each page reads its own widgets (``Params``, refusing what cannot run
+with a sentence), says the most it puts on the platform (``Max_Volts``,
+which the window asks the operator to arm), and names its records
+(``RECORDS``), the rows its result adds (``Rows``) and what closes them
+(``Results``); a measurement that fails part way is still analysed as far
+as it went (``Partial``). Results are reported in labelled sections
+(shared_widgets.Report_Html), ending with the files saved.
 
 The Scan table page keeps the bench table (cls_acquisition.scan_table):
-one is made from a linearity sweep's record, or loaded from the library,
-and made the active table runs are fitted to; two can be compared, to
-see whether the converters have changed.
-
-Above the pages, beside the ramp, the line meter can be read precisely
-(the bench tool's 'Read DMM') to check the wiring and polarity against
-whatever quick tune holds; and the settle page hands its recommended
-wait to the linearity page, as the bench tool's did.
+made from a linearity record or chosen from the library, put in force,
+compared with another. The line meter can be read precisely (the bench
+tool's 'Read DMM') above the pages.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.calibration,
 cls_acquisition.hardware_calibration, cls_acquisition.hardware.mcc_dac,
@@ -59,7 +44,7 @@ from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
 from gui.shared_widgets import (REPORT_WIDTH, Duration_Text, Figure, Form, Muted, Report_Html,
-                                Report_Label, Report_Table, Saved_Section, Scroll_Column, Spin)
+                                Report_Label, Report_Table, Saved_Section, Side_By_Side, Spin)
 
 STEP_ROWS = 4
 NPLC_CHOICES = ('0.02', '0.2', '1', '10', '100')
@@ -119,12 +104,7 @@ class _Panel(QWidget):
         plot_column = QVBoxLayout(plot_group)
         for widget, stretch in plot_widgets:
             plot_column.addWidget(widget, stretch)
-        controls = QVBoxLayout()
-        controls.addWidget(self.Params_Group)
-        controls.addWidget(self.Control_Group, 1)
-        layout = QHBoxLayout(self)
-        layout.addWidget(Scroll_Column(controls))
-        layout.addWidget(plot_group, 1)
+        Side_By_Side(self, ((self.Params_Group, 0), (self.Control_Group, 1)), plot_group)
 
     def Max_Volts(self, params):
         """The most the measurement puts on the platform, or None if it
@@ -198,9 +178,9 @@ class Settle_Panel(_Panel):
                'settle_traces': hc.SETTLE_TRACE_COLUMNS}
 
     def __init__(self, ramp, limit_v, parent=None):
-        since_crossing = ('Time from 10 % crossing', 's')
+        since_crossing = ('Time from the 10 % crossing <i>t</i>', 's')
         self.Response_Plot = plots.Plot('Step response', since_crossing,
-                                        ('Platform voltage', 'V'), (
+                                        ('Platform voltage <i>U</i>', 'V'), (
             "The platform voltage through each commanded step of the settle test, outward steps "
             "and return steps in different colours, showing the amplifier's delay, rise and "
             "overshoot.",
@@ -208,7 +188,8 @@ class Settle_Panel(_Panel):
             "the step is commanded; each trace is shifted in time so that zero is where it "
             "crosses 10 % of the step's height."))
         self.Deviation_Plot = plots.Plot('Settling to the final value', since_crossing,
-                                         ('Deviation from final value', 'V'), (
+                                         (f"{plots.Sym('U')} − {plots.Sym('U', 'final')}",
+                                          'V'), (
             "The same steps relative to their final value, magnified around zero to show how "
             "each approaches it. The dashed lines mark the settle tolerance.",
             "The final value is the median of the last fifth of each capture. A step has "
@@ -410,9 +391,9 @@ class Linearity_Panel(_Panel):
     RECORDS = {'linearity': hc.LINEARITY_COLUMNS}
 
     def __init__(self, ramp, limit_v, parent=None):
-        set_axis = ('Setpoint', 'V')
+        set_axis = (f"Setpoint {plots.U_SET}", 'V')
         self.Difference_Plot = plots.Plot('Readback deviation from setpoint', set_axis,
-                                          ('Readback − setpoint', 'V'), (
+                                          (f"{plots.U_RB} − {plots.U_SET}", 'V'), (
             "Readback minus setpoint at every point of the linearity sweep: points on the "
             "positive and negative converter branches in different colours, and the 0 V "
             "reference checks as squares.",
@@ -420,8 +401,8 @@ class Linearity_Panel(_Panel):
             "settle time, at the chosen integration time (NPLC). A straight trend is the "
             "chain's gain and offset; curvature and periodic structure are the DAC's integral "
             "non-linearity."))
-        self.Residual_Plot = plots.Plot('Residual from a linear fit', set_axis,
-                                        ('Residual', 'V'), (
+        self.Residual_Plot = plots.Plot('Residuals from a linear fit', set_axis,
+                                        (f"{plots.U_RB} − {plots.LINE_FIT}", 'V'), (
             "What a single straight-line calibration leaves in the voltage axis: the readback "
             "less the line fitted to every sweep point so far.",
             "A least-squares line through the sweep points, refitted as points arrive; the "
@@ -674,15 +655,17 @@ class Cooler_Panel(_Panel):
 
     def __init__(self, parent=None):
         self.Voltage_Plot = plots.Plot('Cooler platform voltage',
-                                       ('Time since the start of the record', 's'),
-                                       ('Deviation from mean', 'V'), (
+                                       ('Time since the start of the record <i>t</i>', 's'),
+                                       (f"{plots.U_COOL} − ⟨{plots.U_COOL}⟩", 'V'), (
             "The cooler (RFQ cooler-buncher) platform voltage over the record, relative to its "
             "mean, showing drift, ripple and noise.",
             "The cooler meter reads the platform through its 10 000:1 divider at the chosen "
             "interval and aperture; the record's mean is subtracted for display. The mean, "
             "drift and noise figures are listed below the plots."))
-        self.Asd_Plot = plots.Plot('Amplitude spectral density (ASD) of the cooler voltage',
-                                   ('Frequency', 'Hz'), ('ASD (V/√Hz)', None), (
+        self.Asd_Plot = plots.Plot('Amplitude spectral density of the cooler voltage',
+                                   ('Frequency <i>f</i>', 'Hz'),
+                                   (f"Amplitude spectral density {plots.Sym('S', 'U')}"
+                                    f"<sup>1/2</sup> (V Hz<sup>−1/2</sup>)", None), (
             "The cooler voltage's noise by frequency, on logarithmic axes. Tones such as mains "
             "harmonics stand above the noise floor, and those found are listed in the table.",
             "The record less its straight-line drift is cut into Hann-windowed segments, half "
@@ -829,8 +812,9 @@ class Table_Panel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.Residual_Plot = plots.Plot('Bench table less its straight line', ('Setpoint', 'V'),
-                                        ('Table − straight line', 'V'), (
+        self.Residual_Plot = plots.Plot('Bench-table residuals from a linear fit',
+                                        (f"Setpoint {plots.U_SET}", 'V'),
+                                        (f"{plots.Sym('T')} − {plots.LINE_FIT}", 'V'), (
             "The platform voltage each DAC code gives, as the active bench table measured it, "
             "less a straight line through each branch: the converters' non-linearity, which "
             "a run's straight-line calibration cannot describe. Positive and negative branches "
@@ -859,11 +843,7 @@ class Table_Panel(QWidget):
         column.addWidget(self.Report_Label)
         column.addStretch(1)
         self._Sections = []
-        controls = QVBoxLayout()
-        controls.addWidget(self.Group, 1)
-        layout = QHBoxLayout(self)
-        layout.addWidget(Scroll_Column(controls))
-        layout.addWidget(self.Residual_Plot, 1)
+        Side_By_Side(self, ((self.Group, 1),), self.Residual_Plot)
 
     def Show(self, table, path=None, mismatch=''):
         """``table`` as the one in force (None: none), from its library file

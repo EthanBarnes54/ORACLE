@@ -1,31 +1,18 @@
 """The plots: their dark style, how they are handled, and the TOF plot that carries the gate.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-pyqtgraph, as in the old DAQ, because the plots redraw several times a
-second while data come in. Every plot is handled the same way: drag to
-pan, right-drag to stretch or squash along the direction dragged, the
+pyqtgraph, as in the old DAQ, since the plots redraw several times a
+second. Every plot handles alike: drag to pan, right-drag to stretch,
 wheel to zoom (over an axis, that axis alone), Shift-drag to zoom to a
-box. A plot handled by hand stops following its data, so a live update
-never pulls the view away; the autoscale button in its corner, or a
-double-click on it, puts it back to the full view and following again.
-
-Ctrl-drag on a gate plot (Cmd-drag on macOS) sets its gate, dragging
-its edges moves it, and a double-click removes it; on the Scan tab's TOF
-plot the spectrum, the TOF-HFS map and the time graph count only hits
-inside it.
-
-Every plot carries a description: hovering over its title shows what it
-shows and how it is calculated, in the words of the collaboration's
-analysis, so a figure sent to the ELOG or shown at a meeting explains
-itself.
-
-A curve of far more points than the plot has pixels (a 50,000-bin TOF, a
-long cooler record) is a Dense_Curve: the same pixels, painted from only
-what is in view, and a histogram from the few vertices that fill them, so
-it redraws in milliseconds instead of tens of them.
+box; handled by hand, a plot stops following its data until autoscaled.
+On a gate plot Ctrl-drag (Cmd on macOS) sets the gate. Every plot says,
+over its title, what it shows and how it is calculated, and its axes
+carry each quantity's symbol (:func:`Sym`), so a figure explains itself
+in the ELOG or at a meeting. A curve of far more points than pixels is a
+:class:`Dense_Curve`, painted from what is in view.
 
 Depends on: numpy, pyqtgraph, PySide6; gui.theme.
 """
@@ -135,6 +122,17 @@ def _Style(plot, title, x_axis, y_axis, about):
     plot.showGrid(x=True, y=True, alpha=theme.PLOT_GRID_ALPHA)
 
 
+def Sym(letter, sub=''):
+    """A quantity's symbol for an axis label: the letter italic, its
+    subscript upright, as a physics journal sets it."""
+    return f"<i>{letter}</i>" + (f"<sub>{sub}</sub>" if sub else '')
+
+
+# the symbols the axes share
+U_RB, U_SET, U_COOL = Sym('U', 'rb'), Sym('U', 'set'), Sym('U', 'cool')
+LINE_FIT = f"({Sym('a')} + {Sym('b')}{U_SET})"
+
+
 def Pen(colour=theme.TRACE):
     return pg.mkPen(colour, width=2)
 
@@ -162,20 +160,15 @@ def Collapse(x, y, device_x):
 
 
 class Dense_Curve(pg.PlotCurveItem):
-    """A curve with far more vertices than its plot shows pixels across: a
-    50,000-bin TOF, a long cooler record, painted pixel for pixel as every
-    vertex would be, from far fewer. Nothing past the plot is painted, so
-    only the vertices in view (and the one beyond each edge) are drawn.
-    And Qt draws the plots' pen (solid, opaque, 2 px, not antialiased) as
-    separate segments, the pixels of each depending only on the half
-    device pixel its ends fall in; so a step curve, a histogram, all of
-    whose segments run straight across or up, fills in each half pixel
-    exactly the pixels of one upright segment from its lowest to its
-    highest, and is painted from those (:func:`Collapse`). A line's
-    segments slant, and are only cut to the view. Its data and bounds stay
-    the whole curve's, and anything else (an export, a fill, another pen,
-    a value that is not finite, a transform that is not a plain scale) is
-    painted as PlotCurveItem paints it."""
+    """A curve of far more vertices than its plot has pixels (a 50,000-bin
+    TOF, a long cooler record), painted pixel for pixel as every vertex
+    would be, from far fewer: only what is in view is drawn, and a step
+    curve, whose segments run straight across or up, is collapsed to one
+    upright segment per half device pixel (:func:`Collapse`), which Qt's
+    plain 2 px pen paints identically. A line is only cut to the view.
+    Anything else (an export, a fill, another pen, non-finite values, a
+    transform that is not a plain scale) is painted as PlotCurveItem
+    paints it."""
 
     CLIP_MARGIN_PX = 4                  # beyond the plot, wider than the pen reaches
 
@@ -318,13 +311,14 @@ class Gate_Plot(Plot_Widget):
 
     Gate_Changed = Signal()
 
-    def __init__(self, parent=None, title=TOF_TITLE, x_axis=('Time of flight (µs)', None),
+    def __init__(self, parent=None, title=TOF_TITLE,
+                 x_axis=('Time of flight <i>t</i><sub>TOF</sub> (µs)', None),
                  what='TOF', about=TOF_ABOUT):
         view = _Gate_View()
         super().__init__(parent, view)
         self._View = view
         view.On_Change = self.Gate_Changed.emit
-        _Style(self, title, x_axis, ('Counts per bin', None), about)
+        _Style(self, title, x_axis, ('Counts per bin <i>N</i>', None), about)
         self.setToolTip(f"Ctrl-drag (Cmd-drag on macOS) to set the {what} gate, drag its "
                         f"edges to move it, double-click it to remove it.")
         self.Curve = Dense_Curve(pen=Pen())

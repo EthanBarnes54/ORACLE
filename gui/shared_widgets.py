@@ -26,8 +26,9 @@ import threading
 from collections import namedtuple
 
 from PySide6.QtCore import QSize, Qt, QThread, QUrl, Signal
-from PySide6.QtWidgets import (QDoubleSpinBox, QFrame, QGridLayout, QLabel, QScrollArea,
-                               QSizePolicy, QSpinBox, QWidget)
+from PySide6.QtWidgets import (QDoubleSpinBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+                               QLayout, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
+                               QWidget)
 
 from gui import theme
 
@@ -183,6 +184,20 @@ class Scroll_Column(QScrollArea):
     def minimumSizeHint(self):
         return QSize(self._Width(self.widget().minimumSizeHint()),
                      super().minimumSizeHint().height())
+
+
+def Side_By_Side(page, controls, plots):
+    """``page`` laid out as every tab is: ``controls``, (widget or layout,
+    stretch) pairs, in a scrolling column, and ``plots`` beside them taking
+    the rest; returns the column."""
+    column = QVBoxLayout()
+    for item, stretch in controls:
+        (column.addLayout if isinstance(item, QLayout) else column.addWidget)(item, stretch)
+    side = Scroll_Column(column)
+    layout = QHBoxLayout(page)
+    layout.addWidget(side)
+    layout.addWidget(plots, 1)
+    return side
 
 
 class Job_Worker(QThread):

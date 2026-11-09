@@ -1,64 +1,39 @@
 """The acquisition process: the loop that drives the DAC, the triggers and the tagger.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The loop runs in its own process, so the tagger is read on time however
-busy the window is. The GUI talks to it through :class:`Rack_Link`. An
-instruction is ``(request id, command, parameters)`` and every one gets
-exactly one reply carrying the same id, ``(id, ok, payload)``, so a late
-reply can never be read as the answer to a later question. A command
-the loop does not know is refused, not ignored, and a handler that fails
-replies with the failure rather than leave the GUI waiting. What both
-sides watch all the time (the mode flags, the voltage on the DAC, the
-round, the bunch count) is shared memory, read without a round trip.
+busy the window is; :class:`Rack_Link` is the GUI's end. Every
+instruction ``(id, command, parameters)`` gets exactly one reply ``(id,
+ok, payload)``, so a late reply is never taken for a later answer; an
+unknown command or a failing handler is refused, never left unanswered.
+What both sides watch all the time (mode flags, the DAC's voltage, the
+round and the counts) is shared memory.
 
-Instructions are taken between tagger reads, so a stop lands within one
-bunch. Calibration is stepped from the GUI: 'Calibrate', one
-'Calibration_Step' per setpoint, then 'Stop_Calibration'; meanwhile the
-loop writes the DAC only when told to. The hardware calibrations step
-the DAC the same way. A scan or calibration plan beyond the DAC's limit
-is refused whole, before its first write. A scan may be given the number
-of rounds to take (a queued one is), and ends itself after the last, so
-a queue's scans hold exactly what was asked of them.
+Instructions are taken between tagger reads, so a stop lands within a
+bunch. A calibration (or hardware calibration) is stepped from the GUI,
+one confirmed write at a time; any plan beyond the DAC's limit is refused
+whole. A queued scan ends itself after its rounds.
 
-A scan step is settle-aware. The PulseBlaster, and the buncher and
-cooler with it, runs on untouched; what stops is acquisition. At each
-step the tagger's window is shut, the bunches still in flight are
-dropped (they are past their step's quota), the DAC is written, and the
-window stays shut for as long as the settle model says a jump of that
-size takes. Whatever arrived meanwhile is dropped too: with no gate
-wired, those are the bunches triggered while the platform moved. Only
-then does the step's count of bunches begin, so every step holds exactly
-its bunches, all taken at a settled voltage, however far apart the
-setpoints are.
+A scan step is settle-aware: the PulseBlaster (and so the buncher and
+cooler) runs on untouched, while the tagger's window is shut, the bunches
+in flight dropped, the DAC written, and the window held shut for as long
+as the settle model says the jump takes. Each step then holds exactly
+``bunches_per_step`` bunches at a settled voltage, which is what DENIS
+assumes when it numbers scans.
 
-The bunch column of the data is therefore the loop's own count of
-accepted bunches from 0, exactly ``bunches_per_step`` a step, which is
-what DENIS assumes when it numbers scans. A bunch is a trigger the
-tagger saw, counted by the tagger's own number for it, never by the
-loop's reads: a read hands over every trigger the card has ready,
-several if the loop fell behind, each marked, so each is its own bunch
-and those past the step's quota are dropped. Counting reads, as the old
-DAQ did, joined a software counter to the card's by position, the root
-of its Mode B. A read that times out holds no trigger and is no bunch
-(the collinear DAQ stepped on regardless, its D5), so a step holds its
-bunches however long the cycle and however long the tagger goes quiet.
-A tagger with no trigger for longer than a few cycles is shared with
-the window, which says so and names the likely cause, while the scan
-holds its setpoint until triggers return. A number the tagger skipped
-is a trigger whose packet never reached the loop, and is counted and
-logged.
+A bunch is a trigger counted by the tagger's own number (its MARK row),
+never by the loop's reads: the old DAQ counted reads, a second counter
+joined to the card's by position (the root of its Mode B), and counted a
+read that timed out as a bunch (its D5). A trigger the tagger numbered
+but never handed over is counted as skipped; one missing for longer than
+a few cycles is reported to the window, and the scan holds its setpoint.
 
-Data leave on their own queue as ``('scan' | 'stream', rows)`` packets in
-the run file's columns, and a scan's end is marked ``('scan_end', None)``
-after its last rows, so the GUI closes the run file only once all of
-them are in it. If the loop dies, its last word is a reply with id 0
-saying why. 'Ping' answers with what the devices found wrong as they
-opened (the tagger's wrapper, say), for the window to show, and
-'Identity' with what the DAC and the tagger say they are, for the
-record of every run.
+Data leave on their own queue as ``('scan' | 'stream', rows)``, a scan's
+end as ``('scan_end', None)`` after its last rows. If the loop dies, its
+last word is a reply with id 0 saying why.
 
 Depends on: numpy; cls_acquisition.calibration, .triggers,
 .hardware.mcc_dac (Quantised), .hardware.timetagger (MARK), and

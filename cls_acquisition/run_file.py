@@ -1,38 +1,24 @@
 """The run file, in the ASDF format the archive and its readers expect.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The header's keys and their meaning are frozen: cls_tools and DENIS read
-these files, and the archived campaigns fix the format. The events
-follow the header as raw float64 rows of :data:`DATA_COLS`, appended
-while the scan runs, as ASDF's streamed block. Files go to
-``<data>/<year>/<month>/<day>/run_NNNN.asdf``.
+The header's keys are frozen, as cls_tools and DENIS read them; the
+events follow as raw float64 rows of :data:`DATA_COLS`, appended as
+ASDF's streamed block, under ``<data>/<year>/<month>/<day>/run_NNNN.asdf``.
+ORACLE's own record of the run sits under one more key, :data:`ORACLE_KEY`,
+which readers that look keys up by name pass over: what opening the run
+needs to show it as taken, and what the rack was and held (identity,
+dividers, DAC codes, the bench table and its fit). It is written with the
+header, from settings locked for the scan. A reader takes a run's own
+divider ratios (:func:`Recorded_Divider`), never today's settings.
 
-ORACLE's own record of the run sits beside the header under one more
-key, :data:`ORACLE_KEY`, which readers that look keys up by name pass
-over: what the archive's keys do not hold and opening the run needs to
-show it as it was taken (the scan type, the trigger timing sent to the
-rack, the plots' view, the calibration gate's verdict), and what the
-rack was (its identity, its dividers, the DAC's codes). It is written
-with the header, before the first event, from settings that are locked
-for the whole scan, so it holds for every event in the file. A reader
-takes a run's own divider ratios (:func:`Recorded_Divider`) where it has
-them, never today's settings.
-
-A run's number is one more than the highest already in the data folder,
-counted when the run starts, so numbers survive a restart and a refused
-calibration leaves no gap. An existing file is never overwritten.
-
-Beside each run, ``run_NNNN_monitor.csv`` records what the rack did while
-it was taken, sampled by the window: the setpoint, the line meter's live
-readback, the cooler, the wavemeter, and the loop's running counts of
-bunches taken (the run file holds only those with hits), bunches dropped
-while steps settled, and triggers it missed. Its last row is written as
-the run closes. The frozen header holds those
-once, at the start; the Scan Performance tab needs them over time. It is
-a separate file so nothing that reads run files sees a change.
+A run's number is one more than the highest in the data folder, so
+numbers survive a restart and a refused calibration leaves no gap; no
+file is ever overwritten. ``run_NNNN_monitor.csv`` beside it records the
+rack every 0.1 s (setpoint, readback, cooler, wavemeter, the loop's
+counts), separate so nothing that reads run files sees a change.
 
 Depends on: numpy, asdf.
 """
@@ -126,18 +112,13 @@ def Recorded_Divider(tree, which):
 
 
 def Earlier_Calibrations(path, directory, count=3):
-    """The start-of-run calibrations of the ``count`` runs numbered before
-    ``path`` in ``directory`` that were calibrated as it was, newest first,
-    as ``(run, CalSet, CalReadback, scan divider)``, the divider as the run
-    recorded it or None: only those keys are read, never the events. A run
-    that cannot be read is passed over.
-
-    As it was means by the same DAQ under the same DAC correction (the
-    DacCorrection text, which the old DAQ's runs do not have). Across
-    either the two calibrations measure different things: the old DAQ
-    paired some readings with the wrong setpoint (Mode B), and a correction
-    moves every setpoint's platform voltage. Set against each other they
-    would differ with nothing wrong in either."""
+    """The start-of-run calibrations of the ``count`` runs before ``path`` in
+    ``directory`` calibrated as it was (same DAQ, same DacCorrection),
+    newest first, as ``(run, CalSet, CalReadback, scan divider or None)``;
+    only those keys are read, and an unreadable run is passed over. Across
+    DAQs or corrections two calibrations measure different things (the old
+    DAQ's Mode B; a correction moves every setpoint), so would differ with
+    nothing wrong in either."""
     found = _RUN_NAME.search(path)
     if found is None or not os.path.isdir(directory):
         return []

@@ -1,38 +1,27 @@
 """The PMTs' afterpulsing: counts that follow a count on the same PMT more often than chance.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-After a count, the same PMT often counts again within a few us, hundreds
-of times more often than chance, while after a count on another PMT
-nothing special happens (A. Raggio, November 2026, run 8244): the tube
-afterpulses or rings, and the extra counts make the spectrum noisier
-than Poisson (variance/mean 2, against 1.03 once counts within 10 us of
-one on the same PMT are dropped). ORACLE measures it and says so; the
-dead time is the operator's to apply, in DENIS.
+After a count, a PMT often counts again within a few us, far above
+chance, while after a count on another PMT nothing special happens (A.
+Raggio, November 2026, run 8244): the tube afterpulses or rings, and the
+spectrum is noisier than Poisson (variance/mean 2, 1.03 once counts within
+10 us of one on the same PMT are dropped). ORACLE measures it; the dead
+time is the operator's to apply, in DENIS.
 
-For each PMT, the time from each count back to the previous count on the
-same PMT, and back to the previous count on any other, in the same bunch
-(or DC window: across windows the time is not known). Chance is what the
-same pairing gives against the next bunches' counts at the same times in
-their bunch, which keeps the bunch's time-of-flight profile: in a bunch,
-real photons arrive within a few us of each other, so a flat chance
-level would take the light itself for afterpulsing. And light, and the
-bunch-to-bunch spread of the number of ions, raise both curves alike,
-where afterpulsing raises only the same PMT's: the other PMTs are the
-control that the analysis (scan_performance) judges against.
-
-The plotted curves take the time to the previous count, as the slide
-does. The judgement counts every pair within the dead time instead: in
-a dense bunch a count often has one of its own within 10 us by chance,
-so an afterpulse seldom changes which is nearest, but always adds one
-pair. Pairs in a bunch are not independent, so how far an excess stands
-out is judged against the scatter of the bunches' own contributions to
-it, not against Poisson's.
-
-Counts are keyed by bunch and time in the tagger's bins, as one integer,
-so every search is exact.
+Each count is set against the counts before it in its bunch (or DC
+window) on its own PMT and on the others. Chance is the same pairing
+against the next bunches' counts at the same times, which keeps the
+time-of-flight profile; light and the spread of ions per bunch raise both
+PMTs' pairs alike, so the other PMTs are the control. The plotted curves
+use the time to the previous count, as the slide does; the judgement
+counts every pair within the dead time (an afterpulse in a dense bunch
+seldom changes which count is nearest, but always adds a pair), against
+the scatter of the bunches' own contributions, since pairs in a bunch are
+not independent. Counts are keyed by bunch and tagger bin as one
+integer, so every search is exact.
 
 Depends on: numpy; cls_acquisition.hardware.timetagger (BIN_US, TIMESTAMP_BITS).
 """
@@ -133,6 +122,22 @@ class Pairs():
         ratio = lambda seen, chance: seen / chance if chance else np.inf if seen else 1.0
         return (excess, excess / spread if spread else 0.0, ratio(*totals[:2]),
                 ratio(*totals[2:]))
+
+    def Ratio(self, which):
+        """``(edges, observed / chance)`` of :meth:`Histogram`, NaN where chance has none."""
+        edges, observed, chance = self.Histogram(which)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            return edges, np.where(chance > 0, observed / chance, np.nan)
+
+    def Dead_Time(self, share):
+        """The shortest of DEAD_TIMES_US past which no excess is left: at most
+        ``share`` of the counts, or within a standard error of none; None if
+        some is left past them all."""
+        for tau in DEAD_TIMES_US[1:]:
+            pairs, errors, _, _ = self.Excess(tau, REACH_US)
+            if pairs / self.Count <= share or errors <= 1.0:
+                return tau
+        return None
 
     def Histogram(self, which):
         """``(edges, observed, chance)`` over 0 to REACH_US."""

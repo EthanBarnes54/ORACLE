@@ -1,37 +1,25 @@
 """The Scan tab: scan and buncher parameters, run control, the ELOG panel and the live plots.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The old DAQ's layout, control for control: parameters, buncher controls,
-scan controls and the ELOG panel down the left, and the HFS spectrum
-over the TOF spectrum and the TOF-HFS map on the right. The tab reads
-its own widgets into what the acquisition process needs (the plan, the
-trigger timing, bunches per step) and draws from a Live_Data; starting
-and stopping belong to the main window. Its voltages are bounded by the
-platform's limit, and its gate by the tagger's timestamp range and the
-trigger's cycle. DC hits come through the tagger too, so its gate stays
-settable in DC mode; only the bunched timing is greyed out there. A TOF
-bin finer than MAX_TOF_BINS across the gate is widened to it, as the old
-DAQ's was, so a small bin cannot ask the window for gigabytes.
+The old DAQ's layout: parameters, buncher, scan controls and the ELOG
+panel down the left; the HFS spectrum over the TOF spectrum and the
+TOF-HFS map on the right. The tab reads its widgets into what the
+acquisition process needs (plan, timing, bunches per step); starting and
+stopping are the main window's. Voltages are bounded by the platform's
+limit, the gate by the tagger's timestamp range and the cycle; DC hits
+come through the tagger too, so its gate stays settable in DC mode. A TOF
+bin finer than MAX_TOF_BINS across the gate is widened to it.
 
-The parameters box has a second page, the scan queue (gui.scan_queue):
-scans laid out ahead, each set up here as it starts.
-
-A run is drawn with its own tagger window and trigger rate, which a run
-file's record keeps, not with the boxes as they stand. Its view (the TOF
-bin, the gate, the channels, the map) is recorded as it starts and held
-for the whole scan. ``Show_Settings`` sets every control as a run file
-says it was taken; ``Inputs`` names every input, for the window's memory
-of them.
-
-What the rack cannot say of a run, the operator does: where the laser
-meets the beam (the interaction region, CEC or LCR) and the PMTs' high
-voltage, recorded with each run (``Setup``), and whether the run is a
-reference run, one taken to measure the beam's offset from the cooler's
-readback. The offset differs between the regions (Bi in the CEC, Yb+ in
-the LCR, November 2026), so which runs share one is learned from these.
+The parameters box's second page is the scan queue (gui.scan_queue). A
+run is drawn with its own recorded timing; its view is held for the whole
+scan. What the rack cannot say, the operator records: the interaction
+region (the cooler offset differs between CEC and LCR), the PMTs' high
+voltage, and whether the run is a reference run for that offset
+(``Setup``). ``Show_Settings`` sets every control as a run was taken;
+``Inputs`` names every input for the window's memory.
 
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
 cls_acquisition.hardware.timetagger, cls_acquisition.run_file,
@@ -53,13 +41,14 @@ from cls_acquisition.run_file import ORACLE_KEY
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots, theme
 from gui.scan_queue import ORDERS, Scan_Queue
-from gui.shared_widgets import Scroll_Column, Spin
+from gui.shared_widgets import Side_By_Side, Spin
 
 RANGES = 7
 REGIONS = ('Not stated', 'CEC', 'LCR')    # where the laser meets the beam
 CHANNELS = (1, 2, 3, 4)
 DC_TRIGGER_HZ = 1e9 / triggers.DC_PERIOD_NS
 MAX_TOF_BINS = 50000                # across the gate; the old DAQ's cap
+SCAN_AXIS = ('Scan voltage <i>U</i><sub>scan</sub>', 'V')
 
 
 def _Row(*widgets):
@@ -83,14 +72,9 @@ class Scan_Tab(QWidget):
     def __init__(self, limit_v, parent=None):
         super().__init__(parent)
         self._Limit_V = limit_v
-        column = QVBoxLayout()
-        column.addWidget(self._Build_Parameters())
-        column.addWidget(self._Build_Buncher())
-        column.addWidget(self._Build_Control())
-        column.addLayout(self._Build_Elog())
-        layout = QHBoxLayout(self)
-        layout.addWidget(Scroll_Column(column))
-        layout.addWidget(self._Build_Plots(), 1)
+        Side_By_Side(self, ((self._Build_Parameters(), 0), (self._Build_Buncher(), 0),
+                            (self._Build_Control(), 0), (self._Build_Elog(), 0)),
+                     self._Build_Plots())
         self._Drawn = None
         self.Bunched_Radio.toggled.connect(self._Mode_Changed)
         self.Dwell_Box.valueChanged.connect(self._Timing_Changed)
@@ -212,8 +196,8 @@ class Scan_Tab(QWidget):
     def _Build_Plots(self):
         group = QGroupBox('Plots')
         grid = QGridLayout(group)
-        self.Spectrum_Plot = plots.Plot('Hyperfine-structure spectrum', ('Scanning voltage', 'V'),
-                                        ('Counts per setpoint', None), (
+        self.Spectrum_Plot = plots.Plot('Hyperfine-structure spectrum', SCAN_AXIS,
+                                        ('Counts per setpoint <i>N</i>', None), (
             "Photon counts against the scanning voltage, accumulated over every scan of the "
             "run being taken, or of the run opened for display.",
             "Hits on the selected detector channels whose time of flight lies inside the gate "
@@ -224,8 +208,8 @@ class Scan_Tab(QWidget):
         self.Spectrum_Curve = plots.Dense_Curve(pen=plots.Pen())
         self.Spectrum_Plot.addItem(self.Spectrum_Curve)
         self.Tof_Plot = plots.Gate_Plot()
-        self.Map_Plot = plots.Plot('Time of flight against scanning voltage',
-                                   ('Scanning voltage', 'V'), ('Time of flight (µs)', None), (
+        self.Map_Plot = plots.Plot('Time of flight versus scan voltage', SCAN_AXIS,
+                                   ('Time of flight <i>t</i><sub>TOF</sub> (µs)', None), (
             "A two-dimensional histogram of hits by scanning voltage and time of flight; the "
             "colour gives the counts in each cell, on an automatically scaled inferno scale. "
             "Resonant fluorescence appears as a localised spot at the line's voltage and the "

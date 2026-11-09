@@ -1,44 +1,28 @@
 """ORACLE's main window and entry point.
 
-Date:    2026-11-09
+Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
-with the bench tool's Hardware Calibration and the Scan Performance
-analysis between them, above the quick-tune controls and the experiment
-information. Finished runs are viewed and fitted in DENIS. The window
-composes the pieces and owns the run: Start scan calibrates the scan's
-own plan, puts the calibration through the gate, and only then writes
-the run file's header and starts the scan; a REJECT writes nothing and
-says why. Data are appended to the run file as they arrive, and the file
-is closed when the acquisition process marks the scan's end. A hardware
-calibration runs on the same worker slot as a calibration, so it locks
-the same controls; its record is saved beside the run files, and a
-linearity sweep's DAC correction goes into force only when the operator
-says so, and into the settings with it. Every tab shows one run at a
-time, named on the Shown line: the latest as ORACLE opens, any opened
-(File ▸ Open run, or Scan Performance), or the one being taken, which a
-scan or the triggers start by clearing them all for, and which stays on
-them, saved and analysed, once it ends. A run is drawn with its own
-trigger timing, and opened, it comes back as it stood when it had just
-been taken, controls and all, from the record each run file keeps of
-what the archive's header does not (run_file.ORACLE_KEY); the plots'
-view is part of that record, and held from Start to the scan's end.
-The scan queue (gui.scan_queue) is driven from here: each queued scan is
-set up on the Scan tab and started as a scan is, with its number of
-scans, the next once it has ended cleanly (Automatic) or once the
-operator says so (Manual), and anything but a clean end stops the queue.
-Analysis runs off the GUI thread. Every input in the window is kept
-through a crash (gui.input_memory) and set again as ORACLE opens; those,
-not the latest run's, are the controls ORACLE opens with. If the
-acquisition process dies, the window clears the flags it left set,
-closes a run it was taking on what it recorded, and says so.
+The old DAQ's window (Scan, Scan Calibration, Time graphs) with the
+bench tool's Hardware Calibration and the Scan Performance analysis,
+above quick tune and the experiment information. The window owns the
+run: Start scan calibrates the scan's own plan, puts it through the gate,
+and only then writes the header and starts; a REJECT writes nothing and
+says why. Data are appended as they arrive, and the file closes when the
+loop marks the scan's end. Hardware calibrations share the calibration's
+worker slot, so they lock the same controls.
 
-``main()`` sets up the session log, one instance per user (two would
-fight over the instruments), the theme and splash, and the rack: the
-acquisition process, the meters and the facility services, all closed
-again if any one of them fails to open.
+Every tab shows one run, named on the Shown line, drawn with its own
+timing; opened, a run comes back as it was taken, controls and view
+included, from its ORACLE record. The scan queue is driven from here:
+anything but a clean end stops it. Every input survives a crash
+(gui.input_memory). If the acquisition process dies, the window clears
+its flags and closes a run it was taking on what it recorded.
+
+``main()`` sets up the session log, one instance per user, the theme and
+the rack (acquisition process, meters, facility services), all closed
+again if any fails to open.
 
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
@@ -369,17 +353,12 @@ class Main_Window(QMainWindow):
             self.Show_Run(path)
 
     def Show_Run(self, path, quiet=False, settings=True):
-        """The run at ``path`` on every tab at once, as it stood when it had
-        just been taken: its hits on the Scan tab and the Time graphs, drawn
-        with its own tagger window and trigger rate, its calibration and the
-        gate's verdict on the Scan Calibration tab, its run and scan numbers,
-        and its analysis on the Scan Performance tab; with ``settings``, the
-        controls too, as it was taken (scan, buncher and view). What ORACLE's
-        record of the run gives is shown; a run older than the record keeps
-        today's controls for what it lacks, and the Shown line says so. It
-        stays until a scan, the triggers or another run take the tabs.
-        Fitting it is DENIS's. ``quiet``: a run that cannot be read is said
-        in the log and the Shown line alone, as at start-up."""
+        """The run at ``path`` on every tab, as it was just taken: its hits,
+        drawn with its own timing; its calibration, gate and table fit; its
+        run and scan numbers; its analysis; and with ``settings``, the
+        controls too. A run older than ORACLE's record keeps today's controls
+        for what it lacks, and the Shown line says so. ``quiet``: a run that
+        cannot be read is said in the log and the Shown line only."""
         name = os.path.basename(path)
         try:
             run = run_file.Read(path)

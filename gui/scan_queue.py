@@ -1,34 +1,24 @@
 """The Scan queue: scans laid out ahead and taken one after another, unattended if need be.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A page of the Scan tab's parameters box, beside the scan parameters, laid
-out as DENIS's optimiser pages are: its options above, an editable table,
-a readout under it. Each row is one scan, and so one run file: its ranges
-(from:to in volts, apart by commas: 20:55, 60:80), its step, its bunches
-per step (seconds per step in DC mode, as on the parameters page), its
-order (Sawtooth takes every scan upwards, Triangle up and back) and how
-many scans it takes. What else a scan is taken with (the buncher's
-timing, the experiment, the plots' view) is the parameters page's, held
-for the whole queue.
+A page of the Scan tab's parameters box, laid out as DENIS's optimiser
+pages: options, an editable table, a readout. Each row is one scan and
+one run file: its ranges (``20:55, 60:80``), step, bunches per step
+(seconds in DC mode), order (Sawtooth, or Triangle up and back) and
+number of scans; the buncher timing, experiment and view are the
+parameters page's, held for the whole queue.
 
-Every row is checked as it is typed, as a scan is when it starts: a cell
-that is not a value turns red, and the readout gives each row's fault in
-a sentence, or its setpoints and about how long it takes, with the
-queue's whole time and when it would end. Add current adds the scan
-parameters as they stand; Show puts the selected row on the parameters
-page. As in DENIS, the table grows a fresh row as the last one fills,
-takes rows pasted from a spreadsheet (tab-separated, in the columns'
-order), and Delete clears the selected cells.
-
-Taking the scans is the main window's: Automatic starts each as the last
-ends; Manual asks before each after the first, saying what comes next.
-The State column is its record of each row (running, done, or why it
-stopped, the reason in the cell's tooltip); a row with none is queued.
-The rows and their states are kept through a crash, so a queue started
-again takes up at the first scan not done.
+Every row is checked as it is typed, as a scan is when it starts: a bad
+cell turns red, and the readout gives each row's fault, or its setpoints
+and duration, and when the queue ends. As in DENIS, the table grows a
+row as the last fills, takes rows pasted from a spreadsheet, and Delete
+clears cells. The main window takes the scans (Automatic, or Manual,
+asking before each after the first); the State column records each row,
+and rows and states survive a crash, so a restarted queue takes up at the
+first scan not done.
 
 Depends on: numpy, PySide6; cls_acquisition.calibration,
 cls_acquisition.scan_plan, gui.shared_widgets, gui.theme.

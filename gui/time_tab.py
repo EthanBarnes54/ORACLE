@@ -30,8 +30,9 @@ class Time_Tab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         grid = QGridLayout(self)
-        self.Counts_Plot = plots.Plot('Counts per time bin', ('Acquisition time (s)', None),
-                                      ('Counts per bin', None), (
+        self.Counts_Plot = plots.Plot('Counts per time bin',
+                                      ('Acquisition time <i>t</i> (s)', None),
+                                      ('Counts per bin <i>N</i>', None), (
             "Photon counts in successive time bins, to follow the beam intensity during a scan "
             "or while the triggers run; a fall to the background level indicates a loss of "
             "beam.",

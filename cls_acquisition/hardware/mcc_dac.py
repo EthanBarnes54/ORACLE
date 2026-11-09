@@ -1,51 +1,28 @@
 """The MCC USB-231 converters that set the platform voltage through the Trek 609E-6.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The two converters drive the amplifier's two inputs, positive setpoints
-on one and negative on the other, and the amplifier follows their
-difference: with both at 0 V the platform sits at its offset, about
--1 V, whichever was driven last, and it runs on through 0 V (the bench,
-24 and 25 October 2026). Each converter has its own gain and integral
-non-linearity, so a line through each branch meets 0 V at a different
-place, and no single line describes both: Mode C, in all 294 archived
-runs. The outgoing converter is released before the incoming one is
-driven, so the amplifier never sees both at once, and 0 V goes to the
-positive converter.
+Two converters drive the amplifier's differential inputs, positive
+setpoints on one and negative on the other; with both at 0 V the platform
+sits at its offset, about -1 V (the bench, 24 and 25 October 2026). Each
+has its own gain and integral non-linearity (Mode C). The outgoing
+converter is released before the incoming one is driven, and 0 V goes to
+the positive one. A setpoint is written as the code the board rounds it
+to (0.305 V a code at the platform), so each write returns what the
+converter holds, and each run records those codes.
 
-Each converter is 16 bits across +-10 V, 0.305 V a code at the platform.
-A setpoint is written as the code the board itself would round it to
-(the bench's records match that rounding in every case), so what each
-write returns is what the converter really holds, not what was asked.
+The correction ships as identity: production runs write uncorrected and
+the bench table is applied after collection (Ethan, 9 November 2026), so
+a measured correction in force is warned of at every calibration, lest
+it be applied twice; one past its validity is refused, and a setpoint
+outside the range its non-linearity covers is refused, not extrapolated.
+:attr:`Dac.Identity` names the board (InstaCal name and unique ID).
 
-The correction ships as identity. A linearity sweep measures each
-branch's gain and offset, and, from a dense enough sweep, its integral
-non-linearity: a smooth shape that repeated to 0.017 V rms between two
-days on the bench, against 0.17 V for the shape itself. Its knots are
-25 V apart because the shape repeats every 1024 codes (312.5 V), the
-converter's major carry. Each run records which correction was in
-force (DacCorrectionApplied, DacCorrection), a measured table past its
-stated validity is refused at calibration, and a setpoint outside the
-range the non-linearity was measured over is refused rather than
-extrapolated. Production runs write uncorrected: the bench table is
-applied to the data after collection (Ethan, 9 November 2026), so a
-correction in force on the write is warned of at every calibration,
-lest it be applied twice.
-
-Each run records the code every setpoint was written as (:func:`Quantised`
-of what each write returns), and the board's own identity (:attr:`Dac.Identity`,
-its name and unique ID from InstaCal), so what the DAC held is known exactly.
-
-The same board's digital line can gate the tagger's window (PulseBlaster
-channel 18, through an AND unit), so a scan step's settling bunches are
-never acquired while the PulseBlaster, and the buncher with it, runs on
-untouched. With no line wired the gate does nothing, and the acquisition
-loop discards those bunches itself.
-
-Every setpoint is held to one limit, the most the amplifier may be asked
-for, whoever asks: a plan beyond it is refused before its first write.
+The same board's digital line can gate the tagger's window (an AND unit
+on PulseBlaster channel 18), so a step's settling bunches are never
+acquired. Every setpoint is held to one limit, whoever asks.
 
 Depends on: numpy; mcculw, imported only when a board is opened.
 """

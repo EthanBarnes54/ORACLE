@@ -1,38 +1,24 @@
 """What has been acquired since the last clear, and the histograms drawn from it.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Rows arrive in packets several times a second. Each update histograms
-only the rows that came since the last one, so a long scan costs no more
-per update than a short one; a change of binning, gate or channels
-histograms everything again, once.
+Each update histograms only the rows since the last, so a long scan
+costs no more per update than a short one; a change of binning, gate or
+channels histograms everything again, once. The spectrum and the TOF-HFS
+map count hits inside the TOF gate; the TOF spectrum counts every hit, so
+the gate can be placed on it. The map is held only while shown, at most
+MAX_MAP_BINS a side.
 
-The spectrum and the TOF-HFS map count only hits inside the TOF gate;
-the TOF spectrum counts every hit on the chosen channels, so the gate can
-be placed on it. The map is held only while it is shown, on edges no
-finer than MAX_MAP_BINS a side (every few of the spectrum's and the TOF's
-own, its ends theirs): it is volts by times, and at their own resolution
-a fine scan over a fine TOF is gigabytes.
-
-Only the four columns the plots read are kept (the run file has every
-column), each in blocks of BLOCK_ROWS, so a long run grows a block at a
-time rather than by doubling one array. Each holds its values as the
-narrowest whole-number codes that give every one of them back exactly:
-a time of flight as tagger bins, a bunch and a channel as themselves, a
-voltage as which of the run's setpoints it is. That is 11 bytes a hit
-against 48 for the run file's float64 row, and every histogram is the
-float64 one. A value its codes cannot hold (a time off the tagger's bin,
-from an old run, or more distinct voltages than the codes count) turns
-that column to float64, once, and nothing is rounded. ``Version`` moves
-whenever anything drawn from here changes, so a tab redraws only then.
-
-As rows arrive, each PMT's pairs within the dead time of a count before
-it in the same bunch are counted, on itself and on the others: a few
-counters, an early warning of a tube that afterpulses
-(cls_acquisition.detectors). A bunch's hits arrive together, so each
-packet is counted on its own.
+Only the four plotted columns are kept, in blocks of BLOCK_ROWS, each as
+the narrowest whole-number codes that give every value back exactly (11
+bytes a hit against the run file's 48); a value the codes cannot hold
+turns its column to float64, and nothing is rounded. ``Version`` moves
+whenever anything drawn changes, so a tab redraws only then. As rows
+arrive, each PMT's pairs within the dead time are counted on itself and
+on the others (cls_acquisition.detectors), an early warning of a tube
+that afterpulses.
 
 Depends on: numpy; cls_acquisition.detectors, cls_acquisition.hardware.timetagger
 (no Qt, so it is tested headless).

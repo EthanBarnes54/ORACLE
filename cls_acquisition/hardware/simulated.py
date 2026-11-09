@@ -1,48 +1,29 @@
 """The simulated rack: a software bench the whole DAQ runs on without hardware.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Only the instruments are simulated. The acquisition loop, the DAC
-routing and its code rounding, the meter drivers and their VISA
-sessions, the calibration and its gate all run unmodified on top.
+Only the instruments are simulated; the loop, the DAC routing and
+rounding, the meter drivers and the calibration run unmodified on top.
+It imitates the rack the bench tool measured on 24 and 25 October 2026:
 
-The rack it imitates is the one the bench tool (cls-cal) measured on
-24 and 25 October 2026, so a hardware calibration here finds what it
-found there:
-
-* the platform answers a step with a 0.4 ms rise, then overshoots by
-  0.18 % of the jump about 6.5 ms later and settles back, inside 0.5 V
-  of a 1 kV jump in 17 ms and of a 2 kV jump in 20 ms;
-* the two converters drive the amplifier's two inputs, and the platform
-  sits where the 1 V-step sweep across +-3 kV found it, readback less
-  setpoint on knots 50 V apart: each converter's gain and integral
-  non-linearity, and the amplifier's offset of about -1 V, which is
-  where 0 V sits whichever converter was driven last;
-* the line meter scatters by 0.069 V at the platform at a 200 us
-  aperture, falling as the root of the integration time, and picks up
-  0.041 V of the 50 Hz mains, which a reading averages over its
+* the platform's step response (0.4 ms rise, 0.18 % overshoot, inside
+  0.5 V of a 1 kV jump in 17 ms);
+* both converters' gain and non-linearity and the amplifier's -1 V
+  offset, as readback less setpoint on 50 V knots from the 1 V sweep;
+* the line meter's 0.069 V of noise at 200 us, falling as the root of
+  the integration, and 0.041 V of mains averaged over each reading's
   integration, so whole power line cycles take it out;
-* the cooler sits at 29884.8 V with the mains ripple and harmonics the
-  cooler monitor recorded, a slow drift, and 0.17 V of noise.
+* the cooler at 29884.8 V with the recorded mains harmonics, a slow
+  drift and 0.17 V of noise.
 
-The meters answer the SCPI the drivers send, mark a reading beyond their
-range as 9.9E37, and report anything else through SYST:ERR?. They also
-sample timed captures (INIT, then FETC? or R?) on a thread of their own,
-so a capture catches whatever the platform does meanwhile; back-to-back
-readings take READ_TIME_S, not their integration time, to keep tests
-quick. The PulseBlaster's period clocks a tagger that sees three
-resonances on a flat background, the ions in one time-of-flight bunch,
-timed in the card's 500 ps bins. The PMTs can afterpulse (AFTERPULSE, a
-chance per count per input, the extra count 2 to 5 us later on the same
-input) and the number of ions can spread from bunch to bunch
-(ION_SPREAD), which raises every PMT's counts together; the bench
-measured no PMTs, so both are off unless a test sets them.
-
-The converters live in the acquisition process and the line meter in
-the GUI's, so the platform's state is shared memory (:class:`Platform`),
-made by the GUI and handed to the loop when it starts.
+The meters answer the drivers' SCPI and sample timed captures on their
+own thread at the instants their timer sets. The PulseBlaster clocks a
+tagger with three resonances on a background, in 500 ps bins; its PMTs
+can afterpulse (AFTERPULSE) and the ions spread per bunch (ION_SPREAD),
+both off unless a test sets them. The platform's state is shared memory
+(:class:`Platform`), made by the GUI and handed to the loop.
 
 Depends on: numpy; cls_acquisition.calibration, .keysight, .mcc_dac,
 .timetagger and cls_acquisition.triggers.

@@ -1,34 +1,22 @@
 """The cooler's voltage as the analysis takes it: a rolling mean over time.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The cooler meter is read for 200-500 us every 50 ms, not with the bunch,
-so each reading catches the 50 Hz ripple (0.33 V amplitude on the bench)
-at a random phase. Correcting each hit by its own reading adds that
-scatter to the spectrum rather than taking anything out (A. Raggio,
-November 2026). The meeting agreed the analysis takes a rolling mean
-instead, about 15 s wide, which follows the slow wander (33 mV rms in
-1 s means) and averages the ripple's aliasing away; cls_tools is being
-changed to do the same. ORACLE uses it to judge a run as it will be
-analysed, and shows it wherever the cooler is plotted over a run.
+so each reading catches the 50 Hz ripple (0.33 V amplitude) at a random
+phase, and correcting each hit by its own reading adds that scatter to
+the spectrum (A. Raggio, November 2026). The analysis takes a rolling mean
+of about 15 s instead, which follows the slow wander (33 mV rms in 1 s
+means); cls_tools is being changed to match. The window is in seconds,
+not readings, whose rate changes (10 Hz monitor now, per bunch later).
 
-The window is in seconds, never in readings: a count of readings changes
-its meaning with the rate they are taken at (the monitor's 10 Hz now, a
-reading per bunch once the meter takes them with the bunch). A
-reading's scatter of about 0.3 V falls to about 25 mV over 15 s at
-10 Hz, below the wander the mean is to follow.
-
-A mean is a boxcar over the readings within the window of each time:
-centred (half the window either side, for a run already taken) or
-trailing (the window before it, for a live display, which then lags by
-half the window). It never reaches across a gap in the readings longer
-than the window, as no window that long can hold readings from both
-sides; where it reaches past the readings at either end of the stretch
-it is in, it is marked partial, as it then holds one side only. Until
-cls_tools' definition is agreed (centred or trailing, edges, gaps),
-both forms and the window are parameters.
+The mean is a boxcar over the readings within the window: centred, for a
+run taken, or trailing, for a live display (lagging by half the window).
+It never reaches across a gap longer than the window, and is marked
+partial where it reaches past the readings of its stretch. Both forms
+and the window stay parameters until cls_tools' definition is agreed.
 
 Depends on: numpy.
 """

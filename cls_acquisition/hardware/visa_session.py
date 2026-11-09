@@ -1,26 +1,19 @@
 """One owner thread per instrument: every command to a meter goes through it.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A VISA query is a write and a read, two bus transactions, and in the old
-DAQ nothing stopped a second thread landing between them: that is how
-Mode A left the line meter ungated. Here a caller never touches the
-instrument. It hands a function to :meth:`Visa_Session.Transaction`,
-which runs it whole on the instrument's own thread and waits for the
-result, so command sequences cannot interleave. There is one session per
-resource however many objects open it (the old DAQ had two classes on
-the cooler meter), and the last to close it closes the instrument.
-
-Within ORACLE that settles who may speak to a meter; between programs,
-:func:`Pyvisa_Connect` takes VISA's exclusive lock, so the bench tool or
-the old DAQ cannot open a meter ORACLE holds, nor ORACLE one of theirs.
-
-An instrument here is anything with ``write``, ``query``, ``clear``,
-``close`` and a ``timeout`` in milliseconds: a pyvisa resource through
-:func:`Pyvisa_Connect`, or the simulated meter. Its I/O failures are
-Instrument_IO_Error, a RuntimeError naming the instrument.
+A VISA query is two bus transactions, and in the old DAQ a second thread
+could land between them: Mode A left the line meter ungated. Here a
+caller hands a function to :meth:`Visa_Session.Transaction`, which runs
+it whole on the instrument's own thread, so command sequences cannot
+interleave. There is one session per resource however many open it (the
+old DAQ had two classes on the cooler meter); the last to close it
+closes the instrument. Between programs, :func:`Pyvisa_Connect` takes
+VISA's exclusive lock. An instrument is anything with ``write``,
+``query``, ``clear``, ``close`` and a ``timeout`` in ms; its I/O failures
+are Instrument_IO_Error, naming it.
 
 Depends on: pyvisa, imported by :func:`Pyvisa_Connect` alone.
 """

@@ -1,61 +1,38 @@
 """Scan performance: how the rack's behaviour during a run shaped its spectrum.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A spectrum is counts against the scanning voltage, and every part of the
-pipeline can move a count to the wrong voltage or lose it: the DAC and
-its amplifier, the loop's timing, the cooler, the laser, the beam, the
-detectors. This reads a finished run (its file, and its monitor record
-if it has one) and asks of each part whether it stayed inside tolerance.
-Each check returns PASS, WARN or FAIL with the number it decided on, or
-N/A when the run does not hold what it needs. Nothing is cut: what
-deserves a look is flagged, and the operator decides in DENIS. The
-verdict is the worst check's; it never stops a run being kept.
+Reads a finished run (its file, and its monitor record if it has one)
+and asks of each part of the pipeline (the DAC and amplifier, the loop's
+timing, the cooler, the laser, the beam, the detectors) whether it
+stayed within tolerance. Each check returns PASS, WARN or FAIL with the
+number it decided on, or N/A when the run lacks what it needs; the
+verdict is the worst. Nothing is cut: what deserves a look is flagged,
+and the operator decides in DENIS.
 
-The spectrum is judged as the analysis builds it: each hit at its
-voltage tag less the cooler's departure at its time, taken as the
-rolling mean of the cooler's readings (cls_acquisition.cooler, agreed in
-November 2026; a reading is not taken with the bunch, so each hit's own
-aliases the mains ripple), on one grid from the lowest setpoint to the
-highest, so ranges that overlap (the old DAQ allowed them) are one range.
-The readings are the monitor's, or, for a run without one, the reading
-stamped on each bunch's hits. A shift or
-spread is set against the width of the run's own strongest line, and
-given in MHz where the run holds the mass, cooler and laser to convert
-it; where no line stands out of the background, the step is the scale.
+The spectrum is built as the analysis builds it: each hit at its voltage
+tag less the cooler's departure at its time, by the rolling mean of the
+cooler's readings (cls_acquisition.cooler), on one grid from the lowest
+setpoint to the highest. Sizes are set against the width of the run's
+strongest line, in MHz where the run holds the mass, cooler and laser;
+with no line, against the step.
 
-Statistics hold at any count rate. Rather than scan by scan (a fast
-sawtooth has a few hits a scan), the run is cut into periods that hold
+Statistics hold at any count rate: the run is cut into periods holding
 enough counts to say something, and a deviation is flagged only when it
-is both improbable under counting statistics and large enough to
-matter. Idle time is what the bunch count does not account for, so a
-run with a hit a minute holds no false pauses.
-
+is both improbable under counting statistics and large enough to matter.
 The line's position is fitted period by period against the run's own
-summed spectrum, which needs no lineshape or hyperfine model and uses
-every peak. The monitors (the HV against its calibration, the laser
-against the setpoint DENIS takes) say how far they should have moved
-it, and what they leave unexplained is reported. The calibration is
-judged as DENIS fits it (a straight line, its robust outlier rule) and
-against the runs before it.
-
-A run of the old DAQ numbered its bunches by the tagger's count and
-stepped without waiting. Its scan type and the count's origin are found
-from whichever fits best, the bunches it took before a step settled are
-estimated from the settle model, and a bunch count that parted from the
-voltage steps (the collinear DAQ's D5) is reported, not cut.
-
-Each PMT is judged for afterpulsing (cls_acquisition.detectors): counts
-that follow one of its own within the dead time beyond what the other
-PMTs show, which light and the beam raise alike; and how far its counts
-scatter across scans beyond Poisson, at dead times from 0 to 20 us, the
-part every PMT shares (the beam) told from its own. A dead time is
-suggested for DENIS, never applied.
+summed spectrum (no lineshape needed), and set against what the HV and
+laser monitors predict. The calibration is judged as DENIS fits it and
+against earlier runs. An old-DAQ run's scan type and bunch origin are
+inferred, its unsettled bunches estimated, and a parted bunch count
+(its D5) reported. Each PMT is judged for afterpulsing
+(cls_acquisition.detectors), with a dead time suggested, never applied;
+the run's systematics' inputs come last (cls_acquisition.systematics).
 
 Depends on: numpy, PyYAML; cls_acquisition.calibration, .cooler,
-.detectors, .run_file, .scan_plan and .hardware.keysight.
+.detectors, .run_file, .scan_plan, .systematics and .hardware.keysight.
 """
 
 import math
@@ -349,20 +326,15 @@ class _Report():
 def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
             rolling_s=cooler.ROLLING_S, dead_time_us=detectors.DEAD_TIME_US, declared=None):
     """The report on one run: ``Verdict``, ``Summary``, ``Budget`` (the line's
-    width and what moved it, at the ions, in one sentence), ``Sections``
-    (name to checks), ``Series`` for the plots and ``Flagged``, sentences
-    on what deserves a look (nothing is cut). ``laser`` is the experiment's
-    {'harmonic', 'geometry', 'charge'}, used if the run does not record its
-    own; ``settle_model`` estimates an old DAQ run's settling; ``history``
-    holds earlier runs' calibrations, ``(run, CalSet, CalReadback, scan
-    divider or None)``, newest first, of runs calibrated as this one was
-    (run_file.Earlier_Calibrations). Readbacks are scaled by each run's
-    own divider ratios (:func:`Dividers`). The cooler is taken as its
-    rolling mean over the window the run recorded, or ``rolling_s``, and
-    the PMTs are judged at the dead time it recorded, or ``dead_time_us``.
-    ``Detectors`` holds each PMT's afterpulsing and the dead time
-    suggested for it, and ``Systematics`` the run's systematics' inputs
-    (cls_acquisition.systematics), with ``declared`` the settings'."""
+    width and what moved it, in one sentence), ``Sections`` (name to
+    checks), ``Series`` for the plots, ``Flagged`` (nothing is cut),
+    ``Detectors`` (each PMT's afterpulsing and suggested dead time) and
+    ``Systematics`` (the inputs, cls_acquisition.systematics). ``laser``,
+    ``rolling_s`` and ``dead_time_us`` stand in where the run does not
+    record its own; ``settle_model`` estimates an old DAQ run's settling;
+    ``history`` holds earlier runs' calibrations (run_file.Earlier_Calibrations);
+    ``declared`` is the settings' systematics. Readbacks are scaled by each
+    run's own dividers (:func:`Dividers`)."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -1285,6 +1257,18 @@ def _Channels(report, channels, times, wired, t0):
 
 # ── The detectors ───────────────────────────────────────────────
 
+def _Scan_Cells(bunch, tags, n, per_step):
+    """``(cells, shape)``: each count's (complete scan, setpoint) cell, -1
+    outside one, and (scans, setpoints); (None, None) where the run's scans
+    are unreliable or fewer than three."""
+    if not (tags['Reliable'] and tags['Complete'] >= 3):
+        return None, None
+    steps = (bunch // per_step).astype(np.int64)
+    scan = steps // n
+    return (np.where(scan < tags['Complete'], scan * n + _Step_Index(steps, n, tags['Kind']),
+                     -1).astype(np.int64), (tags['Complete'], n))
+
+
 def _Detectors(report, raw, bunch, tags, n, per_step, wired, dead_time_us):
     """Each wired PMT's afterpulsing: its counts within ``dead_time_us`` of
     one of its own beyond what the other PMTs show, flagged when both
@@ -1300,14 +1284,7 @@ def _Detectors(report, raw, bunch, tags, n, per_step, wired, dead_time_us):
     same = np.full(len(channel), np.inf, dtype=np.float32)
     for c, found in pairs.items():
         same[channel == c] = np.where(np.isfinite(found.Same), found.Same, np.inf)
-    cells, shape = None, None
-    if tags['Reliable'] and tags['Complete'] >= 3:
-        steps = (bunch[order] // per_step).astype(np.int64)
-        scan = steps // n
-        cells = np.where(scan < tags['Complete'],
-                         scan * n + _Step_Index(steps, n, tags['Kind']), -1).astype(np.int64)
-        shape = (tags['Complete'], n)
-        del steps, scan
+    cells, shape = _Scan_Cells(bunch[order], tags, n, per_step)
     del order
     spreads = {tau: detectors.Dispersion(cells, shape, channel, wired,
                                          same <= tau if tau else None)
@@ -1320,22 +1297,11 @@ def _Detectors(report, raw, bunch, tags, n, per_step, wired, dead_time_us):
                        f"Channel {c} counted {found.Count if found else 0} times, too few to "
                        f"judge its afterpulsing (it needs {TOLERANCES['DetectorCounts']}).")
             continue
-        edges, seen, chance = found.Histogram('Same')
-        _, seen_other, chance_other = found.Histogram('Other')
-        with np.errstate(divide='ignore', invalid='ignore'):
-            curves[c] = (edges, np.where(chance > 0, seen / chance, np.nan),
-                         np.where(chance_other > 0, seen_other / chance_other, np.nan))
+        curves[c] = (*found.Ratio('Same'), found.Ratio('Other')[1])
         excess, z, own, others = found.Excess(0.0, dead_time_us)
         share = excess / found.Count
         afterpulses = z > TOLERANCES['Significance'] and share > TOLERANCES['AfterpulseShare']
-        suggested = None
-        if afterpulses:
-            # past it, no excess left: too little to matter, or within a standard error of none
-            left = {tau: found.Excess(tau, detectors.REACH_US)[:2]
-                    for tau in detectors.DEAD_TIMES_US[1:]}
-            beyond = [tau for tau, (pairs, errors) in left.items()
-                      if pairs / found.Count <= TOLERANCES['AfterpulseShare'] or errors <= 1.0]
-            suggested = beyond[0] if beyond else None
+        suggested = found.Dead_Time(TOLERANCES['AfterpulseShare']) if afterpulses else None
         message = (f"Channel {c}'s {found.Count} counts hold {max(share, 0.0):.1%} more pairs "
                    f"within {dead_time_us:g} µs of one of its own than chance and the other "
                    f"PMTs account for, about that share of them afterpulses: its pairs stand at "

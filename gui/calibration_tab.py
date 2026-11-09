@@ -1,41 +1,32 @@
 """The Scan Calibration tab: a stand-alone calibration and the gate's verdict on it.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The old DAQ's layout: the parameters and the start button on the left,
-and on the right the calibration (readback against set) over the
-readback's departure from the set voltage and the measured step size.
-The plots fill point by point as the calibration runs, and the gate's
-verdict, the figures it decided on and each check's verdict are reported
-under the button once it has finished.
-
-A calibration runs on a worker thread, not the GUI thread, so the window
-stays live without pumping events from inside it (the old DAQ's
-processEvents loop let a click land mid-calibration); the main window
-keeps every control that could interfere disabled until it has finished.
-Readings are scaled to the platform by the scan divider's ratio, the
-settings' for a calibration taken here and the run's own for a run shown.
-
-With a bench table in force, the calibration is fitted to it, V = a +
-b*T (scan_table.Fit_Run): reported beside the gate, with the runs before
-it on the same table, and drawn over the readings' departure from the
-setpoint, the converters' shape the table holds.
+The old DAQ's layout: parameters and start on the left, the readback
+against setpoint over its deviation and the measured step on the right,
+filling point by point; the gate's verdict and checks follow. The
+calibration runs on a worker thread, so the window stays live without
+pumping events (the old DAQ's processEvents let a click land
+mid-calibration), and the main window disables whatever could interfere.
+Readings are scaled by the scan divider: the settings' for one taken
+here, the run's own for one shown. With a bench table in force, the
+calibration is fitted to it (scan_table.Fit_Run), reported with the runs
+before it on the same table, and drawn over the readings' deviation.
 
 Depends on: numpy, PySide6; cls_acquisition.calibration,
-cls_acquisition.scan_plan, gui.plots, gui.shared_widgets.
+cls_acquisition.scan_plan, gui.plots, gui.shared_widgets, gui.theme.
 """
 
 import numpy as np
-from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QPushButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import QGridLayout, QGroupBox, QPushButton, QVBoxLayout, QWidget
 
 from cls_acquisition import calibration
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots, theme
 from gui.shared_widgets import (REPORT_WIDTH, Figure, Form, Muted, Report_Html, Report_Label,
-                                Report_Table, Scroll_Column, Spin, Verdict_Badge)
+                                Report_Table, Side_By_Side, Spin, Verdict_Badge)
 
 # the gate's checks as a report names them
 CHECK_NAMES = {'dac_calibration': 'DAC calibration'}
@@ -64,9 +55,9 @@ class Calibration_Tab(QWidget):
 
         plot_group = QGroupBox('Plots')
         plot_grid = QGridLayout(plot_group)
-        set_axis = ('Setpoint', 'V')
-        self.Readback_Plot = plots.Plot('HV readback against setpoint', set_axis,
-                                        ('Readback voltage', 'V'), (
+        set_axis = (f"Setpoint {plots.U_SET}", 'V')
+        self.Readback_Plot = plots.Plot('Scan-voltage readback versus setpoint', set_axis,
+                                        (f"Readback {plots.U_RB}", 'V'), (
             "The platform voltage measured at each step of the calibration, against the voltage "
             "commanded. A working high-voltage chain lies on a straight line of unit slope.",
             "Each setpoint is written to the DAC and, once the amplifier has settled, the line "
@@ -75,7 +66,7 @@ class Calibration_Tab(QWidget):
             "averages out; a reading taken before the step had settled is repeated. The "
             "run's calibration is the straight line fitted to these points."))
         self.Difference_Plot = plots.Plot('Readback deviation from setpoint', set_axis,
-                                          ('Readback − setpoint', 'V'), (
+                                          (f"{plots.U_RB} − {plots.U_SET}", 'V'), (
             "Measured minus commanded voltage at each calibration step: the offset, gain error "
             "and non-linearity of the high-voltage chain.",
             "The readback (line meter reading × the divider's ratio) less the setpoint. An "
@@ -84,7 +75,8 @@ class Calibration_Tab(QWidget):
             "codes 0.305 V apart) remain in the voltage axis unless a DAC correction is in "
             "force. With a bench table in force, the line is the table fitted to the "
             "readings, a + b·T, less the setpoint."))
-        self.Step_Plot = plots.Plot('Measured voltage step', set_axis, ('Readback step', 'V'), (
+        self.Step_Plot = plots.Plot('Measured step size', set_axis,
+                                    (f"Readback step Δ{plots.U_RB}", 'V'), (
             "The change in readback from one calibration step to the next, which should equal "
             "the commanded step size.",
             "The difference of successive readbacks, plotted at the later setpoint. Scatter "
@@ -98,12 +90,7 @@ class Calibration_Tab(QWidget):
         plot_grid.addWidget(self.Difference_Plot, 1, 0)
         plot_grid.addWidget(self.Step_Plot, 1, 1)
 
-        controls = QVBoxLayout()
-        controls.addWidget(self.Params_Group)
-        controls.addWidget(self.Control_Group, 1)
-        layout = QHBoxLayout(self)
-        layout.addWidget(Scroll_Column(controls))
-        layout.addWidget(plot_group, 1)
+        Side_By_Side(self, ((self.Params_Group, 0), (self.Control_Group, 1)), plot_group)
         self._Set, self._Readback = [], []
 
     def Plan(self):
