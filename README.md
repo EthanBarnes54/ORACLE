@@ -67,8 +67,8 @@ How far the rack's behaviour during a run shaped its data, run by run: the last 
 - **Voltage scan**: hits carrying a voltage other than the one their bunch was due at; setpoints outside the plan; the calibration's tracking and residual; where the two branches' lines meet 0 V; the platform during the scan (the line meter's live readback) against the start-of-run calibration; the calibration against the runs before it that were calibrated the same way (by ORACLE or by the old DAQ, under the same DAC correction), since across either the two measure different things
 - **Timing**: whether reads kept up with the bunches; stalls and pauses (a sleeping PC shows here); bunches taken before their step had settled; triggers the loop missed; the TOF peak's drift beyond its own scatter
 - **Beam and spectrum**: beam losses, rate stability and scan-to-scan shape against counting statistics; the strongest peak's centroid scan by scan, its drift and jitter; channel balance
-- **Cooler and laser**: drift and scatter, the laser converted through the Doppler shift at the run's mass and beam energy
-- **Recommended cuts**: scans to exclude, each with its reason, and for runs taken before settle-aware stepping the bunches to drop at the start of every step. **Export for DENIS** writes `run_NNNN_performance.yaml` beside the run, the cuts under DENIS's `scan_filters` key
+- **Cooler and laser**: the cooler as the analysis takes it, the rolling mean of its readings over `cooler: rolling_s` (15 s), plotted over the readings: how far the mean moved, which the analysis follows, and how far the readings scatter about it, which no mean removes; the laser converted through the Doppler shift at the run's mass and beam energy
+- **Flagged for review**: what deserves a look, each with its reason. Nothing is cut: the operator decides in DENIS. **Export report** writes `run_NNNN_performance.yaml` beside the run
 
 ### Time graphs
 - Counts against time for the chosen channels, in bins of 100 s down to 0.1 s at the trigger rate in force
@@ -166,6 +166,7 @@ Beside it, `settings/inputs.yaml` is ORACLE's memory of every input in the windo
 | `dac_correction` | *(empty: identity)* | the DAC correction a linearity sweep measured, written by **Use as DAC correction**: each branch's polynomial, and its non-linearity table where measured. A setpoint outside the range the table was measured over is refused, never extrapolated. Production runs write uncorrected, since the bench table is applied after collection: a calibration with a correction in force is warned of, lest it be applied twice |
 | `settle_model` | *(empty: SETTLE for every step)* | the scan's settling against jump size, written by **Use as scan settle model** on the Settle time page; each step waits 1.25 times it |
 | `cooler_pv` | disabled | `enabled`, `prefix` (`FURIOS:Cooler:`): publish the cooler's voltage as EPICS PVs. Needs pcaspy, which has no Windows wheel for Python 3.13 yet; never from a simulated rack |
+| `cooler` | `rolling_s` 15 | the window of the cooler's rolling mean, in seconds: the analysis takes the cooler as the mean of its readings over it, since a reading is not taken with the bunch and alone aliases the mains ripple (A. Raggio, November 2026). Recorded with each run; Scan Performance judges a run by it and plots it over the readings |
 | `laser` | harmonic 4, anti-collinear, charge 1 | how the laser meets the ions, as DENIS takes it: Scan Performance puts the laser into scan volts with it |
 
 ---
@@ -186,6 +187,7 @@ One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look 
 | `View` | the plots' TOF bin, gate, channels and map, held for the whole scan |
 | `Calibration` | the gate's verdict, each check's verdict and message, and the numbers it decided on |
 | `SettleModel`, `Laser`, `Channels` | the settle model in force; the laser's harmonic, geometry and charge; the wired tagger inputs |
+| `CoolerRollingS` | the window, in seconds, of the cooler's rolling mean the run is analysed with |
 
 **What the rack was and what it held**
 

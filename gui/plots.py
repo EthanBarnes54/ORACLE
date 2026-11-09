@@ -1,7 +1,7 @@
 """The plots: their dark style, how they are handled, and the TOF plot that carries the gate.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 pyqtgraph, as in the old DAQ, because the plots redraw several times a
@@ -36,7 +36,7 @@ import numpy as np
 import pyqtgraph as pg
 from pyqtgraph.graphicsItems.PlotCurveItem import arrayToLineSegments
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPaintEngine
+from PySide6.QtGui import QColor, QPaintEngine
 from PySide6.QtWidgets import QApplication, QToolButton
 
 from gui import theme
@@ -137,6 +137,13 @@ def _Style(plot, title, x_axis, y_axis, about):
 
 def Pen(colour=theme.TRACE):
     return pg.mkPen(colour, width=2)
+
+
+def Faint_Pen(colour=theme.TRACE, alpha=70):
+    """A thin, translucent pen, for the readings under a mean drawn over them."""
+    faint = QColor(colour)
+    faint.setAlpha(alpha)
+    return pg.mkPen(faint, width=1)
 
 
 def Collapse(x, y, device_x):

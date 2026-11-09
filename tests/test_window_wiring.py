@@ -675,6 +675,7 @@ def test_A_Run_Records_The_Rack_It_Was_Taken_On_And_The_Codes_Its_Dac_Held(qapp,
     assert record['Commit'] == settings.Commit()
     assert record['InteractionRegion'] == 'LCR'
     assert record['PmtHv'] == {'Pvs': None, 'Entered': '1: 1850, 2: 1900 V'}
+    assert record['CoolerRollingS'] == settings.DEFAULTS['cooler']['rolling_s']
     assert record['TaggerLevels'] == {
         'Inputs': settings.DEFAULTS['instruments']['tagger_levels'],
         'Trigger': settings.DEFAULTS['instruments']['tagger_trigger_level']}

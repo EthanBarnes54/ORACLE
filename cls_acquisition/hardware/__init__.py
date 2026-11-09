@@ -10,7 +10,8 @@ The acquisition process owns the DAC, the PulseBlaster and the tagger
 readings on the GUI's side. The drivers import their vendor libraries
 only when the hardware rack is opened, so a simulated rack needs none.
 A platform limit set above the amplifier's rating, or a divider ratio
-that is not a positive number, is refused before anything opens.
+or the cooler's rolling window that is not a positive number, is
+refused before anything opens.
 
 :meth:`Rack.Identity` is the rack as it names itself (the meters'
 *IDN?, the DAC board's unique ID, the tagger's wrapper) and as the
@@ -44,6 +45,11 @@ class Rack():
                 raise ValueError(f"The settings give the {key.replace('_', ' ')} a ratio of "
                                  f"{ratio!r}; it must be a positive number of platform volts "
                                  f"per volt at its meter (hardware: {key}: ratio).")
+        window = settings['cooler']['rolling_s']
+        if not (isinstance(window, (int, float)) and window > 0):
+            raise ValueError(f"The settings give the cooler's rolling mean a window of "
+                             f"{window!r}; it must be a positive number of seconds (cooler: "
+                             f"rolling_s).")
         self.Scan_Divider = float(self._Hardware['scan_divider']['ratio'])
         self.Cooler_Divider = float(self._Hardware['cooler_divider']['ratio'])
         self._Correction = settings['dac_correction'] or mcc_dac.CORRECTION

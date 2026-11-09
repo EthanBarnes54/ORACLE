@@ -136,6 +136,14 @@ def test_The_Dividers_Default_To_The_Bench_And_A_Ratio_That_Is_No_Number_Is_Refu
             Rack(config, multiprocessing.get_context('spawn'))
 
 
+def test_A_Rolling_Window_That_Is_Not_A_Positive_Time_Is_Refused():
+    assert settings.DEFAULTS['cooler']['rolling_s'] == 15.0
+    for window in (0.0, -15.0, '15 s'):
+        config = settings._Merged(settings.DEFAULTS, {'cooler': {'rolling_s': window}})
+        with pytest.raises(ValueError, match="cooler: rolling_s"):
+            Rack(config, multiprocessing.get_context('spawn'))
+
+
 def test_Pvs_With_No_Name_Are_Not_Asked_Of_Epics(monkeypatch):
     made = []
     epics = types.ModuleType('epics')

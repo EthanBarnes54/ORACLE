@@ -8,6 +8,7 @@ sampled every 0.1 s. A clean run must pass, an ultra-low-rate one must
 raise no false alarm, and each planted fault must be found, flagged and
 never cut."""
 
+import re
 import time
 
 import numpy as np
@@ -34,11 +35,14 @@ def _Run(plan=PLAN, ranges=None, per_step=4, scans=8, period=0.1, kind='Sawtooth
          origin=0, rate=_Flat(1.0), shift=_Flat(0.0), signal=6.0, background=0.3,
          cooler=_Flat(COOLER_V), laser_cm=_Flat(WAVENUMBER), hv_error=_Flat(0.0),
          calibration=lambda v: v, channels=None, tof=None, gate=(48.0, 56.0), bunched=True,
-         pause=None, parted_at=None, seed=3):
+         pause=None, parted_at=None, seed=3, reading=None):
     """``(header, raw, monitor)`` of a run with one line at 20 V, 4 V wide.
     The line sits where its ions resonate: a cooler higher by a volt moves it
     a volt up the scan, the laser by PER_HZ a hertz, and an HV that puts out
-    more than it is told moves it down by as much."""
+    more than it is told moves it down by as much. The cooler's meter reads
+    ``reading`` (the cooler itself, unless given), on the hits and the
+    monitor alike."""
+    reading = reading or cooler
     rng = np.random.default_rng(seed)
     n = len(plan)
     bunches = np.arange(scans * n * per_step)
@@ -59,7 +63,7 @@ def _Run(plan=PLAN, ranges=None, per_step=4, scans=8, period=0.1, kind='Sawtooth
         np.round(times, 2), np.repeat(volts, hits), numbers,
         channels(times, count, rng) if channels else rng.integers(1, 5, count),
         tof(times, count, rng) if tof else rng.normal(52.0, 1.0, count),
-        np.repeat(cooler(t), hits) / COOLER_DIVIDER])
+        np.repeat(reading(t), hits) / COOLER_DIVIDER])
     header = {'ScanningRanges': ranges or [[float(plan.min()), float(plan.max())]],
               'StepSize': float(plan[1] - plan[0]) if len(plan) > 1 else 1.0,
               'BunchesPerChannel': per_step, 'DwellTime': period * 1e3, 'MassAMU': MASS,
@@ -78,7 +82,7 @@ def _Run(plan=PLAN, ranges=None, per_step=4, scans=8, period=0.1, kind='Sawtooth
     setpoint = volts[np.clip(taken - 1, 0, len(volts) - 1)]
     monitor = {'time': sampled, 'round': np.zeros_like(sampled), 'setpoint_v': setpoint,
                'readback_v': calibration(setpoint) + hv_error(sampled),
-               'cooler_v': cooler(sampled), 'wavenumber_cm1': laser_cm(sampled),
+               'cooler_v': reading(sampled), 'wavenumber_cm1': laser_cm(sampled),
                'bunches': taken.astype(float), 'dropped': np.zeros_like(sampled),
                'skipped': np.zeros_like(sampled)}
     return header, raw, monitor
@@ -189,13 +193,57 @@ def test_A_Movement_No_Monitor_Saw_Is_Reported_As_Unexplained():
     assert any('unexplained' in f for f in result['Flagged'])
 
 
-def test_The_Cooler_Is_Corrected_Hit_By_Hit_As_DENIS_Corrects_It():
-    """The cooler moves the line on the scan's axis, but every hit carries its
-    reading, so on DENIS's axis the line stands still."""
+def test_A_Cooler_Drifting_Slowly_Is_Followed_By_Its_Rolling_Mean():
+    """The cooler moves the line on the scan's axis, but the rolling mean of
+    its readings follows it, so on the analysis' axis the line stands still,
+    with or without the monitor's readings."""
     span = 8 * len(PLAN) * 4 * 0.1
-    result = sp.Analyse(*_Run(cooler=lambda t: COOLER_V + 3.0 * t / span), LASER)
-    assert _Check(result, 'Line position')['Verdict'] == sp.PASS
-    assert _Check(result, 'Cooler')['Verdict'] == sp.PASS
+    drift = lambda t: COOLER_V + 3.0 * t / span
+    for legacy in (False, True):
+        header, raw, monitor = _Run(cooler=drift, legacy=legacy)
+        result = sp.Analyse(header, raw, monitor, LASER)
+        assert _Check(result, 'Line position')['Verdict'] == sp.PASS
+        cooler = _Check(result, 'Cooler')
+        # all 3 V of it but a quarter window's worth at each end, where the mean holds
+        # the readings on one side only (and the hits' readings start and end with them)
+        assert cooler['Verdict'] == sp.PASS
+        assert _Figure(cooler, 'moved over') == pytest.approx(3.0 * (1 - 7.5 / span), abs=0.1)
+        assert _Figure(cooler, 'readings scatter') < 0.05
+        assert ('monitor' in cooler['Message']) != legacy
+    assert result['Flagged'] == []
+
+
+def _Figure(check, words):
+    """The number a check's message gives after ``words``."""
+    return float(re.search(rf"{words} ([\d.]+)", check['Message']).group(1))
+
+
+def _Width(result):
+    return float(re.search(r"The line is ([\d.]+) V wide", result['Budget']).group(1))
+
+
+def test_Readings_Off_The_Bunch_Do_Not_Broaden_The_Line_On_The_Rolling_Axis():
+    """Readings that catch the ripple at random scatter about what the ions
+    saw: taken hit by hit (a window shorter than the readings' spacing) they
+    broaden the line; their rolling mean does not."""
+    noisy = lambda t: COOLER_V + np.random.default_rng(len(t)).normal(0.0, 1.5, len(t))
+    clean = _Width(sp.Analyse(*_Run(), LASER))
+    header, raw, monitor = _Run(reading=noisy)
+    rolled = sp.Analyse(header, raw, monitor, LASER)
+    assert _Width(rolled) == pytest.approx(clean, rel=0.03)
+    assert _Check(rolled, 'Cooler')['Verdict'] == sp.PASS and rolled['Flagged'] == []
+    assert _Figure(_Check(rolled, 'Cooler'), 'readings scatter') == pytest.approx(1.5, rel=0.05)
+    assert 'cooler scatter' in rolled['Budget']
+    hit_by_hit = sp.Analyse(header, raw, monitor, LASER, rolling_s=0.01)
+    assert _Width(hit_by_hit) > 1.1 * clean
+
+
+def test_The_Window_A_Run_Recorded_Is_The_One_It_Is_Judged_By():
+    header, raw, monitor = _Run()
+    header[ORACLE_KEY]['CoolerRollingS'] = 5.0
+    message = _Check(sp.Analyse(header, raw, monitor, LASER, rolling_s=30.0),
+                     'Cooler')['Message']
+    assert 'the 5 s rolling mean' in message and 'centred' in message
 
 
 def test_A_Hit_Without_A_Cooler_Reading_Is_Flagged():
@@ -355,9 +403,12 @@ def test_A_Bunch_Is_Drawn_Once_However_Many_Hits_It_Holds():
     header, raw, _ = _Run(legacy=True)
     result = sp.Analyse(header, raw, None, LASER)
     bunches = len(np.unique(raw[:, 2]))
-    for name in ('Latency', 'Cooler'):
-        times, values = result['Series'][name]
-        assert len(times) == len(values) == bunches < len(raw), name
+    times, values = result['Series']['Latency']
+    assert len(times) == len(values) == bunches < len(raw)
+    # the cooler: a reading each bunch, and the rolling mean at each
+    times, readings, mean, partial = result['Series']['Cooler']
+    assert len(times) == len(readings) == len(mean) == len(partial) == bunches
+    assert partial[0] and partial[-1] and not partial[len(partial) // 2]
 
 
 # ── The pieces ──────────────────────────────────────────────────

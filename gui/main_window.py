@@ -153,6 +153,7 @@ class Main_Window(QMainWindow):
         self._Analysing = None          # the run it is of
         self._Wanted = None             # the run Scan Performance is to show
         self._Laser = config['laser']
+        self._Rolling_S = float(config['cooler']['rolling_s'])
         self._Channels = config['instruments']['tagger_channels']
         self._Monitor = []              # monitor rows of the run, not yet written
         self._Shown_Timing = None       # the shown run's trigger timing; None: the boxes'
@@ -587,7 +588,9 @@ class Main_Window(QMainWindow):
                   'InteractionRegion': pending['setup']['InteractionRegion'],
                   'PmtHv': {'Pvs': pending['pmt_hv'] or None,
                             'Entered': pending['setup']['PmtHv']},
-                  'TaggerLevels': self._Tagger_Levels}
+                  'TaggerLevels': self._Tagger_Levels,
+                  # the window the analysis takes the cooler's rolling mean over
+                  'CoolerRollingS': self._Rolling_S}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
@@ -1025,11 +1028,13 @@ class Main_Window(QMainWindow):
         if self._Analysis is not None:
             return                      # started as the one running finishes
         laser, settle_model, data_dir = self._Laser, self._Settle_Model, self._Data_Dir
+        rolling_s = self._Rolling_S
 
         def job(progress, stopped):
             header, raw, monitor = run or run_file.Read(path)
             return scan_performance.Analyse(header, raw, monitor, laser, settle_model,
-                                            run_file.Earlier_Calibrations(path, data_dir))
+                                            run_file.Earlier_Calibrations(path, data_dir),
+                                            rolling_s)
 
         self._Analysing = path
         self._Analysis = Job_Worker(job, self)

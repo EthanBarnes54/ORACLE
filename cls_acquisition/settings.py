@@ -87,6 +87,10 @@ DEFAULTS = {
         'cooler_divider': {'model': '', 'serial': '', 'ratio': 10000.0, 'ppm': 100.0},
         'amplifier': {'model': 'Trek 609E-6', 'serial': ''},
     },
+    # the cooler as the analysis takes it: the rolling mean of its readings over this
+    # window (A. Raggio, November 2026), recorded with each run; Scan Performance
+    # judges a run by it and plots it over the readings
+    'cooler': {'rolling_s': 15.0},
     # how the laser meets the ions, as DENIS takes it: the Scan Performance tab
     # converts the wavemeter's drift into scan volts with these
     'laser': {

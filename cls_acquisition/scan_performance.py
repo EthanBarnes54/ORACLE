@@ -14,10 +14,14 @@ N/A when the run does not hold what it needs. Nothing is cut: what
 deserves a look is flagged, and the operator decides in DENIS. The
 verdict is the worst check's; it never stops a run being kept.
 
-The spectrum is judged as DENIS builds it: each hit at its voltage tag
-less its own cooler reading's departure (DENIS's point-by-point
-correction), on one grid from the lowest setpoint to the highest, so
-ranges that overlap (the old DAQ allowed them) are one range. A shift or
+The spectrum is judged as the analysis builds it: each hit at its
+voltage tag less the cooler's departure at its time, taken as the
+rolling mean of the cooler's readings (cls_acquisition.cooler, agreed in
+November 2026; a reading is not taken with the bunch, so each hit's own
+aliases the mains ripple), on one grid from the lowest setpoint to the
+highest, so ranges that overlap (the old DAQ allowed them) are one range.
+The readings are the monitor's, or, for a run without one, the reading
+stamped on each bunch's hits. A shift or
 spread is set against the width of the run's own strongest line, and
 given in MHz where the run holds the mass, cooler and laser to convert
 it; where no line stands out of the background, the step is the scale.
@@ -43,8 +47,8 @@ from whichever fits best, the bunches it took before a step settled are
 estimated from the settle model, and a bunch count that parted from the
 voltage steps (the collinear DAQ's D5) is reported, not cut.
 
-Depends on: numpy, PyYAML; cls_acquisition.calibration, .run_file,
-.scan_plan and .hardware.keysight.
+Depends on: numpy, PyYAML; cls_acquisition.calibration, .cooler,
+.run_file, .scan_plan and .hardware.keysight.
 """
 
 import math
@@ -54,6 +58,7 @@ from datetime import datetime
 import numpy as np
 import yaml
 
+from cls_acquisition import cooler
 from cls_acquisition.calibration import DIVIDER, PASS, THRESHOLDS, WARN, Settle_For
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER
 from cls_acquisition.run_file import ORACLE_KEY, Recorded_Divider
@@ -103,6 +108,7 @@ VOLTS_DECIMALS = 6                          # setpoints compare to the microvolt
 MAX_REJECT_ITER = 10                        # DENIS's, for its robust calibration rule
 FIT_ROWS = 64                               # shifts tried at once, so the fit stays small
 NULL_BUDGET = 2e7                           # bins times shifts the random deals may cost
+BIN_CHUNK = 1 << 20                         # hits placed at once, so the analysis stays small
 
 C_LIGHT = 299792458.0
 AMU_EV = 931.49410242e6                     # one atomic mass unit, in eV
@@ -314,7 +320,8 @@ class _Report():
                 'Series': self.Series, 'Flagged': self.Flagged}
 
 
-def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
+def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
+            rolling_s=cooler.ROLLING_S):
     """The report on one run: ``Verdict``, ``Summary``, ``Budget`` (the line's
     width and what moved it, at the ions, in one sentence), ``Sections``
     (name to checks), ``Series`` for the plots and ``Flagged``, sentences
@@ -324,7 +331,8 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     holds earlier runs' calibrations, ``(run, CalSet, CalReadback, scan
     divider or None)``, newest first, of runs calibrated as this one was
     (run_file.Earlier_Calibrations). Readbacks are scaled by each run's
-    own divider ratios (:func:`Dividers`)."""
+    own divider ratios (:func:`Dividers`). The cooler is taken as its
+    rolling mean over the window the run recorded, or ``rolling_s``."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -349,8 +357,13 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     _Rates(report, bunch_b, tags, len(sequence), per_step)
     del bunch_b
 
-    # the spectrum as DENIS builds it, the cooler taken out hit by hit
-    bins = _Bins(raw, axis, step, Dividers(header)[1])
+    # the spectrum as the analysis builds it, the cooler taken as its rolling mean
+    readings = _Cooler_Readings(raw, monitor, Dividers(header)[1])
+    rolling = (cooler.Rolling(readings[0], readings[1],
+                              float(record.get('CoolerRollingS') or rolling_s))
+               if len(readings[0]) else None)
+    reference = float(np.median(readings[1])) if len(readings[1]) else 0.0
+    bins = _Bins(raw, axis, step, rolling, reference)
     bins_t = bins if by_time is None else bins[by_time]
     del bins
     scanned = np.isin(np.round(axis, VOLTS_DECIMALS), np.round(sequence, VOLTS_DECIMALS))
@@ -365,7 +378,7 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     _Calibration(report, header, scale, history)
     hv = _Readback(report, monitor, header, scale, times_t, t0)
     light = _Laser(report, monitor, header, laser, recorded_laser, scale, times_t, axis, t0)
-    _Cooler(report, raw, monitor, t0, Dividers(header)[1])
+    _Cooler(report, raw, readings, rolling, reference, scale, t0)
     bunch_t = bunch if by_time is None else bunch[by_time]
     per_scan = len(sequence) * per_step
     expectation = None
@@ -397,7 +410,7 @@ def _Budget(scale, budget):
         text = (f"No line stands out of the background, so sizes are set against the "
                 f"{scale.Step:g} V step.")
     parts = [f"{name} {scale.Short(budget[key])}" for name, key in
-             (('HV', 'HV'), ('laser', 'Laser')) if key in budget]
+             (('HV', 'HV'), ('laser', 'Laser'), ('cooler scatter', 'Cooler')) if key in budget]
     if 'Moved' in budget:
         rise, error = budget['Moved']
         parts.append(f"the line itself moved {scale.Short(rise)} ± {scale.Short(error)}")
@@ -437,18 +450,39 @@ def _Plan(header):
     return sequence, _Ladder(sequence.min(), sequence.max(), step), note
 
 
-def _Bins(raw, axis, step, cooler_divider):
-    """Each hit's bin on ``axis`` as DENIS places it: its voltage tag less its
-    cooler reading's departure from the run's median (DENIS corrects every
-    hit by its own reading), or -1 off the grid. A hit with no cooler
-    reading stays at its tag here; the cooler check counts them, as DENIS
-    cannot place them. One working array, rounded in place."""
-    cooler = raw[:, 5]
-    known = np.isfinite(cooler) & (cooler != 0)
-    work = np.where(known, cooler, 0.0)
-    if known.any():
-        work[known] -= np.median(cooler[known])
-    work *= -cooler_divider
+def _Cooler_Readings(raw, monitor, cooler_divider):
+    """``(times, platform volts, where they come from)``: the run's cooler
+    readings in time order, those not taken (0) or not numbers left out.
+    The monitor's, every 0.1 s, if it has them; else the reading each
+    bunch's hits were stamped with, once a bunch."""
+    known = lambda v: np.isfinite(v) & (v != 0)
+    if monitor is not None and np.count_nonzero(known(monitor.get('cooler_v', []))) >= 3:
+        t, volts = monitor['time'], monitor['cooler_v']
+        source = "the monitor's, every 0.1 s"
+    else:
+        bunch = raw[:, 2]
+        first = np.flatnonzero(np.r_[True, bunch[1:] != bunch[:-1]])
+        t, volts = raw[first, 0], raw[first, 5] * cooler_divider
+        source = "one a bunch, as stamped on its hits"
+    ok = known(volts)
+    order = np.argsort(t[ok], kind='stable')
+    return t[ok][order], volts[ok][order], source
+
+
+def _Bins(raw, axis, step, rolling, reference):
+    """Each hit's bin on ``axis`` as the analysis places it: its voltage tag
+    less the cooler's departure from ``reference`` at its time, by the
+    ``rolling`` mean of its readings (None: there are none), or -1 off the
+    grid. A hit with no reading within the window stays at its tag. One
+    working array, placed a chunk at a time and rounded in place."""
+    work = np.zeros(len(raw))
+    if rolling is not None:
+        for start in range(0, len(raw), BIN_CHUNK):
+            part = slice(start, start + BIN_CHUNK)
+            mean, _ = rolling.At(raw[part, 0])
+            mean -= reference
+            work[part] = np.nan_to_num(mean, nan=0.0)
+    np.negative(work, out=work)
     work += raw[:, 1]
     work -= axis[0]
     work /= step
@@ -1364,28 +1398,38 @@ def _Laser(report, monitor, header, laser, recorded, scale, times, axis, t0):
     return t, volts
 
 
-def _Cooler(report, raw, monitor, t0, cooler_divider):
-    """DENIS corrects every hit by its own cooler reading, so the cooler's
-    changes move no line; what matters is that every hit has a reading."""
-    cooler = raw[:, 5]
-    missing = int(np.count_nonzero(~np.isfinite(cooler) | (cooler == 0)))
-    t, volts = ((monitor['time'], monitor['cooler_v']) if monitor is not None
-                else (raw[:, 0], cooler * cooler_divider))
-    ok = np.isfinite(volts) & (volts != 0)
-    if ok.sum() < 3:
+def _Cooler(report, raw, readings, rolling, reference, scale, t0):
+    """The cooler as the analysis takes it, the rolling mean of its readings:
+    what the mean follows, the analysis takes out; what the readings
+    scatter about it, the mains ripple and the meter's own noise, no mean
+    can. A hit with no reading of its own is still warned of: cls_tools
+    takes each hit's own reading until it takes the mean."""
+    cooler_v = raw[:, 5]
+    missing = int(np.count_nonzero(~np.isfinite(cooler_v) | (cooler_v == 0)))
+    t, volts, source = readings
+    if len(t) < 3:
         report.Add(SOURCES, 'Cooler', WARN if missing else NA, missing,
                    "Too few cooler readings to say how it behaved"
                    + (f"; {missing} hits carry none, so DENIS cannot place them." if missing
                       else "."))
         return
-    message = (f"DENIS corrects each hit by its own cooler reading, so the cooler's changes do "
-               f"not move the line; it varied {np.std(volts[ok]):.3f} V rms over the run.")
+    mean, partial = rolling.At(t)
+    scatter = float(np.sqrt(np.mean((volts - mean) ** 2)))
+    message = (f"The analysis takes the cooler as the {rolling.Window_S:g} s rolling mean of "
+               f"its readings ({'centred' if rolling.Centred else 'trailing'}; {source}), as "
+               f"a reading is not taken with the bunch and alone aliases the mains ripple. The "
+               f"mean moved over {np.ptp(mean):.3f} V, which the analysis follows; the "
+               f"readings scatter {scatter:.3f} V rms about it ({scale.Text(scatter)}), the "
+               f"ripple, which broadens the line, and the meter's own noise, which only the "
+               f"readings carry.")
     if missing:
-        message += (f" {missing} hits carry no reading, so DENIS cannot place them: the cooler "
-                    f"meter stopped answering.")
-        report.Flag(f"{missing} hits have no cooler reading; DENIS cannot place them.")
+        message += (f" {missing} hits carry no reading of their own, which DENIS needs until "
+                    f"it takes the mean: the cooler meter stopped answering.")
+        report.Flag(f"{missing} hits have no cooler reading; DENIS cannot place them until it "
+                    f"takes the cooler's rolling mean.")
     report.Add(SOURCES, 'Cooler', WARN if missing else PASS, missing, message)
-    report.Series['Cooler'] = _Distinct(t[ok] - t0, volts[ok] - np.mean(volts[ok]))
+    report.Budget['Cooler'] = scatter
+    report.Series['Cooler'] = (t - t0, volts - reference, mean - reference, partial)
 
 
 def Export(path, result):

@@ -1,7 +1,7 @@
 """The Scan Performance tab: how the rack behaved during a run, and how that shaped its spectrum.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Down the left, the run (the latest by default, or any in the data folder
@@ -11,7 +11,8 @@ the analysis flagged for review. Nothing is cut: the operator decides
 in DENIS, and the report exports beside the run. On the right, one plot
 for each systematic: the HV against its calibration, the beam over time
 against what its setpoints give, the beam rate scan by scan, how far
-reads trailed the first of their step, the cooler and the laser. A
+reads trailed the first of their step, the cooler (each reading, and
+the rolling mean the analysis takes over them) and the laser. A
 check's sentence shows under the list when it is selected, and in its
 tooltip.
 
@@ -155,12 +156,17 @@ class Performance_Tab(QWidget):
             "value in the step. The run file's timestamps are rounded to 10 ms, which sets the "
             "resolution." + from_first))
         self.Cooler_Plot = plots.Plot('Cooler platform voltage', elapsed,
-                                      ('Deviation from mean', 'V'), (
-            "The cooler platform voltage during the run, relative to its mean. DENIS corrects "
-            "every hit by its own cooler reading, so this does not shift the line; it shows "
-            "the supply's stability.",
-            "From the run's monitor record, sampled every 0.1 s; for a run without one, the "
-            "reading stored with each hit." + from_first))
+                                      ('Cooler voltage − run median', 'V'), (
+            "The cooler platform voltage during the run: each reading (faint) and the rolling "
+            "mean the analysis takes as the voltage the ions were accelerated by (bold). The "
+            "mean follows the supply's slow drift, which the analysis takes out; the readings' "
+            "scatter about it is the mains ripple and the meter's noise, which it cannot.",
+            "Readings from the run's monitor record, every 0.1 s, or for a run without one, "
+            "the reading stamped on each bunch's hits; less their median. The mean is a boxcar "
+            "over the readings within the window centred on each (15 s unless the run "
+            "recorded another), never across a gap in them longer than the window; dashed "
+            "where the window reaches past the readings at the run's start, end or a gap, and "
+            "so holds one side only." + from_first))
         self.Laser_Plot = plots.Plot('Laser frequency deviation', elapsed,
                                      ('Wavemeter − setpoint (MHz)', None), (
             "The wavemeter reading during the run relative to the laser setpoint stored in the "
@@ -278,8 +284,15 @@ class Performance_Tab(QWidget):
         if 'Latency' in series:
             self.Latency_Plot.plot(*series['Latency'], **dots)
         if 'Cooler' in series:
-            self.Cooler_Plot.addItem(plots.Dense_Curve(*series['Cooler'], pen=pen,
+            t, readings, mean, partial = series['Cooler']
+            self.Cooler_Plot.addItem(plots.Dense_Curve(t, readings, pen=plots.Faint_Pen(),
                                                        connect='finite'))
+            # the edges dashed, each overlapping the full stretch by a reading so they join
+            edge = partial | np.r_[partial[1:], False] | np.r_[False, partial[:-1]]
+            for shown, style in ((~partial, Qt.PenStyle.SolidLine), (edge, Qt.PenStyle.DashLine)):
+                self.Cooler_Plot.addItem(plots.Dense_Curve(
+                    t, np.where(shown, mean, np.nan), connect='finite',
+                    pen=pg.mkPen(theme.TRACE, width=2, style=style)))
         if 'Laser' in series:
             self.Laser_Plot.addItem(plots.Dense_Curve(*series['Laser'], pen=pen,
                                                       connect='finite'))

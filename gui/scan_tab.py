@@ -213,8 +213,8 @@ class Scan_Tab(QWidget):
             "Hits on the selected detector channels whose time of flight lies inside the gate "
             "(every hit, if no gate is set) are histogrammed in one bin per voltage setpoint. "
             "The voltage is the setpoint commanded on the DAC, before the calibration and the "
-            "per-hit cooler correction that DENIS applies; counts are not normalised to the "
-            "number of scans."))
+            "cooler correction that DENIS applies; counts are not normalised to the number of "
+            "scans."))
         self.Spectrum_Curve = plots.Dense_Curve(pen=plots.Pen())
         self.Spectrum_Plot.addItem(self.Spectrum_Curve)
         self.Tof_Plot = plots.Gate_Plot()
