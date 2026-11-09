@@ -61,6 +61,9 @@ print('opened', data.Size, 'events; gain', round(fit.coeffs_v[1], 5))
                     reason="DENIS is not installed beside ORACLE")
 def test_A_Run_ORACLE_Writes_Opens_In_cls_tools_And_DENIS(qapp, monkeypatch, tmp_path):
     window = Open_Window(monkeypatch, tmp_path)
+    # hits across the scan: cls_tools sizes its bins by the span of the hits' frequencies,
+    # and two bunches a step sometimes left them all in one step, so no bin at all
+    window.Scan.Per_Step_Box.setValue(30)
     try:
         window.Scan.Start_Button.click()
         state = window._Link.State
