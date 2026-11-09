@@ -28,9 +28,10 @@ of them.
 
 What the rack cannot say of a run, the operator does: where the laser
 meets the beam (the interaction region, CEC or LCR) and the PMTs' high
-voltage, recorded with each run (``Setup``). The cooler offset differs
-between the regions (Bi in the CEC, Yb+ in the LCR, November 2026), so
-which runs share one is learned from these.
+voltage, recorded with each run (``Setup``), and whether the run is a
+reference run, one taken to measure the beam's offset from the cooler's
+readback. The offset differs between the regions (Bi in the CEC, Yb+ in
+the LCR, November 2026), so which runs share one is learned from these.
 
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
 cls_acquisition.hardware.timetagger, cls_acquisition.run_file,
@@ -123,9 +124,14 @@ class Scan_Tab(QWidget):
         self.Pmt_Hv_Edit = QLineEdit(placeholderText='e.g. 1: 1850, 2: 1900 V')
         self.Pmt_Hv_Edit.setToolTip("The PMTs' high voltage as set, recorded with every run "
                                     "where it is not read from EPICS.")
+        self.Reference_Check = QCheckBox('Reference run')
+        self.Reference_Check.setToolTip("A run taken to measure the beam's offset from the "
+                                        "cooler's readback (a line of known frequency), "
+                                        "recorded as such.")
         rows = (('Scan type', self.Type_Combo), (None, self.Per_Step_Box),
                 ('Stepsize (V)', self.Step_Box), ('Experiment name', self.Experiment_Edit),
-                ('Interaction region', self.Region_Combo), ('PMT HV', self.Pmt_Hv_Edit))
+                ('Interaction region', self.Region_Combo), ('PMT HV', self.Pmt_Hv_Edit),
+                ('', self.Reference_Check))
         for row, (text, widget) in enumerate(rows):
             grid.addWidget(QLabel(text) if text else self.Per_Step_Label, row, 1)
             grid.addWidget(widget, row, 2)
@@ -345,7 +351,8 @@ class Scan_Tab(QWidget):
         if not given."""
         region = self.Region_Combo.currentText()
         return {'InteractionRegion': None if region == REGIONS[0] else region,
-                'PmtHv': self.Pmt_Hv_Edit.text().strip() or None}
+                'PmtHv': self.Pmt_Hv_Edit.text().strip() or None,
+                'ReferenceRun': self.Reference_Check.isChecked()}
 
     def View(self):
         """How the plots show a run, for its record."""
@@ -392,6 +399,8 @@ class Scan_Tab(QWidget):
             self.Region_Combo.setCurrentText(record['InteractionRegion'] or REGIONS[0])
         if 'PmtHv' in record:
             self.Pmt_Hv_Edit.setText((record['PmtHv'] or {}).get('Entered') or '')
+        if 'ReferenceRun' in record:
+            self.Reference_Check.setChecked(bool(record['ReferenceRun']))
         if timing is None:
             unshown.append("its scan type, mode, trigger timing and view, which ORACLE did not "
                            "yet record")
@@ -420,7 +429,8 @@ class Scan_Tab(QWidget):
             for part, widget in zip(('on', 'from', 'to'), row)]
         return [('scan_type', self.Type_Combo), ('mode', (self.Dc_Radio, self.Bunched_Radio)),
                 ('per_step', self.Per_Step_Box), ('step', self.Step_Box),
-                ('region', self.Region_Combo), ('pmt_hv', self.Pmt_Hv_Edit), *ranges,
+                ('region', self.Region_Combo), ('pmt_hv', self.Pmt_Hv_Edit),
+                ('reference_run', self.Reference_Check), *ranges,
                 ('dwell', self.Dwell_Box), ('release', self.Release_Box),
                 ('tagger_delay', self.Tagger_Delay_Box), ('gate_start', self.Gate_Start_Box),
                 ('gate_length', self.Gate_Length_Box), ('tof_bin', self.Bin_Box),

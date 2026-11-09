@@ -15,7 +15,9 @@ reads trailed the first of their step, the cooler (each reading, and
 the rolling mean the analysis takes over them), the laser, and each
 PMT's afterpulsing: the time to the previous count on itself and on the
 others against chance, and its counts' scatter against dead time, as
-A. Raggio's slide 9 shows them. A
+A. Raggio's slide 9 shows them. Under the checks, the run's
+systematics' inputs (cls_acquisition.systematics), which can be posted
+to the ELOG whole. A
 check's sentence shows under the list when it is selected, and in its
 tooltip.
 
@@ -24,7 +26,7 @@ run on all of them, and a scan or the triggers clear it here as they
 clear the plots, until the run they make is saved and analysed.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.scan_performance,
-gui.plots, gui.shared_widgets, gui.theme.
+cls_acquisition.systematics, gui.plots, gui.shared_widgets, gui.theme.
 """
 
 import html
@@ -39,8 +41,10 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHB
                                QVBoxLayout, QWidget)
 
 from cls_acquisition import scan_performance as sp
+from cls_acquisition import systematics
 from gui import plots, theme
-from gui.shared_widgets import Scroll_Column, Verdict_Html
+from gui.shared_widgets import (Muted, Report_Html, Report_Label, Report_Table, Scroll_Column,
+                                Verdict_Html)
 
 PANEL_WIDTH = 400                   # px: the checks' names and values side by side
 CHANNEL_COLOURS = {1: theme.TRACE, 2: theme.TRACE_ALT, 3: '#FF5CF0', 4: '#FF9F40'}
@@ -118,9 +122,21 @@ class Performance_Tab(QWidget):
         column.addWidget(self.Flagged_Label)
         column.addWidget(self.Export_Button)
 
+        self.Systematics_Group = QGroupBox('Systematic inputs')
+        column = QVBoxLayout(self.Systematics_Group)
+        self.Systematics_Label = Report_Label('')
+        self.Elog_Button = QPushButton(theme.Icon('send'), 'Post systematics to ELOG',
+                                       enabled=False)
+        self.Elog_Button.setToolTip("Append the whole table, every source with its detail, to "
+                                    "the open ELOG entry. A short block is posted as each "
+                                    "run is analysed; a simulated rack never posts.")
+        column.addWidget(self.Systematics_Label)
+        column.addWidget(self.Elog_Button)
+
         left = QVBoxLayout()
         for group, stretch in ((self.Dataset_Group, 0), (self.Verdict_Group, 0),
-                               (self.Checks_Group, 1), (self.Flagged_Group, 0)):
+                               (self.Checks_Group, 1), (self.Flagged_Group, 0),
+                               (self.Systematics_Group, 0)):
             left.addWidget(group, stretch)
         side = Scroll_Column(left)
         side.setFixedWidth(PANEL_WIDTH)
@@ -243,6 +259,9 @@ class Performance_Tab(QWidget):
         have the tabs."""
         self.Result = None
         self.Export_Button.setEnabled(False)
+        self.Elog_Button.setEnabled(False)
+        self.Systematics_Label.setText('')
+        self.Systematics_Label.setToolTip('')
         self.Verdict_Label.setText('—')
         self.Summary_Label.setText('')
         self.Checks_Tree.clear()
@@ -272,7 +291,22 @@ class Performance_Tab(QWidget):
         self._Fill_Checks(result['Sections'])
         self.Flagged_Label.setText('<br><br>'.join(map(html.escape, result['Flagged']))
                                    or 'Nothing flagged for review.')
+        self._Show_Systematics(result.get('Systematics', []))
         self._Draw(result['Series'])
+
+    def _Show_Systematics(self, rows):
+        """The inputs as a table, each source's detail in the tooltip."""
+        size = lambda value, fmt: '–' if value is None else format(value, fmt)
+        self.Systematics_Label.setText(Report_Html([('Each source at the line', [
+            Report_Table(('Source', 'Kind', 'V', 'MHz'),
+                         [(r['Source'], r['Kind'], size(r['Volts'], '.3f'),
+                           size(r['Mhz'], '.1f')) for r in rows]),
+            Muted("Widths in scan volts and in MHz at the ions; measured on this run, "
+                  "declared in the settings, or not yet known. Hover for each source's "
+                  "detail.")])]) if rows else '')
+        self.Systematics_Label.setToolTip(
+            html.escape(systematics.Elog_Text(rows, '')).replace('\n', '<br>') if rows else '')
+        self.Elog_Button.setEnabled(bool(rows))
 
     def _Fill_Checks(self, sections):
         self.Checks_Tree.clear()

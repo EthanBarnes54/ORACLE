@@ -70,7 +70,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, Q
                                QSlider, QSplashScreen, QStyle, QTabWidget, QWidget)
 
 from cls_acquisition import (calibration, hardware_calibration, run_file, scan_performance,
-                             settings)
+                             settings, systematics)
 from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
@@ -156,6 +156,8 @@ class Main_Window(QMainWindow):
         self._Rolling_S = float(config['cooler']['rolling_s'])
         self._Nplc = config['calibration']['nplc']
         self._Dead_Time_Us = float(config['detectors']['dead_time_us'])
+        self._Declared = config['systematics']
+        self._Systematics_Run = None    # the run whose short systematics block is due
         self._Channels = config['instruments']['tagger_channels']
         self._Monitor = []              # monitor rows of the run, not yet written
         self._Shown_Timing = None       # the shown run's trigger timing; None: the boxes'
@@ -266,6 +268,7 @@ class Main_Window(QMainWindow):
         performance.Analyse_Button.clicked.connect(
             lambda: performance.Selected() and self._Open_Run(performance.Selected()))
         performance.Export_Button.clicked.connect(self._Export_Performance)
+        performance.Elog_Button.clicked.connect(self._Post_Systematics)
         self._Refresh_Runs()
         if performance.Selected():
             # the latest run, on every tab but the controls, which keep what was
@@ -529,7 +532,9 @@ class Main_Window(QMainWindow):
                 f"Mass [amu]:          {_Number(pvs['mass'], '.4f')}\n"
                 f"Mass setpoint [A or amu]:          {_Number(pvs['mass_setpoint'], '.4f')}\n"
                 + (f"Queued scan {queued[0]} of {queued[1]}, {rounds} scans\n" if queued
-                   else ""))
+                   else "")
+                + ("REFERENCE RUN, for the beam's offset from the cooler's readback\n"
+                   if self.Scan.Reference_Check.isChecked() else ""))
         self._Pending = {'plan': plan, 'run': run, 'when': when, 'pvs': pvs, 'text': text,
                          'pmt_hv': {c: v for c, v in pmt_hv.items() if v is not None},
                          'setup': self.Scan.Setup(),
@@ -591,6 +596,7 @@ class Main_Window(QMainWindow):
                   'PmtHv': {'Pvs': pending['pmt_hv'] or None,
                             'Entered': pending['setup']['PmtHv']},
                   'TaggerLevels': self._Tagger_Levels,
+                  'ReferenceRun': pending['setup']['ReferenceRun'],
                   # the window the analysis takes the cooler's rolling mean over
                   'CoolerRollingS': self._Rolling_S,
                   'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
@@ -642,6 +648,7 @@ class Main_Window(QMainWindow):
             self.Shown_Label.setText(f"{name}, as taken: saved to its file")
             self._Refresh_Runs(keep=finished)
             if self.Performance.Follow_Check.isChecked():
+                self._Systematics_Run = finished    # its short block goes to the ELOG
                 self._Analyse(finished)
             else:
                 self.Performance.Clear(f"{name} is saved; Show and analyse puts it here.")
@@ -1033,22 +1040,46 @@ class Main_Window(QMainWindow):
         if self._Analysis is not None:
             return                      # started as the one running finishes
         laser, settle_model, data_dir = self._Laser, self._Settle_Model, self._Data_Dir
-        rolling_s, dead_time_us = self._Rolling_S, self._Dead_Time_Us
+        rolling_s, dead_time_us, declared = self._Rolling_S, self._Dead_Time_Us, self._Declared
 
         def job(progress, stopped):
             header, raw, monitor = run or run_file.Read(path)
             return scan_performance.Analyse(header, raw, monitor, laser, settle_model,
                                             run_file.Earlier_Calibrations(path, data_dir),
-                                            rolling_s, dead_time_us)
+                                            rolling_s, dead_time_us, declared)
 
         self._Analysing = path
         self._Analysis = Job_Worker(job, self)
-        self._Analysis.Done.connect(
-            lambda result: path == self._Wanted and self.Performance.Show(path, result))
-        self._Analysis.Failed.connect(
-            lambda message: path == self._Wanted and self.Performance.Show_Failure(message))
+        self._Analysis.Done.connect(lambda result: self._Analysed(path, result))
+        self._Analysis.Failed.connect(lambda message: self._Analysed(path, None, message))
         self._Analysis.finished.connect(self._Analysis_Finished)
         self._Analysis.start()
+
+    def _Analysed(self, path, result, failure=None):
+        """``path``'s analysis on the tab if it is still the one wanted, and,
+        for a run that has just ended, its short systematics block to the
+        ELOG."""
+        if path == self._Wanted:
+            if result is None:
+                self.Performance.Show_Failure(failure)
+            else:
+                self.Performance.Show(path, result)
+        if path == self._Systematics_Run:
+            self._Systematics_Run = None
+            name = os.path.basename(path)[:-len('.asdf')]
+            self._Elog.Append(f"\n{systematics.Elog_Text(result['Systematics'], name)}"
+                              if result is not None else
+                              f"\nSYSTEMATIC INPUTS, {name}: not estimated, as its analysis "
+                              f"failed: {failure}\n", self._Experiment())
+
+    def _Post_Systematics(self):
+        """The shown run's whole systematics table to the ELOG."""
+        path, result = self.Performance.Result
+        text = systematics.Elog_Text(result['Systematics'],
+                                     os.path.basename(path)[:-len('.asdf')], full=True)
+        self._Elog.Append(f"\n{text}", self._Experiment())
+        self.statusBar().showMessage("Systematic inputs appended to the ELOG entry" + (
+            "" if self._Elog.Enabled else " (the ELOG is off: kept in the session log)"), 10000)
 
     def _Analysis_Finished(self):
         self._Analysis.Retire()
@@ -1059,12 +1090,14 @@ class Main_Window(QMainWindow):
     def _Export_Performance(self):
         path, result = self.Performance.Result
         try:
-            written = scan_performance.Export(path, result)
+            written = [scan_performance.Export(path, result),
+                       systematics.Export(path, result['Systematics'])]
         except OSError as e:
             QMessageBox.warning(self, 'Not exported', f"The performance report could not be "
                                                      f"written: {e}")
             return
-        self.statusBar().showMessage(f"Performance report: {written}", 10000)
+        self.statusBar().showMessage(f"Performance report and systematic inputs: "
+                                     f"{', '.join(map(os.path.basename, written))}", 10000)
 
     # ── ELOG ─────────────────────────────────────────────────────
 

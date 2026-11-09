@@ -98,6 +98,13 @@ DEFAULTS = {
     # the same PMT are tested for afterpulsing, and the dead time DENIS might apply is
     # suggested from them; nothing here applies it
     'detectors': {'dead_time_us': 10.0},
+    # the systematics' inputs a run cannot measure (Scan Performance's table):
+    # beam_offset_v is the beam's offset from the cooler's readback by interaction
+    # region, [offset, its error] in volts from the campaign's reference runs (for
+    # example CEC: [13.0, 8.0] for Bi, LCR: [-30.0, 5.0] for Yb+, November 2026);
+    # zero_drift_v the 0 V drift assumed until ORACLE checks it during runs; and
+    # wavemeter_mhz the wavemeter's accuracy per run at the fundamental
+    'systematics': {'beam_offset_v': {}, 'zero_drift_v': 0.030, 'wavemeter_mhz': 10.0},
     # how the laser meets the ions, as DENIS takes it: the Scan Performance tab
     # converts the wavemeter's drift into scan volts with these
     'laser': {

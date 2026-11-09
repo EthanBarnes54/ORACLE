@@ -65,7 +65,7 @@ from datetime import datetime
 import numpy as np
 import yaml
 
-from cls_acquisition import cooler, detectors
+from cls_acquisition import cooler, detectors, systematics
 from cls_acquisition.calibration import DIVIDER, PASS, THRESHOLDS, WARN, Settle_For
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER
 from cls_acquisition.run_file import ORACLE_KEY, Recorded_Divider
@@ -268,6 +268,19 @@ def _Mhz_Per_V(header, laser, wavenumber_cm1, axis):
     return abs(float(per_volt)) / 1e6
 
 
+def _Volts_Per_Fundamental_Hz(header, laser, wavenumber_cm1, axis):
+    """Scan volts per hertz of the laser's fundamental mid-scan, or None if
+    the run lacks the mass, the cooler or the laser to say."""
+    try:
+        beam_v, mass = _Beam_V(header, axis), float(header.get('MassAMU', np.nan))
+        nu = float(wavenumber_cm1) * C_LIGHT * 100.0
+        if not (beam_v > 0 and mass > 0 and nu > 0):
+            return None
+        return abs(float(Volts_Per_Hz(beam_v, nu, mass, laser)))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class _Scale():
     """What a voltage means for this run: its share of the strongest line's
     width (of the step, where no line stands out), and its size in MHz at
@@ -311,6 +324,7 @@ class _Report():
     def __init__(self):
         self.Sections = {name: [] for name in (VOLTAGE, TIMING, BEAM, SOURCES, DETECTORS)}
         self.Series, self.Flagged, self.Budget, self.Detectors = {}, [], {}, {}
+        self.Systematics = []
 
     def Add(self, section, check, verdict, value, message):
         self.Sections[section].append(
@@ -328,11 +342,12 @@ class _Report():
             summary += (f" {unchecked} of the {len(checks)} checks need what this run does not "
                         f"hold (N/A).")
         return {'Verdict': verdict, 'Summary': summary, 'Budget': budget, 'Sections': sections,
-                'Series': self.Series, 'Flagged': self.Flagged, 'Detectors': self.Detectors}
+                'Series': self.Series, 'Flagged': self.Flagged, 'Detectors': self.Detectors,
+                'Systematics': self.Systematics}
 
 
 def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
-            rolling_s=cooler.ROLLING_S, dead_time_us=detectors.DEAD_TIME_US):
+            rolling_s=cooler.ROLLING_S, dead_time_us=detectors.DEAD_TIME_US, declared=None):
     """The report on one run: ``Verdict``, ``Summary``, ``Budget`` (the line's
     width and what moved it, at the ions, in one sentence), ``Sections``
     (name to checks), ``Series`` for the plots and ``Flagged``, sentences
@@ -346,7 +361,8 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
     rolling mean over the window the run recorded, or ``rolling_s``, and
     the PMTs are judged at the dead time it recorded, or ``dead_time_us``.
     ``Detectors`` holds each PMT's afterpulsing and the dead time
-    suggested for it."""
+    suggested for it, and ``Systematics`` the run's systematics' inputs
+    (cls_acquisition.systematics), with ``declared`` the settings'."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -412,6 +428,10 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
                record.get('Channels') or WIRED_CHANNELS,
                float(record.get('DeadTimeUs') or dead_time_us))
 
+    report.Systematics = systematics.Table(
+        header, record, monitor, Dividers(header), report.Budget, scale.Mhz_Per_V,
+        _Volts_Per_Fundamental_Hz(header, laser, wavenumber, axis), report.Detectors,
+        [c['Verdict'] for c in report.Sections[TIMING]], declared or {})
     summary = (f"{tags['Complete']} complete {tags['Type']} scans of {len(sequence)} "
                f"setpoints, {per_step} bunches per step, {len(raw)} hits over "
                f"{(times_t[-1] - t0) / 60:.1f} min; bunches every {period * 1e3:.1f} ms.{note}")

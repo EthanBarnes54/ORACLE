@@ -34,6 +34,7 @@ class Recording_Elog():
 
     def __init__(self):
         self.Posts = []
+        self.Enabled = False            # as on a simulated rack, which never posts
         self.Last_Error = None
         self.Attachments = []           # what each attachment held when it was posted
 

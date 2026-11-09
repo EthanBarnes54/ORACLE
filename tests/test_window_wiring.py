@@ -553,6 +553,7 @@ def test_The_Line_Meter_Is_Read_Precisely_Against_The_Platforms_Setpoint(qapp, w
 # ── After the run ───────────────────────────────────────────────
 
 def test_A_Finished_Run_Is_Analysed_And_Its_Report_Exported(qapp, window):
+    window.Scan.Reference_Check.setChecked(True)
     _Scan(qapp, window)
     _Finished(qapp, window)
     assert Pump(qapp, lambda: window.Performance.Result is not None)
@@ -563,8 +564,26 @@ def test_A_Finished_Run_Is_Analysed_And_Its_Report_Exported(qapp, window):
         report = yaml.safe_load(fh)
     # the report beside the run, and nothing in it cuts data
     assert report['run'] == 'run_0001.asdf' and 'checks' in report and 'flagged' in report
-    assert 'scan_filters' not in report
-    assert exported in window.statusBar().currentMessage()
+    assert 'scan_filters' not in report and 'detectors' in report
+    message = window.statusBar().currentMessage()
+    assert 'run_0001_performance.yaml' in message and 'run_0001_systematics.yaml' in message
+    with open(path[:-len('.asdf')] + '_systematics.yaml', encoding='utf-8') as fh:
+        assert len(yaml.safe_load(fh)['sources']) == len(window.Performance.Result[1][
+            'Systematics'])
+    # the run is tagged a reference run, in its record and its ELOG entry
+    header, _, _ = run_file.Read(path)
+    assert header[run_file.ORACLE_KEY]['ReferenceRun'] is True
+    texts = window._Elog.Texts()
+    assert any('REFERENCE RUN' in text for text in texts)
+    # the short systematics block went to the ELOG as the run was analysed, and the whole
+    # table goes on request
+    [short] = [text for text in texts if 'SYSTEMATIC INPUTS, run_0001' in text]
+    assert 'the full table is on Scan Performance' in short and 'Largest term' in short
+    assert 'Cooler scatter' in window.Performance.Systematics_Label.text()
+    assert window.Performance.Elog_Button.isEnabled()
+    window.Performance.Elog_Button.click()
+    full = window._Elog.Texts()[-1]
+    assert 'Bench table repeatability (not yet known)' in full and 'Health (measured)' in full
 
 
 
