@@ -1006,9 +1006,7 @@ class Main_Window(QMainWindow):
         log.info("DAC correction: %s", reply['Dac_Correction'][1])
         which = ("gain, offset and non-linearity" if (correction or {}).get('inl')
                  else "gain and offset" if correction else "nothing")
-        self.Hardware.Linearity.Report_Label.setText(
-            Verdict_Html(verdict, f"{message}; corrects {which}; in force now and saved in the "
-                                  f"settings."))
+        self.Hardware.Linearity.Show_Correction(verdict, message, which)
 
     # ── Scan performance ─────────────────────────────────────────
 

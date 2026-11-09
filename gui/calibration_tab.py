@@ -8,7 +8,8 @@ The old DAQ's layout: the parameters and the start button on the left,
 and on the right the calibration (readback against set) over the
 readback's departure from the set voltage and the measured step size.
 The plots fill point by point as the calibration runs, and the gate's
-verdict and checks are listed under the button once it has finished.
+verdict, the figures it decided on and each check's verdict are reported
+under the button once it has finished.
 
 A calibration runs on a worker thread, not the GUI thread, so the window
 stays live without pumping events from inside it (the old DAQ's
@@ -21,16 +22,18 @@ Depends on: numpy, PySide6; cls_acquisition.calibration,
 cls_acquisition.scan_plan, gui.plots, gui.shared_widgets.
 """
 
-import html
-
 import numpy as np
-from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QPushButton,
                                QVBoxLayout, QWidget)
 
 from cls_acquisition import calibration
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots
-from gui.shared_widgets import REPORT_WIDTH, Form, Scroll_Column, Spin, Verdict_Html
+from gui.shared_widgets import (REPORT_WIDTH, Figure, Form, Muted, Report_Html, Report_Label,
+                                Scroll_Column, Spin, Verdict_Badge)
+
+# the gate's checks as a report names them
+CHECK_NAMES = {'dac_calibration': 'DAC calibration'}
 
 
 class Calibration_Tab(QWidget):
@@ -49,8 +52,7 @@ class Calibration_Tab(QWidget):
         self.Control_Group.setMinimumWidth(REPORT_WIDTH)
         column = QVBoxLayout(self.Control_Group)
         self.Start_Button = QPushButton('Start calibration')
-        self.Report_Label = QLabel('No calibration yet in this session.')
-        self.Report_Label.setWordWrap(True)
+        self.Report_Label = Report_Label('No calibration yet in this session.')
         column.addWidget(self.Start_Button)
         column.addWidget(self.Report_Label)
         column.addStretch(1)
@@ -118,13 +120,23 @@ class Calibration_Tab(QWidget):
         self._Curves[2].setData(set_v[1:], np.diff(readback))
 
     def Show_Report(self, report):
-        lines = [Verdict_Html(report['Verdict'], calibration.Summary(report))]
-        lines += [Verdict_Html(c['Verdict'], f"{c['Check']}: {c['Message']}")
-                  for c in report['Checks']]
-        self.Report_Label.setText('<br>'.join(lines))
+        """The gate's verdict, the figures it decided on, and each check's
+        verdict over what it found."""
+        figures = []
+        if 'TrackingR' in report:
+            figures = [('Tracking |r|', f"{report['TrackingR']:.5f}"),
+                       ('Gradient, set per readback', f"{report['FitGradient']:.5f}"),
+                       ('Residual rms', Figure(report['FitResidualRmsV'], '.3f', 'V')),
+                       ('Shortest settling', f"≥ {Figure(report['ShortestGapMs'], '.1f', 'ms')}")]
+        checks = []
+        for check in report['Checks']:
+            name = CHECK_NAMES.get(check['Check'], check['Check'].capitalize())
+            checks += [(name, Verdict_Badge(check['Verdict'])), Muted(check['Message'])]
+        self.Report_Label.setText(Report_Html([((report['Verdict'], 'Calibration gate'), figures),
+                                               ('Checks', checks)]))
 
     def Show_Failure(self, message):
-        self.Report_Label.setText(Verdict_Html('FAIL', message))
+        self.Report_Label.setText(Report_Html([(('FAIL', 'Calibration failed'), [message])]))
 
     def Inputs(self):
         return [('from', self.From_Box), ('to', self.To_Box), ('step', self.Step_Box)]
@@ -141,9 +153,9 @@ class Calibration_Tab(QWidget):
         if len(commanded) != len(readback) or len(commanded) < 2:
             self._Set, self._Readback = [], []
             self._Draw()
-            self.Report_Label.setText(html.escape(
-                f"{name} holds no usable calibration: {len(readback)} readings for "
-                f"{len(commanded)} setpoints.", quote=False))
+            self.Report_Label.setText(Report_Html([(name, [
+                f"No usable calibration: {len(readback)} readings for {len(commanded)} "
+                f"setpoints."])]))
             return
         self._Set, self._Readback = list(commanded), list(readback)
         self._Draw()
@@ -152,8 +164,10 @@ class Calibration_Tab(QWidget):
             return
         gain, offset, rms = calibration.Line_Fit(commanded, readback)
         seam = calibration.Step_At_Zero(commanded, readback)
-        self.Report_Label.setText(html.escape(
-            f"{name}'s calibration, {len(commanded)} points: readback = {gain:.6f} × set "
-            f"{offset:+.3f} V, residual {rms:.3f} V rms"
-            + (f"; its branches' lines meet 0 V {seam:+.3f} V apart" if seam is not None
-               else "") + ".", quote=False))
+        self.Report_Label.setText(Report_Html([(f"{name}, its straight line", [
+            ('Points', len(commanded)), ('Gain', f"{gain:.6f}"),
+            ('Offset', Figure(offset, '+.3f', 'V')), ('Residual rms', Figure(rms, '.3f', 'V')),
+            *((('Branch lines meet 0 V', f"{Figure(seam, '+.3f', 'V')} apart"),)
+              if seam is not None else ()),
+            Muted("Taken before the gate's verdict was recorded with each run, so only its "
+                  "line is shown.")])]))

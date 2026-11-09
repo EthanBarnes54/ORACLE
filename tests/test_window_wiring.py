@@ -468,7 +468,7 @@ def test_A_Correction_Measured_Under_Another_Is_Refused_And_One_Can_Be_Cleared(q
     assert 'changed since this sweep' in window.Dialogs[-1][1]
     linearity.Clear_Button.click()
     assert settings.Load()['dac_correction'] is None
-    assert 'corrects nothing' in linearity.Report_Label.text()
+    assert '>nothing<' in linearity.Report_Label.text()
 
 
 def test_A_Stopped_Sweep_Keeps_What_It_Took_Analysed(qapp, window):
@@ -890,7 +890,8 @@ def test_Each_Hardware_Page_Shows_A_Saved_Record_As_It_Was_Taken(qapp, window, m
             for key in ('Mean_V', 'Rms_Detrended_V', 'Oscillation_Rms_V'):
                 assert panel.Result[0][key] == pytest.approx(result[key], rel=1e-4)
         else:
-            assert panel.Report_Label.text().split('<br>')[0] == report.split('<br>')[0]
+            # the results; a record opened names itself alone where the measurement saved two
+            assert panel.Report_Label.text().split('>Saved<')[0] == report.split('>Saved<')[0]
     assert hardware.Settle.Table.rowCount() == 2 and hardware.Settle.Wait_Button.isEnabled()
     assert len(hardware.Settle.Response_Plot.listDataItems()) == 2
     assert not hardware.Linearity.Use_Button.isEnabled()

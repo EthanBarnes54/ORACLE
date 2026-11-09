@@ -6,9 +6,11 @@ from types import SimpleNamespace
 import numpy as np
 import pyqtgraph as pg
 import pytest
-from PySide6.QtCore import QPointF, Qt
+from PySide6.QtCore import QPointF, Qt, QUrl
 
-from gui import plots
+from gui import plots, theme
+from gui.shared_widgets import (Figure, Muted, Report_Html, Report_Label, Report_Table,
+                                Saved_Section)
 
 
 ABOUT = ('A plot for the test.', 'Nothing is calculated.')
@@ -158,3 +160,22 @@ def test_A_Dense_Line_Paints_The_Pixels_Of_Every_Point(qapp, view):
         widget.removeItem(curve)
     assert np.array_equal(*pictures)
     widget.close()
+
+
+def test_A_Report_Lines_Its_Figures_Up_And_Links_The_Files_It_Saved(qapp):
+    path = '/data/hardware_calibration/linearity_2026-11-09_120000.csv'
+    text = Report_Html([
+        (('WARN', 'Straight-line fit'), [('Offset', Figure(-0.27, '+.3f', 'V')),
+                                         'Gain <1 & falling', Muted('a footnote')]),
+        ('Branches', [Report_Table(('Branch', 'Gain'), [('Positive', '0.999159')])]),
+        Saved_Section([path])])
+    # each figure right-aligned beside its label, with a true minus sign
+    assert "<td style='color:" in text and "<td align='right'>−0.270 V</td>" in text
+    assert theme.VERDICT_COLOURS['WARN'] in text and 'Straight-line fit' in text
+    assert 'Gain &lt;1 &amp; falling' in text and '>a footnote</span>' in text
+    assert "<td align='right'>0.999159</td>" in text
+    # the file by its name, a link to it
+    assert f"href='{QUrl.fromLocalFile(path).toString()}'" in text
+    assert '>linearity_2026-11-09_120000.csv</a>' in text
+    label = Report_Label(text)
+    assert label.openExternalLinks() and label.wordWrap()

@@ -1,7 +1,7 @@
 """The Hardware Calibration tab: settle time, linearity and the cooler monitor.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The bench calibration tool's measurements, each on a page of its own in
@@ -22,6 +22,11 @@ was. The main window runs every page's measurement the same way, off
 the GUI thread, keeping everything that could drive the DAC or the
 meters disabled until it has finished.
 
+Each page reports its result in titled sections of labelled figures
+(shared_widgets.Report_Html), ending with the files it saved, each a
+link; what happens to the result afterwards (a correction put in force,
+a record opened rather than taken) is added as a section of its own.
+
 Above the pages, beside the ramp, the line meter can be read precisely
 (the bench tool's 'Read DMM') to check the wiring and polarity against
 whatever quick tune holds; and the settle page hands its recommended
@@ -33,6 +38,7 @@ gui.plots, gui.shared_widgets, gui.theme.
 """
 
 import html
+import os
 
 import numpy as np
 import pyqtgraph as pg
@@ -46,7 +52,8 @@ from cls_acquisition import hardware_calibration as hc
 from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
-from gui.shared_widgets import REPORT_WIDTH, Duration_Text, Form, Scroll_Column, Spin, Verdict_Html
+from gui.shared_widgets import (REPORT_WIDTH, Duration_Text, Figure, Form, Muted, Report_Html,
+                                Report_Label, Report_Table, Saved_Section, Scroll_Column, Spin)
 
 STEP_ROWS = 4
 NPLC_CHOICES = ('0.02', '0.2', '1', '10', '100')
@@ -96,8 +103,8 @@ class _Panel(QWidget):
         for button in (self.Start_Button, self.Stop_Button, self.Open_Button):
             buttons.addWidget(button)
         column.addLayout(buttons)
-        self.Report_Label = QLabel('Not run yet in this session.')
-        self.Report_Label.setWordWrap(True)
+        self.Report_Label = Report_Label('Not run yet in this session.')
+        self._Sections, self._Notes = [], {}
         column.addWidget(self.Report_Label)
         column.addStretch(1)
         self._Control_Column = column
@@ -144,22 +151,37 @@ class _Panel(QWidget):
             self.Show_Progress(item)
 
     def Begin(self):
+        self._Sections, self._Notes = [], {}
         self.Report_Label.setText("Measuring...")
+        self.Report_Label.setToolTip('')
         self.Stop_Button.setEnabled(True)
 
     def Running(self, running):
         self.Stop_Button.setEnabled(running)
 
-    def Show_Result(self, result, paths, text):
+    def Show_Result(self, result, paths, sections):
+        """``result`` reported in ``sections`` (Report_Html's), then the files
+        ``paths`` it was saved to."""
         self.Result = (result, paths)
-        saved = '<br>'.join(html.escape(path) for path in paths)
-        self.Report_Label.setText(f"{text}<br>Saved to {saved}")
+        self._Sections, self._Notes = [*sections, Saved_Section(paths)], {}
+        self.Report_Label.setToolTip(f"Saved in {os.path.dirname(paths[0])}" if paths else '')
+        self._Render()
+
+    def Add_Note(self, heading, rows):
+        """A section added under the report, in place of one with the same title."""
+        self._Notes[heading[1] if isinstance(heading, tuple) else heading] = (heading, rows)
+        self._Render()
+
+    def _Render(self):
+        self.Report_Label.setText(Report_Html([*self._Sections, *self._Notes.values()]))
 
     def Show_Failure(self, message):
-        self.Report_Label.setText(Verdict_Html('FAIL', message))
+        self._Sections, self._Notes = [(('FAIL', 'Not completed'), [message])], {}
+        self._Render()
 
     def Show_Stopped(self, message):
-        self.Report_Label.setText(Verdict_Html('WARN', f"Stopped: {message}"))
+        self._Sections, self._Notes = [(('WARN', 'Stopped'), [message])], {}
+        self._Render()
 
 
 class Settle_Panel(_Panel):
@@ -348,15 +370,31 @@ class Settle_Panel(_Panel):
                               f"{shift:+.3f}" if np.isfinite(shift) else '–'))
 
     def Show_Result(self, results, paths):
-        lines = [Verdict_Html(*hc.Settle_Summary(results))]
-        for step in hc.Settle_Steps(results):
-            tail = (f", tail {step['Tail_Shift_V']:.3f} V" if step['Tail_Shift_V'] is not None
-                    else '')
-            lines.append(html.escape(
-                f"step {step['Step']} {step['Mode']} ({step['From_V']:g} to {step['To_V']:g} "
-                f"V): worst {step['Worst_S'] * 1e3:.1f} ms, mean {step['Mean_S'] * 1e3:.1f} ms "
-                f"over {step['Reps']}, overshoot {step['Overshoot_Pct']:.2f} %{tail}"))
-        super().Show_Result(results, paths, '<br>'.join(lines))
+        verdict, _ = hc.Settle_Summary(results)
+        steps = hc.Settle_Steps(results)
+        sections = [((verdict, 'Settling'), ["No step was measured."])]
+        if steps:
+            slowest = max(steps, key=lambda step: step['Worst_S'])
+            tails = any(step['Tail_Shift_V'] is not None for step in steps)
+            sections = [((verdict, 'Settling'), [
+                ('Slowest step', f"{slowest['Step']} {slowest['Mode']}, "
+                                 f"{Figure(slowest['From_V'], 'g')} → "
+                                 f"{Figure(slowest['To_V'], 'g', 'V')}"),
+                ('Settled after its command', Figure(slowest['Worst_S'] * 1e3, '.1f', 'ms')),
+                ("ORACLE's SETTLE", Figure(THRESHOLDS['SettleS'] * 1e3, '.0f', 'ms'))]),
+                ('Steps', [Report_Table(
+                    ('Step', 'Jump (V)', 'Worst (ms)', 'Mean (ms)', 'Overshoot (%)',
+                     *(('Tail (V)',) if tails else ())),
+                    [(f"{step['Step']} {step['Mode']}",
+                      f"{Figure(step['From_V'], 'g')} → {Figure(step['To_V'], 'g')}",
+                      f"{step['Worst_S'] * 1e3:.1f}", f"{step['Mean_S'] * 1e3:.1f}",
+                      f"{step['Overshoot_Pct']:.2f}",
+                      *((('–' if step['Tail_Shift_V'] is None
+                          else f"{step['Tail_Shift_V']:.3f}"),) if tails else ()))
+                     for step in steps]),
+                    Muted(f"From each step's command, over {max(s['Reps'] for s in steps)} "
+                          f"repetitions at most.")])]
+        super().Show_Result(results, paths, sections)
         self.Use_Button.setEnabled(bool(results))
         self.Wait_Button.setEnabled(bool(results))
 
@@ -534,8 +572,9 @@ class Linearity_Panel(_Panel):
         # the correction in force when it was swept is not in the record, so its
         # own cannot be composed onto it
         self.Use_Button.setEnabled(False)
-        self.Report_Label.setText(self.Report_Label.text() + "<br>" + html.escape(
-            "Opened from its record: sweep again to put a correction in force."))
+        self.Add_Note('Opened from its record', [Muted(
+            "The correction in force when it was swept is not recorded, so sweep again to "
+            "put a correction in force.")])
 
     def Begin(self):
         super().Begin()
@@ -571,43 +610,55 @@ class Linearity_Panel(_Panel):
         self.Fit_Label.setText(text)
 
     def Show_Result(self, result, paths):
-        fits, lines = result['Fits'], [
-            f"gain {result['Gain']:.7f} ± {result['Gain_Err']:.1e}, offset "
-            f"{result['Offset_V']:+.3f} ± {result['Offset_Err_V']:.3f} V",
-            f"residual rms {result['Residual_Rms_V']:.3f} V, max {result['Residual_Max_V']:.3f} V"
-            f" ({result['Inl_Ppm_Fs']:.0f} ppm of full scale)"]
+        fits = result['Fits']
+        line = [('Gain', f"{result['Gain']:.7f} ± {result['Gain_Err'] * 1e6:.3g} ppm"),
+                ('Offset', f"{Figure(result['Offset_V'], '+.3f')} ± "
+                           f"{Figure(result['Offset_Err_V'], '.3f', 'V')}"),
+                ('Residual rms', Figure(result['Residual_Rms_V'], '.3f', 'V')),
+                ('Largest residual', f"{Figure(result['Residual_Max_V'], '.3f', 'V')} "
+                                     f"({result['Inl_Ppm_Fs']:.0f} ppm of full scale)")]
         if result['Quadratic_V_Per_Kv2'] is not None:
-            lines.append(f"curvature {result['Quadratic_V_Per_Kv2']:+.3f} V/kV²")
-        for channel, name in hc.BRANCHES:
-            if channel in fits:
-                fit = fits[channel]
-                lines.append(f"{name}: gain {fit['Gain']:.6f}, offset {fit['Offset_V']:.3f} V, "
-                             f"rms {fit['Rms_V']:.3f} V over {fit['Points']} points")
+            line.append(('Curvature', Figure(result['Quadratic_V_Per_Kv2'], '+.3f', 'V/kV²')))
+        branches = [Report_Table(('Branch', 'Gain', 'Offset (V)', 'RMS (V)', 'Points'), [
+            (name.capitalize(), f"{fits[channel]['Gain']:.6f}",
+             Figure(fits[channel]['Offset_V'], '+.3f'), f"{fits[channel]['Rms_V']:.3f}",
+             fits[channel]['Points']) for channel, name in hc.BRANCHES if channel in fits])]
         if result['Seam_V'] is not None:
-            lines.append(f"branch lines meet 0 V {result['Seam_V']:+.3f} V apart, gain mismatch "
-                         f"{result['Gain_Mismatch_Ppm']:+.0f} ppm")
+            branches += [('Lines meet 0 V', f"{Figure(result['Seam_V'], '+.3f', 'V')} apart"),
+                         ('Gain mismatch', Figure(result['Gain_Mismatch_Ppm'], '+.0f', 'ppm'))]
+        sections = [('Straight-line fit', line), ('Branches', branches)]
         if result['Hysteresis'] is not None:
-            lines.append(f"hysteresis (down - up): mean {result['Hysteresis']['Mean_V']:+.3f} V,"
-                         f" largest {result['Hysteresis']['Max_V']:.3f} V")
+            sections.append(('Hysteresis, down − up', [
+                ('Mean', Figure(result['Hysteresis']['Mean_V'], '+.3f', 'V')),
+                ('Largest', Figure(result['Hysteresis']['Max_V'], '.3f', 'V'))]))
         if result['Zero_Drift'] is not None:
             drift = result['Zero_Drift']
-            slope = (f", {drift['Slope_V_Per_H']:+.3f} V/h" if drift['Slope_V_Per_H']
-                     is not None else '')
-            lines.append(f"0 V checks: {drift['Checks']} spanning {drift['Span_V']:.3f} V"
-                         f"{slope}")
+            sections.append(('0 V checks', [
+                ('Checks', drift['Checks']), ('Span', Figure(drift['Span_V'], '.3f', 'V')),
+                *((('Drift', Figure(drift['Slope_V_Per_H'], '+.3f', 'V/h')),)
+                  if drift['Slope_V_Per_H'] is not None else ())]))
         if result['Inl']:
-            for channel, name in hc.BRANCHES:
-                if channel in result['Inl']:
-                    table = result['Inl'][channel]
-                    lines.append(f"{name} non-linearity: {table['Smooth_Rms_V']:.3f} V rms on "
-                                 f"{len(table['Knots_V'])} knots, {table['Rough_Rms_V']:.3f} V "
-                                 f"left about it (code rounding, {hc.CODE_V:.3f} V a code, "
-                                 f"and noise)")
+            sections.append(('Non-linearity table', [
+                Report_Table(('Branch', 'Shape (V rms)', 'Knots', 'Left (V rms)'), [
+                    (name.capitalize(), f"{table['Smooth_Rms_V']:.3f}", len(table['Knots_V']),
+                     f"{table['Rough_Rms_V']:.3f}")
+                    for channel, name in hc.BRANCHES
+                    if (table := result['Inl'].get(channel)) is not None]),
+                Muted(f"What is left is the code rounding ({hc.CODE_V:.3f} V a code) and "
+                      f"noise.")]))
         else:
-            lines.append(f"no non-linearity table: it needs {hc.INL_MIN_POINTS} rungs in every "
-                         f"{hc.INL_KNOT_V:g} V of both branches")
-        super().Show_Result(result, paths, '<br>'.join(map(html.escape, lines)))
+            sections.append(('Non-linearity table', [
+                f"None: it needs {hc.INL_MIN_POINTS} rungs in every {hc.INL_KNOT_V:g} V of both "
+                f"branches."]))
+        super().Show_Result(result, paths, sections)
         self.Use_Button.setEnabled(len(fits) == len(hc.BRANCHES))
+
+    def Show_Correction(self, verdict, message, corrects):
+        """The DAC correction just put in force (or cleared), and the gate's
+        verdict on it, under the report."""
+        self.Add_Note((verdict, 'DAC correction'), [
+            ('Corrects', corrects), ('State', 'in force now, saved in the settings'),
+            message[0].upper() + message[1:] + ('' if message.endswith('.') else '.')])
 
 
 class Cooler_Panel(_Panel):
@@ -748,16 +799,22 @@ class Cooler_Panel(_Panel):
                                        f"{peak['Snr']:.1f}",
                                        peak['Mains_Harmonic'] or '–',
                                        f"{peak['Integration_Gain']:.3f}"))
-        bands = ', '.join(f"{b['Low_Hz']:.3g}-{b['High_Hz']:.3g} Hz {b['Rms_V']:.3f} V"
-                          for b in result['Bands'])
-        text = (f"{result['Count']} readings every {result['Interval_S'] * 1e3:.3g} ms: mean "
-                f"{result['Mean_V']:.2f} V, drift {result['Drift_V_Per_Min']:+.4f} V/min; "
-                f"detrended {result['Rms_Detrended_V']:.3f} V rms "
-                f"({result['Oscillation_Rms_V']:.3f} in oscillations, "
-                f"{result['Random_Rms_V']:.3f} random), peak to peak "
-                f"{result['Peak_To_Peak_Detrended_V']:.3f} V; noise floor "
-                f"{result['Noise_Floor_V_Rt_Hz'] * 1e3:.2f} mV/√Hz. By band: {bands}.")
-        super().Show_Result(result, paths, html.escape(text))
+        interval = result['Interval_S']
+        sections = [
+            ('Record', [('Readings', f"{result['Count']}, every {interval * 1e3:.3g} ms"),
+                        ('Duration', Duration_Text(result['Count'] * interval))]),
+            ('Level', [('Mean', Figure(result['Mean_V'], '.2f', 'V')),
+                       ('Drift', Figure(result['Drift_V_Per_Min'], '+.4f', 'V/min'))]),
+            ('About the drift', [
+                ('Total', Figure(result['Rms_Detrended_V'], '.3f', 'V rms')),
+                ('Oscillations', Figure(result['Oscillation_Rms_V'], '.3f', 'V rms')),
+                ('Random', Figure(result['Random_Rms_V'], '.3f', 'V rms')),
+                ('Peak to peak', Figure(result['Peak_To_Peak_Detrended_V'], '.3f', 'V')),
+                ('Noise floor', Figure(result['Noise_Floor_V_Rt_Hz'] * 1e3, '.2f', 'mV/√Hz'))]),
+            ('By frequency band', [(f"{band['Low_Hz']:.3g}–{band['High_Hz']:.3g} Hz",
+                                    Figure(band['Rms_V'], '.3f', 'V rms'))
+                                   for band in result['Bands']])]
+        super().Show_Result(result, paths, sections)
 
 
 class Hardware_Tab(QWidget):

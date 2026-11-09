@@ -143,7 +143,10 @@ def test_The_Hardware_Calibrations_Run_Save_And_Correct_The_Dac(qapp, window):
     assert linearity.Use_Button.isEnabled()
     linearity.Use_Button.click()
     assert settings.Load()['dac_correction']['measured'] is not None
-    assert 'corrects gain and offset; in force now' in linearity.Report_Label.text()
+    report = linearity.Report_Label.text()
+    assert '>gain and offset<' in report and 'in force now' in report
+    # the sweep's own results stay above the correction, not replaced by it
+    assert 'Straight-line fit' in report and 'do not also apply the bench table' in report
 
     cooler = hardware.Cooler
     cooler.Duration_Box.setValue(1.0)

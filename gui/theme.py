@@ -44,6 +44,7 @@ TOKENS = {
     'border_soft': '#4a4a4f',
     'border_hover': '#62626a',
     'text': '#e0e0e0',
+    'text_muted': '#a3a3ab',        # a report's labels, beside its figures
     'text_disabled': '#777777',
     'group_bg': '#333338',
     'tooltip_bg': '#2a2a2e',
