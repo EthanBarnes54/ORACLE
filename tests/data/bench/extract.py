@@ -1,7 +1,7 @@
 """Make the bench fixtures in this folder from the bench tool's own records.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The bench calibration tool (cls-cal, A. Raggio) measured the CLS rack on
@@ -56,6 +56,17 @@ def _Linearity(run, out, sweep_only=False):
                           dtype=np.int32))
 
 
+def _Zero_Checks(run, out):
+    """The 0 V checks a sweep took between its points, which the bench table
+    is corrected by: when, and where the platform read."""
+    rows = [r for r in _Rows(run, 'points.csv') if r['kind'] == 'zero']
+    np.savez_compressed(
+        os.path.join(HERE, out),
+        time_s=np.array([float(r['t_s']) for r in rows]),
+        read_v=np.array([float(r['mean_kv']) * 1e3 for r in rows]),
+        sigma_v=np.array([float(r['std_kv']) * 1e3 for r in rows]))
+
+
 def main():
     reference = {'source': SOURCE, 'tool': 'cls-cal 0.1.0 (A. Raggio)'}
 
@@ -74,6 +85,8 @@ def main():
 
     _Linearity('20261025_021414_linearity_3kvspan', 'linearity_3kv_25oct.npz', True)
     _Linearity('20261026_111717_linearity', 'linearity_3kv_26oct.npz', True)
+    _Zero_Checks('20261025_021414_linearity_3kvspan', 'zero_3kv_25oct.npz')
+    _Zero_Checks('20261026_111717_linearity', 'zero_3kv_26oct.npz')
 
     run = '20261024_142142_settle_LCR'
     steps = _Rows(run, 'steps.csv')

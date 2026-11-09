@@ -4,7 +4,7 @@
 
 The data acquisition for collinear laser spectroscopy (CLS) at IGISOL: it steps the platform voltage through a scan, records every ion the time tagger sees against the voltage it was taken at, and calibrates the voltage axis before every run. ORACLE keeps the collinear DAQ's layout and functions, brings in the bench calibration tool, and is built so that the faults found in that DAQ cannot happen rather than being caught afterwards.
 
-**Version:** 0.5.0
+**Version:** 0.6.0
 **Developer:** Ethan Barnes (ethan.barnes@postgrad.manchester.ac.uk)
 **Framework:** PySide6 (Qt6) + pyqtgraph + numpy + asdf
 
@@ -58,6 +58,7 @@ The bench calibration tool (cls-cal, A. Raggio), in ORACLE: the measurements tha
 - **Settle time**: steps the platform out and back while the line meter samples it on its own timer (the interval the meter set, read back), and reports each step's lag from the command, settling time and 10-90 % rise from its 10 % crossing, overshoot and noise, with the slowest and mean of each step; optionally a **drift tail** at a long integration after each step. The slowest step is checked against ORACLE's SETTLE, **Use as scan settle model** makes the scan's settle model from it, and **Use recommended wait for linearity** sets the linearity sweep's wait after each step to three times the slowest step, at least 0.2 s, as the bench tool did
 - **Linearity**: a count-based ladder up, down, up then down, or in random order (which separates drift from shape), with a finer grid across 0 V and 0 V read again every few rungs; several readings at a chosen NPLC with autozero, after the meter's own autocalibration if asked. Reported: gain and offset with their uncertainties, residual rms and largest, INL in ppm of full scale, curvature, each branch's line and where the two meet 0 V, the gain mismatch, hysteresis, the drift of the 0 V checks, and from a sweep with at least five rungs in every 25 V the **integral non-linearity** of each converter, apart from what the code rounding leaves. **Use as DAC correction** puts into force, and into the settings, the correction that cancels each branch's gain and offset and that non-linearity, dated, with an expiry (the branches' offsets drift by up to 0.1 V a day; the shape holds); a measured correction past its expiry refuses scans until it is measured again or cleared
 - **Cooler monitor**: the cooler streamed off the meter's timer (`R?`), with no gaps and longer than its memory if need be, at a short aperture (ripple) or an NPLC (drift). Reported: level, drift, rms and peak to peak before and after the drift, noise by decade of frequency, the white-noise floor, the oscillations (frequency, amplitude, SNR, mains harmonics named, the meter's own attenuation of each) and how much of the noise they are, and the averaged spectrum, saved as its own record (`cooler_spectrum_*.csv`, the bench tool's `spectrum.csv`)
+- **Scan table**: the bench table (A. Raggio, November 2026), the platform voltage each DAC code really gives. **Make from a linearity record...** builds one from a sweep with its 0 V checks: each reading less the 0 V level interpolated between the checks (it warms up by 0.2 V in the first hour), averaged by converter and code. It is kept in the library under `<data>/tables/`, never overwritten, named by its date and ID (its content's hash), and offered for use. **Use a table...** puts one from the library, or from anywhere, in force; **Compare with...** sets another against it code by code, 0 V levels aligned, to see whether the converters have changed. The page shows each branch's shape about a straight line (the non-linearity a straight-line calibration leaves), the 0 V level's drift during the sweep (warning if it was still warming up), and how often 0 V should be checked during a run. A table measured on another rack, or one the settings name that is not in the library, is warned of at start-up, never refused. On the bench tool's own records, the 25 October table predicts the 26 October sweep to 11.6 mV rms once a run's a + b·T is fitted (Raggio: 10.3 mV over twelve runs)
 - **Line meter: Read (5 × NPLC 10)**, the bench tool's *Read DMM*: the platform read precisely, against whatever quick tune holds on it, to check the wiring and polarity
 - **Open record...** on each page shows a record saved earlier, from this PC or another: its plots, table and analysis, as when it was taken. A linearity record opened this way does not offer its DAC correction, since the correction in force when it was swept is not in the record
 - A measurement that fails or is stopped part way is still analysed as far as it went, and its record closes with those results, as the bench tool's `results_partial.json` did
@@ -167,6 +168,7 @@ Beside it, `settings/inputs.yaml` is ORACLE's memory of every input in the windo
 | `instruments` | the rack's | VISA resources of the line and cooler meters, the MCC board (`dac_board`, which must be the USB-231), the tagger driver's folder (`tagger_driver`), the tagger thresholds, and `hv_limit_v` (4000: the Trek 609E-6's rating, and the most it may be set to), the most any scan, quick tune or hardware calibration may ask of the platform. A plan beyond it is refused before its first write |
 | `instruments: settle_gate_bit` | *(empty: not wired)* | the MCC digital line (AUXPORT bit) gating the tagger's window through an AND unit on PulseBlaster channel 18 |
 | `dac_correction` | *(empty: identity)* | the DAC correction a linearity sweep measured, written by **Use as DAC correction**: each branch's polynomial, and its non-linearity table where measured. A setpoint outside the range the table was measured over is refused, never extrapolated. Production runs write uncorrected, since the bench table is applied after collection: a calibration with a correction in force is warned of, lest it be applied twice |
+| `scan_table` | *(empty: none)* | the ID of the bench table in force, from the library under `<data>/tables/`, set by the Scan table page; each run records it |
 | `settle_model` | *(empty: SETTLE for every step)* | the scan's settling against jump size, written by **Use as scan settle model** on the Settle time page; each step waits 1.25 times it |
 | `cooler_pv` | disabled | `enabled`, `prefix` (`FURIOS:Cooler:`): publish the cooler's voltage as EPICS PVs. Needs pcaspy, which has no Windows wheel for Python 3.13 yet; never from a simulated rack |
 | `calibration` | `nplc` 1 | power line cycles each calibration reading integrates (20 ms each): whole cycles take out the mains the divider picks up, which a 200 µs reading caught at a random phase (75 mV a point against about 7 mV). The meter's display poll keeps its 200 µs aperture |
@@ -213,6 +215,7 @@ One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look 
 | Key | Contents |
 |---|---|
 | `InteractionRegion` | `CEC` or `LCR`; empty if not stated |
+| `ScanTable` | the ID of the bench table in force when the run was taken, or empty |
 | `ReferenceRun` | whether the run was taken to measure the beam's offset from the cooler's readback |
 | `PmtHv` | the PMTs' high voltage: `Pvs`, read from EPICS where their names are set, and `Entered`, as typed on the Scan tab |
 
@@ -223,6 +226,12 @@ Beside each run, `run_NNNN_monitor.csv` records what the rack did while it was t
 A run's number is one more than the highest in the data folder, counted when it starts: numbers survive a restart, and a refused calibration leaves no gap. On the rack an unreachable data folder stops the run rather than restart the numbering.
 
 ---
+
+## Formats proposed for cls_tools
+
+For A. Raggio to review (the November 2026 meeting's Q3); ORACLE adapts to whatever is agreed.
+
+**Bench table**, `<data>/tables/table_<YYYYMMDD>_<id8>.csv`: one row per DAC converter and code, `channel, code, setpoint_v, volts, sigma_v, readings`. `channel` is the converter (0 drives the positive branch, 1 the negative); `code` the 16-bit code it held; `volts` the platform voltage it gave relative to the 0 V level at the time, to the microvolt; `sigma_v` its standard error; `setpoint_v` the setpoint that first wrote the code, for a per-setpoint view. Above the columns, `# key: value` lines (each value JSON) give the table's `id` (the SHA-256 of every number in the file, so a changed file is found), when it was measured, the record it came from, the rack it was measured on, the dividers, the 0 V level's drift during it and the 0 V check interval it recommends. `pandas.read_csv(path, comment='#')` reads the rows. A run's codes are in its `ORACLE` record (`DacCodes`, in the order of `CalSet`), and the table it was taken under is `ScanTable`, so a run's calibration can be fitted to its own table as V = a + b·T(code).
 
 ## The time tagger's wrapper
 

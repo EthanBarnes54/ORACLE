@@ -475,6 +475,63 @@ def test_A_Correction_Measured_Under_Another_Is_Refused_And_One_Can_Be_Cleared(q
     assert '>nothing<' in linearity.Report_Label.text()
 
 
+def test_A_Bench_Table_Is_Made_From_A_Sweep_Kept_And_Named_By_Each_Run(qapp, window,
+                                                                      monkeypatch):
+    _Fast_Bench(window)
+    linearity = window.Hardware.Linearity
+    linearity.Zero_Box.setValue(3)                      # its 0 V checks set it against 0 V
+    linearity.Start_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None)
+    record = linearity.Result[1][0]
+    monkeypatch.setattr(main_window.QFileDialog, 'getOpenFileName',
+                        lambda *_, **__: (record, ''))
+    asked = _Answer(monkeypatch, YES)
+    page = window.Hardware.Table
+    page.Make_Button.click()
+    assert asked and window._Table is not None and window.Dialogs == []
+    table = window._Table
+    assert settings.Load()['scan_table'] == table.Id
+    assert os.path.dirname(window._Table_Path).endswith('tables')
+    assert table.Meta['source'] == os.path.basename(record)
+    assert table.Meta['rack'] == window._Identity            # the rack it was measured on
+    assert f"<td align='right'>{table.Id[:8]}</td>" in page.Report_Label.text()
+    assert len(page.Residual_Plot.listDataItems()) == 2      # a branch each
+    # every run names the table it is fitted to
+    _Scan(qapp, window)
+    _Finished(qapp, window)
+    [path] = Run_Files(window)
+    header, _, _ = run_file.Read(path)
+    assert header[run_file.ORACLE_KEY]['ScanTable'] == table.Id
+    page.Clear_Button.click()
+    assert window._Table is None and settings.Load()['scan_table'] is None
+
+
+def test_A_Table_From_Another_Rack_Or_Missing_Is_Said_At_Start(qapp, monkeypatch, tmp_path):
+    from cls_acquisition import scan_table
+    from tests.test_scan_table import _Points
+    data = tmp_path / 'data' / 'simulated'
+    table = scan_table.Build(_Points('linearity_3kv_26oct.npz', 'zero_3kv_26oct.npz'),
+                             {'measured': '2026-10-26 11:17:17', 'rack': {
+                                 'Kind': 'hardware', 'Dac': {'Board': 'USB-231',
+                                                             'UniqueId': 'A1'}}})
+    scan_table.Save(table, str(data))
+    window = Open_Window(monkeypatch, tmp_path, scan_table=table.Id)
+    try:
+        assert window._Table.Id == table.Id
+        warning = [w for w in window.findChildren(QLabel) if w.text().strip() == 'Rack warning']
+        assert warning and 'measured on another rack' in warning[0].toolTip()
+        assert 'WARN' in window.Hardware.Table.Report_Label.text()
+    finally:
+        Close_Window(qapp, window)
+    window = Open_Window(monkeypatch, tmp_path, scan_table='0' * 64)
+    try:
+        assert window._Table is None
+        warning = [w for w in window.findChildren(QLabel) if w.text().strip() == 'Rack warning']
+        assert warning and 'is not in the library' in warning[0].toolTip()
+    finally:
+        Close_Window(qapp, window)
+
+
 def test_A_Stopped_Sweep_Keeps_What_It_Took_Analysed(qapp, window):
     _Fast_Bench(window)
     linearity = window.Hardware.Linearity

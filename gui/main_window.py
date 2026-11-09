@@ -1,7 +1,7 @@
 """ORACLE's main window and entry point.
 
 Date:    2026-11-09
-Version: 0.5.0
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
@@ -43,7 +43,7 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.5.0'
+__version__ = '0.6.0'
 
 import contextlib
 import ctypes
@@ -70,7 +70,7 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, Q
                                QSlider, QSplashScreen, QStyle, QTabWidget, QWidget)
 
 from cls_acquisition import (calibration, hardware_calibration, run_file, scan_performance,
-                             settings, systematics)
+                             scan_table, settings, systematics)
 from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
@@ -148,6 +148,10 @@ class Main_Window(QMainWindow):
             loop = None
         self._Identity = rack.Identity(loop, line_meter, cooler_meter)
         self._Commit = settings.Commit()
+        # the bench table runs are fitted to, from the library; a missing one or one
+        # measured on another rack is said for the whole session, never refused
+        self._Table, self._Table_Path, missing = self._Active_Table(config['scan_table'])
+        warnings = [*warnings, *missing]
         self._Settle_Model = config['settle_model']
         self._Analysis = None           # the performance analysis in progress
         self._Analysing = None          # the run it is of
@@ -262,6 +266,11 @@ class Main_Window(QMainWindow):
             hardware_calibration.Settle_Model(hardware.Settle.Result[0])))
         hardware.Settle.Clear_Button.clicked.connect(lambda: self._Set_Settle_Model(None))
         hardware.Settle.Show_Model(self._Settle_Model)
+        hardware.Table.Make_Button.clicked.connect(self._Make_Table)
+        hardware.Table.Load_Button.clicked.connect(self._Use_Table)
+        hardware.Table.Compare_Button.clicked.connect(self._Compare_Table)
+        hardware.Table.Clear_Button.clicked.connect(lambda: self._Set_Table(None))
+        hardware.Table.Show(self._Table, self._Table_Path, missing[0] if missing else '')
         performance = self.Performance
         performance.Refresh_Button.clicked.connect(self._Refresh_Runs)
         performance.Browse_Button.clicked.connect(self._Open_Run)
@@ -597,6 +606,7 @@ class Main_Window(QMainWindow):
                             'Entered': pending['setup']['PmtHv']},
                   'TaggerLevels': self._Tagger_Levels,
                   'ReferenceRun': pending['setup']['ReferenceRun'],
+                  'ScanTable': self._Table.Id if self._Table else None,
                   # the window the analysis takes the cooler's rolling mean over
                   'CoolerRollingS': self._Rolling_S,
                   'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
@@ -983,6 +993,107 @@ class Main_Window(QMainWindow):
                                                            f"not be shown: {e}")
             return
         log.info("Showing the %s record %s", kind, path)
+
+    # ── The bench table ──────────────────────────────────────────
+
+    def _Active_Table(self, table_id):
+        """``(table, its path, sentences)`` of the table the settings name,
+        found in the library by its ID; the sentences say why it is missing
+        or may not describe this rack."""
+        if not table_id:
+            return None, None, []
+        for path, meta in scan_table.Library(self._Data_Dir):
+            if meta.get('id') == table_id:
+                table = scan_table.Load(path)
+                same, why = scan_table.Matches(table, self._Identity)
+                return table, path, [] if same else [why]
+        return None, None, [f"The bench table {table_id[:8]} the settings name is not in the "
+                            f"library ({os.path.join(self._Data_Dir, scan_table.FOLDER)}), so "
+                            f"runs are fitted to none until it is put back or another is used."]
+
+    def _Table_Meta(self, header, path):
+        """What a linearity record says of its sweep, for the table made from it."""
+        meta = {'measured': header.get('Date'), 'source': os.path.basename(path),
+                'oracle': header.get('ORACLE'), 'made_by': __version__}
+        for key in ('RackIdentity', 'Dividers', 'Commit'):
+            if key in header:
+                with contextlib.suppress(ValueError):
+                    meta['rack' if key == 'RackIdentity' else key.lower()] = json.loads(
+                        header[key])
+        for key in ('step_v', 'readings', 'nplc', 'settle_s', 'zero_every'):
+            with contextlib.suppress(KeyError, ValueError):
+                meta[key] = float(header[key])
+        return meta
+
+    def _Make_Table(self):
+        """A table from a linearity record, kept in the library, and in force
+        if the operator says so."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, 'Make a bench table from a linearity record',
+            os.path.join(self._Data_Dir, 'hardware_calibration'),
+            'Linearity records (linearity_2*.csv)')
+        if not path:
+            return
+        try:
+            header, _, _ = hardware_calibration.Read_Record(path)
+            table = scan_table.Build(hardware_calibration.Read_Linearity(path),
+                                     self._Table_Meta(header, path))
+            saved = scan_table.Save(table, self._Data_Dir)
+        except (OSError, ValueError, hardware_calibration.Calibration_Error) as e:
+            QMessageBox.warning(self, 'No table made', f"{os.path.basename(path)} made no bench "
+                                                       f"table: {e}")
+            return
+        log.info("Bench table %s made from %s: %s", table.Id[:8], path, saved)
+        if QMessageBox.question(
+                self, 'Use this table?',
+                f"Table {table.Id[:8]} is kept in the library:\n{saved}\n\nFit runs to it from "
+                f"now on?") == QMessageBox.StandardButton.Yes:
+            self._Set_Table(table, saved)
+        else:
+            self.statusBar().showMessage(f"Bench table {table.Id[:8]} kept, not in use: {saved}",
+                                         10000)
+
+    def _Pick_Table(self, title):
+        """A table chosen from the library, or anywhere, or None."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, title, os.path.join(self._Data_Dir, scan_table.FOLDER),
+            'Bench tables (table_*.csv)')
+        if not path:
+            return None, None
+        try:
+            return scan_table.Load(path), path
+        except (OSError, scan_table.Table_Error) as e:
+            QMessageBox.warning(self, 'Table not read', str(e))
+            return None, None
+
+    def _Use_Table(self):
+        """A table chosen into force, kept in the library first if it came
+        from elsewhere."""
+        table, path = self._Pick_Table('Use a bench table')
+        if table is None:
+            return
+        try:
+            path = scan_table.Save(table, self._Data_Dir)
+        except (OSError, scan_table.Table_Error) as e:
+            QMessageBox.warning(self, 'Table not used', f"It could not be kept in the library, "
+                                                        f"so it was not put in force: {e}")
+            return
+        self._Set_Table(table, path)
+
+    def _Set_Table(self, table, path=None):
+        """``table`` (None: none) in force from now on, and in the settings."""
+        self._Table, self._Table_Path = table, path
+        settings.Update(scan_table=table.Id if table else None)
+        why = '' if table is None else scan_table.Matches(table, self._Identity)[1]
+        self.Hardware.Table.Show(table, path, why)
+        log.info("Bench table in force: %s", table.Id if table else "none")
+        if why:
+            self.statusBar().showMessage(why, 15000)
+
+    def _Compare_Table(self):
+        other, _ = self._Pick_Table('Compare a bench table with the one in force')
+        if other is not None:
+            self.Hardware.Table.Show_Comparison(other, scan_table.Compare(other, self._Table))
 
     def _Set_Settle_Model(self, model):
         """Scans settle by ``model`` (None: SETTLE for every step) from the next one."""

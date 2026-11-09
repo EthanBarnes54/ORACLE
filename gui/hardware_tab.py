@@ -1,7 +1,7 @@
-"""The Hardware Calibration tab: settle time, linearity and the cooler monitor.
+"""The Hardware Calibration tab: settle time, linearity, the cooler monitor and the bench table.
 
 Date:    2026-11-09
-Version: 0.5.0
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The bench calibration tool's measurements, each on a page of its own in
@@ -27,6 +27,11 @@ Each page reports its result in titled sections of labelled figures
 link; what happens to the result afterwards (a correction put in force,
 a record opened rather than taken) is added as a section of its own.
 
+The Scan table page keeps the bench table (cls_acquisition.scan_table):
+one is made from a linearity sweep's record, or loaded from the library,
+and made the active table runs are fitted to; two can be compared, to
+see whether the converters have changed.
+
 Above the pages, beside the ramp, the line meter can be read precisely
 (the bench tool's 'Read DMM') to check the wiring and polarity against
 whatever quick tune holds; and the settle page hands its recommended
@@ -34,7 +39,7 @@ wait to the linearity page, as the bench tool's did.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.calibration,
 cls_acquisition.hardware_calibration, cls_acquisition.hardware.mcc_dac,
-gui.plots, gui.shared_widgets, gui.theme.
+cls_acquisition.scan_table, gui.plots, gui.shared_widgets, gui.theme.
 """
 
 import html
@@ -49,6 +54,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHB
                                QVBoxLayout, QWidget)
 
 from cls_acquisition import hardware_calibration as hc
+from cls_acquisition import scan_table
 from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
@@ -817,6 +823,104 @@ class Cooler_Panel(_Panel):
         super().Show_Result(result, paths, sections)
 
 
+class Table_Panel(QWidget):
+    """The bench table: the one in force, what it says of the converters
+    and of the 0 V level, and its shape about a straight line."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.Residual_Plot = plots.Plot('Bench table less its straight line', ('Setpoint', 'V'),
+                                        ('Table − straight line', 'V'), (
+            "The platform voltage each DAC code gives, as the active bench table measured it, "
+            "less a straight line through each branch: the converters' non-linearity, which "
+            "a run's straight-line calibration cannot describe. Positive and negative branches "
+            "in different colours.",
+            "Each code's readings, less the 0 V level interpolated between the sweep's 0 V "
+            "checks, averaged; a straight line in the setpoint fitted through each branch "
+            "and taken out."))
+        self.Group = QGroupBox('Bench table')
+        self.Group.setMinimumWidth(REPORT_WIDTH)
+        column = QVBoxLayout(self.Group)
+        self.Make_Button = QPushButton(theme.Icon('file-down'), 'Make from a linearity record...')
+        self.Make_Button.setToolTip("Make a table from a linearity sweep's record (with its 0 V "
+                                    "checks), keep it in the library and offer it for use.")
+        self.Load_Button = QPushButton(theme.Icon('folder-open'), 'Use a table...')
+        self.Load_Button.setToolTip("Make a table from the library, or one from anywhere, the "
+                                    "one runs are fitted to.")
+        self.Compare_Button = QPushButton('Compare with...', enabled=False)
+        self.Compare_Button.setToolTip("Set another table against the one in force, code by "
+                                       "code, their 0 V levels aligned: whether the converters "
+                                       "have changed.")
+        self.Clear_Button = QPushButton('Use none', enabled=False)
+        for button in (self.Make_Button, self.Load_Button, self.Compare_Button,
+                       self.Clear_Button):
+            column.addWidget(button)
+        self.Report_Label = Report_Label('No bench table in use.')
+        column.addWidget(self.Report_Label)
+        column.addStretch(1)
+        self._Sections = []
+        controls = QVBoxLayout()
+        controls.addWidget(self.Group, 1)
+        layout = QHBoxLayout(self)
+        layout.addWidget(Scroll_Column(controls))
+        layout.addWidget(self.Residual_Plot, 1)
+
+    def Show(self, table, path=None, mismatch=''):
+        """``table`` as the one in force (None: none), from its library file
+        ``path``, with why it may not describe this rack."""
+        self.Residual_Plot.clear()
+        self.Compare_Button.setEnabled(table is not None)
+        self.Clear_Button.setEnabled(table is not None)
+        if table is None:
+            self._Sections = []
+            self.Report_Label.setText('No bench table in use: runs are not fitted to one.')
+            return
+        meta, analysis = table.Meta, scan_table.Analysis(table)
+        zero = meta.get('zero_v') or {}
+        span = meta.get('span_v') or [np.nan, np.nan]
+        sections = [(('WARN', 'In use') if mismatch else 'In use', [
+            ('ID', table.Id[:8]), ('Measured', meta.get('measured', '–')),
+            ('From', meta.get('source', '–')),
+            ('Span', f"{Figure(span[0], 'g')} to {Figure(span[1], 'g', 'V')}"),
+            *([mismatch] if mismatch else [])]),
+            ('Converters', [Report_Table(('Branch', 'Codes', 'Gain', 'RMS (V)', 'P–P (V)'), [
+                (name.capitalize(), b['Codes'], f"{b['Gain']:.6f}", f"{b['Rms_V']:.3f}",
+                 f"{b['Peak_To_Peak_V']:.3f}") for name, b in analysis['Branches'].items()]),
+                Muted("About a straight line through each branch: the non-linearity a run's "
+                      "straight-line calibration leaves.")])]
+        if zero:
+            sections.append((('WARN', '0 V level') if zero.get('warming') else '0 V level', [
+                ('From', Figure(zero['first'], '+.3f', 'V')),
+                ('To', Figure(zero['last'], '+.3f', 'V')),
+                ('Over', f"{zero['hours']:.1f} h"),
+                ('Last hour', Figure(zero['last_hour_v_per_h'], '+.3f', 'V/h')),
+                *([Muted("Still drifting as the sweep ended: the rack was warming up, so "
+                         "measure the table again once it has settled.")]
+                  if zero.get('warming') else [])]))
+        interval = analysis['Check_Interval_S']
+        if interval:
+            sections.append(('During runs', [('Check 0 V every', Duration_Text(interval)),
+                                             Muted(f"The 0 V level moves less than "
+                                                   f"{scan_table.DRIFT_TOLERANCE_V * 1e3:.0f} mV "
+                                                   f"over that time (its Allan deviation).")]))
+        if path:
+            sections.append(Saved_Section([path]))
+        self._Sections = sections
+        self.Report_Label.setText(Report_Html(sections))
+        for channel, (setpoint, residual) in analysis['Residuals'].items():
+            self.Residual_Plot.plot(setpoint, residual, **plots.Dots(BRANCH_COLOURS[channel]))
+
+    def Show_Comparison(self, other, compared):
+        """How far ``other`` departs from the table in force, by branch."""
+        rows = [Report_Table(('Branch', 'Codes', 'RMS (V)', 'Largest (V)'), [
+            (name.capitalize(), c['Codes'], f"{c['Rms_V']:.4f}", f"{c['Max_V']:.3f}")
+            for name, c in compared.items()])] if compared else [
+            "The two tables share no codes on either branch."]
+        rows.append(Muted(f"Table {other.Id[:8]} ({other.Meta.get('measured', '–')}) less the "
+                          f"one in force, code by code, each branch's mean taken out."))
+        self.Report_Label.setText(Report_Html([*self._Sections, ('Compared', rows)]))
+
+
 class Hardware_Tab(QWidget):
 
     def __init__(self, limit_v, parent=None):
@@ -846,9 +950,11 @@ class Hardware_Tab(QWidget):
         self.Settle = Settle_Panel(self.Ramp, limit_v)
         self.Linearity = Linearity_Panel(self.Ramp, limit_v)
         self.Cooler = Cooler_Panel()
+        self.Table = Table_Panel()
         self.Panels = (self.Settle, self.Linearity, self.Cooler)
         self.Pages = QTabWidget()
-        for page, name in zip(self.Panels, ('Settle time', 'Linearity', 'Cooler monitor')):
+        for page, name in zip((*self.Panels, self.Table),
+                              ('Settle time', 'Linearity', 'Cooler monitor', 'Scan table')):
             self.Pages.addTab(page, name)
         column = QVBoxLayout(self)
         column.addLayout(header)

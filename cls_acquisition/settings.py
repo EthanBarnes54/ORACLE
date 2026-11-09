@@ -1,7 +1,7 @@
 """ORACLE's settings: the rack, the facility services and the data folder.
 
 Date:    2026-11-09
-Version: 0.5.0
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 ``settings/settings.yaml`` holds what has been set; :data:`DEFAULTS`
@@ -123,6 +123,9 @@ DEFAULTS = {
     'settle_model': None,
     # the DAC correction a linearity sweep measured; empty means none (identity)
     'dac_correction': None,
+    # the ID of the bench table runs are fitted to, from the library under
+    # <data>/tables (Hardware Calibration, Scan table); empty means none
+    'scan_table': None,
 }
 
 
