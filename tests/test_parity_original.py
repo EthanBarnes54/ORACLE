@@ -129,7 +129,8 @@ def test_The_Facility_Names_Are_The_Old_Daqs(daq_tree):
     pvs = set(_Strings(daq_tree, 'caget')) | {
         call.args[0].value for call in ast.walk(daq_tree) if isinstance(call, ast.Call)
         and getattr(call.func, 'id', None) == 'caget'}
-    assert set(settings.DEFAULTS['pvs'].values()) == pvs
+    # the PMTs' high voltage is not on EPICS until named, and the old DAQ never read it
+    assert {name for name in settings.DEFAULTS['pvs'].values() if name} == pvs
     assert _Strings(daq_tree, 'open') == [settings.DEFAULTS['elog']['url']]
     # the ELOG entry is started as the old DAQ started it
     post = next(call for call in ast.walk(_Node(daq_tree, 'ResetElogMessage'))

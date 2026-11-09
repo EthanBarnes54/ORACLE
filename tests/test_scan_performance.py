@@ -256,10 +256,25 @@ def test_Arithmetic_Dust_On_A_Clean_Calibration_Never_Stands_Out(monkeypatch):
     assert sp._Suspects(cal_set, readback + dust) == zero
 
 
+def test_A_Run_Is_Read_With_The_Dividers_It_Recorded_Never_Todays():
+    header, raw, monitor = _Run(cooler=lambda t: COOLER_V + 0.5 * np.sin(t / 7.0))
+    assert sp.Dividers(header) == (1000.0, COOLER_DIVIDER)      # it recorded none
+    # the same run read through dividers half and twice as large, as it recorded them
+    other = dict(header, CoolerVoltage=header['CoolerVoltage'] / 2.0,
+                 CalReadback=header['CalReadback'] / 2.0)
+    other[ORACLE_KEY] = dict(header[ORACLE_KEY], Dividers={
+        'Scan': {'ratio': 2000.0}, 'Cooler': {'ratio': 2.0 * COOLER_DIVIDER}})
+    halved = raw.copy()
+    halved[:, 5] /= 2.0
+    assert sp.Dividers(other) == (2000.0, 2.0 * COOLER_DIVIDER)
+    one, two = sp.Analyse(header, raw, monitor, LASER), sp.Analyse(other, halved, monitor, LASER)
+    assert _Messages(one) == _Messages(two) and one['Budget'] == two['Budget']
+
+
 def test_A_Calibration_Is_Set_Against_The_Runs_Before_It():
     header, raw, monitor = _Run()
-    same = [(6, PLAN, PLAN / 1000.0)]
-    moved = [(6, PLAN, (PLAN + 2.0) / 1000.0), (5, PLAN, (PLAN + 2.1) / 1000.0)]
+    same = [(6, PLAN, PLAN / 1000.0, None)]
+    moved = [(6, PLAN, (PLAN + 2.0) / 1000.0, None), (5, PLAN, (PLAN + 2.1) / 1000.0, None)]
     agreed = _Check(sp.Analyse(header, raw, monitor, LASER, history=same),
                     'Calibration against earlier runs')
     assert agreed['Verdict'] == sp.PASS and 'run 6' in agreed['Message']

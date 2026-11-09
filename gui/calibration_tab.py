@@ -1,7 +1,7 @@
 """The Scan Calibration tab: a stand-alone calibration and the gate's verdict on it.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's layout: the parameters and the start button on the left,
@@ -14,6 +14,8 @@ A calibration runs on a worker thread, not the GUI thread, so the window
 stays live without pumping events from inside it (the old DAQ's
 processEvents loop let a click land mid-calibration); the main window
 keeps every control that could interfere disabled until it has finished.
+Readings are scaled to the platform by the scan divider's ratio, the
+settings' for a calibration taken here and the run's own for a run shown.
 
 Depends on: numpy, PySide6; cls_acquisition.calibration,
 cls_acquisition.scan_plan, gui.plots, gui.shared_widgets.
@@ -33,8 +35,9 @@ from gui.shared_widgets import REPORT_WIDTH, Form, Scroll_Column, Spin, Verdict_
 
 class Calibration_Tab(QWidget):
 
-    def __init__(self, limit_v, parent=None):
+    def __init__(self, limit_v, divider=calibration.DIVIDER, parent=None):
         super().__init__(parent)
+        self._Divider = divider
         self.Params_Group = QGroupBox('Calibration parameters')
         self.From_Box = Spin(0.0, -limit_v, limit_v)
         self.To_Box = Spin(min(3000.0, limit_v), -limit_v, limit_v)
@@ -60,17 +63,18 @@ class Calibration_Tab(QWidget):
             "The platform voltage measured at each step of the calibration, against the voltage "
             "commanded. A working high-voltage chain lies on a straight line of unit slope.",
             "Each setpoint is written to the DAC and, once the amplifier has settled, the line "
-            "meter reads the platform through its 1000:1 divider; a reading taken before the "
-            "step had settled is repeated. The run's calibration is the straight line fitted "
-            "to these points."))
+            "meter reads the platform through the scan divider (1000:1 unless the settings "
+            "say otherwise); a reading taken before the step had settled is repeated. The "
+            "run's calibration is the straight line fitted to these points."))
         self.Difference_Plot = plots.Plot('Readback deviation from setpoint', set_axis,
                                           ('Readback − setpoint', 'V'), (
             "Measured minus commanded voltage at each calibration step: the offset, gain error "
             "and non-linearity of the high-voltage chain.",
-            "The readback (line meter reading × 1000) less the setpoint. An offset or a "
-            "straight-line trend is absorbed by the linear calibration; curvature and periodic "
-            "structure (the DAC's integral non-linearity, and its rounding to codes 0.305 V "
-            "apart) remain in the voltage axis unless a DAC correction is in force."))
+            "The readback (line meter reading × the divider's ratio) less the setpoint. An "
+            "offset or a straight-line trend is absorbed by the linear calibration; curvature "
+            "and periodic structure (the DAC's integral non-linearity, and its rounding to "
+            "codes 0.305 V apart) remain in the voltage axis unless a DAC correction is in "
+            "force."))
         self.Step_Plot = plots.Plot('Measured voltage step', set_axis, ('Readback step', 'V'), (
             "The change in readback from one calibration step to the next, which should equal "
             "the commanded step size.",
@@ -104,7 +108,7 @@ class Calibration_Tab(QWidget):
         """``(index, commanded V, reading at the meter)`` of one kept point."""
         _, volts, reading = point
         self._Set.append(volts)
-        self._Readback.append(reading * calibration.DIVIDER)
+        self._Readback.append(reading * self._Divider)
         self._Draw()
 
     def _Draw(self):
@@ -125,14 +129,15 @@ class Calibration_Tab(QWidget):
     def Inputs(self):
         return [('from', self.From_Box), ('to', self.To_Box), ('step', self.Step_Box)]
 
-    def Show_Run(self, name, commanded, readings, report=None):
+    def Show_Run(self, name, commanded, readings, report=None, divider=calibration.DIVIDER):
         """A run file's own calibration: the voltages commanded and the meter's
-        readings, as written, with the gate's ``report`` on them as it was
-        given when the run was taken, from ORACLE's record of it. A run with
-        no record gets its line and where its branches meet 0 V; the gate is
-        not run again, since a file keeps no stamps."""
+        readings, as written, scaled by the run's own ``divider``, with the
+        gate's ``report`` on them as it was given when the run was taken,
+        from ORACLE's record of it. A run with no record gets its line and
+        where its branches meet 0 V; the gate is not run again, since a file
+        keeps no stamps."""
         commanded = np.asarray(commanded, dtype=float)
-        readback = np.asarray(readings, dtype=float) * calibration.DIVIDER
+        readback = np.asarray(readings, dtype=float) * divider
         if len(commanded) != len(readback) or len(commanded) < 2:
             self._Set, self._Readback = [], []
             self._Draw()

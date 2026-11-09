@@ -4,7 +4,7 @@
 
 The data acquisition for collinear laser spectroscopy (CLS) at IGISOL: it steps the platform voltage through a scan, records every ion the time tagger sees against the voltage it was taken at, and calibrates the voltage axis before every run. ORACLE keeps the collinear DAQ's layout and functions, brings in the bench calibration tool, and is built so that the faults found in that DAQ cannot happen rather than being caught afterwards.
 
-**Version:** 0.4.2
+**Version:** 0.5.0
 **Developer:** Ethan Barnes (ethan.barnes@postgrad.manchester.ac.uk)
 **Framework:** PySide6 (Qt6) + pyqtgraph + numpy + asdf
 
@@ -40,6 +40,7 @@ The window is the collinear DAQ's, with the bench calibration tool's measurement
 
 ### Scan controls
 - Up to seven voltage ranges, a step size, and Sawtooth, Triangle or Single scans; bunches per channel (bunched) or seconds per channel (DC)
+- **Interaction region** (CEC or LCR) and **PMT HV**, as the operator gives them, recorded with each run: the cooler offset differs between regions, and these say which runs share one
 - Buncher timing: dwell, bunch release, the tagger's trigger delay and its acquisition gate (held inside the tagger's 8.39 ms timestamp range). A timing that does not fit its cycle is refused with a sentence before anything starts: a release past the end of the cycle (the buncher would never fire), a trigger delay past it (the cycle would silently run long) or a gate still open when the next trigger comes. In DC mode the gate stays settable, since DC hits come through the tagger too (the 1 ms DC cycle at its 0 to 200 µs default gate acquires a fifth of the time)
 - **Start scan** calibrates the scan's own setpoints, puts the calibration through the gate, and only then writes the run file and starts the scan. **Stop after scan** finishes the round; **Stop now!** ends it within a bunch
 - **Scan queue**, the second page of the Scan parameters box (titled as DENIS's optimiser tools are): scans laid out ahead, one per row and one run file each, with their ranges (`20:55, 60:80`), step, bunches (seconds in DC mode), order (Sawtooth or Triangle) and number of scans; the buncher timing, experiment and view are the parameters page's, held for the whole queue. Every row is checked as it is typed, as a scan is when it starts, and the readout gives each one's setpoints and time, or its fault, and when the whole queue would end. **Add current** adds the scan parameters as they stand, **Show** puts a row back on them, rows paste from a spreadsheet, and Delete clears cells. **Automatic** starts each scan as the last ends, so a queue can run overnight unattended; **Manual** asks before each after the first, saying what comes next. Each scan takes exactly its number of scans, ending itself, and its run's record notes its place in the queue. Anything but a clean end (a calibration refused or failed, a file not written, a scan stopped by hand, the acquisition process gone) stops the queue and leaves the platform at rest, its row saying why: an unattended queue never runs on past a fault. **Stop queue after this scan** lets the running scan finish. The rows and their states survive a crash, and a queue started again takes up at the first scan not done
@@ -158,10 +159,11 @@ Beside it, `settings/inputs.yaml` is ORACLE's memory of every input in the windo
 | `data_directory` | *(empty: `<app>/data`)* | where run files go on the rack. A simulated rack always writes to `<app>/data/simulated` |
 | `experiment` | | the experiment name, saved as it is edited |
 | `elog` | disabled | `enabled`, `url`, `author` (empty: the login name). Never posts from a simulated rack |
-| `pvs` | the wavemeter and mass PVs | EPICS names of the wavenumber, mass and mass setpoint |
+| `pvs` | the wavemeter and mass PVs | EPICS names of the wavenumber, mass and mass setpoint, and of each tagger input's PMT high voltage (`pmt_hv_1` to `pmt_hv_4`; empty: not on EPICS, and the Scan tab's PMT HV box is recorded instead) |
+| `hardware` | ratios 1000 and 10000 | what the rack cannot say of itself, recorded with every run and bench record. `scan_divider`, `cooler_divider`: `model`, `serial`, `ratio` (platform volts per meter volt, which scales every readback) and `ppm` (the ratio's stated accuracy). `amplifier`: `model`, `serial` |
 | `instruments` | the rack's | VISA resources of the line and cooler meters, the MCC board (`dac_board`, which must be the USB-231), the tagger driver's folder (`tagger_driver`), the tagger thresholds, and `hv_limit_v` (4000: the Trek 609E-6's rating, and the most it may be set to), the most any scan, quick tune or hardware calibration may ask of the platform. A plan beyond it is refused before its first write |
 | `instruments: settle_gate_bit` | *(empty: not wired)* | the MCC digital line (AUXPORT bit) gating the tagger's window through an AND unit on PulseBlaster channel 18 |
-| `dac_correction` | *(empty: identity)* | the DAC correction a linearity sweep measured, written by **Use as DAC correction**: each branch's polynomial, and its non-linearity table where measured. A setpoint outside the range the table was measured over is refused, never extrapolated |
+| `dac_correction` | *(empty: identity)* | the DAC correction a linearity sweep measured, written by **Use as DAC correction**: each branch's polynomial, and its non-linearity table where measured. A setpoint outside the range the table was measured over is refused, never extrapolated. Production runs write uncorrected, since the bench table is applied after collection: a calibration with a correction in force is warned of, lest it be applied twice |
 | `settle_model` | *(empty: SETTLE for every step)* | the scan's settling against jump size, written by **Use as scan settle model** on the Settle time page; each step waits 1.25 times it |
 | `cooler_pv` | disabled | `enabled`, `prefix` (`FURIOS:Cooler:`): publish the cooler's voltage as EPICS PVs. Needs pcaspy, which has no Windows wheel for Python 3.13 yet; never from a simulated rack |
 | `laser` | harmonic 4, anti-collinear, charge 1 | how the laser meets the ions, as DENIS takes it: Scan Performance puts the laser into scan volts with it |
@@ -172,7 +174,36 @@ Beside it, `settings/inputs.yaml` is ORACLE's memory of every input in the windo
 
 Run files are written exactly as the collinear DAQ wrote them, so cls_tools and DENIS read them unchanged: `<data>/<year>/<month>/<day>/run_NNNN.asdf`, ASDF standard 1.5.0, the same sixteen header keys (`CalSet` and `CalReadback` are the calibration; `DacCorrectionApplied` and `DacCorrection` say which DAC correction was in force), and the events streamed after the header as rows of `timestamp, voltage, bunch_number, channel, time, cooler`. The header's keys are checked when it is written, so the format cannot drift. The cooler is kept as its meter reads it (×10000 for the platform), as the collinear DAQ kept it.
 
-One key more, `ORACLE`, holds ORACLE's own record of the run, which readers that look keys up by name pass over: its scan type, the trigger timing sent to the rack (`bunched`, `rep_rate_hz`, `release_us`, `tagger_delay_us`, `gate_start_us`, `gate_stop_us`), the plots' view, the calibration gate's verdict and checks, the settle model in force, and ORACLE's version and rack. It is written with the header, before the first event, from settings held for the whole scan, and is what File ▸ Open run restores the window from.
+One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look keys up by name pass over it. It is written with the header, before the first event, from settings held for the whole scan, and File ▸ Open run restores the window from it.
+
+**How the run was taken**
+
+| Key | Contents |
+|---|---|
+| `Version`, `Commit` | ORACLE's version; the git commit it ran from and whether its files differed from it (`Hash`, `Dirty`), empty outside a checkout |
+| `ScanType`, `Rounds`, `Queue` | Sawtooth, Triangle or Single scan; the number of scans asked for; its place in the scan queue |
+| `Timing` | the trigger timing sent to the rack: `bunched`, `rep_rate_hz`, `release_us`, `tagger_delay_us`, `gate_start_us`, `gate_stop_us` |
+| `View` | the plots' TOF bin, gate, channels and map, held for the whole scan |
+| `Calibration` | the gate's verdict, each check's verdict and message, and the numbers it decided on |
+| `SettleModel`, `Laser`, `Channels` | the settle model in force; the laser's harmonic, geometry and charge; the wired tagger inputs |
+
+**What the rack was and what it held**
+
+| Key | Contents |
+|---|---|
+| `Rack` | `simulated` or `hardware` |
+| `RackIdentity` | both meters' `*IDN?`; the DAC board's name and unique ID; the tagger's wrapper version; the amplifier's model, serial, gain and wiring |
+| `Dividers` | the scan and cooler dividers as set: `model`, `serial`, `ratio`, `ppm`. Readers scale by these, never by today's settings |
+| `DacCodes` | the converter (`Channel`) and `Code` each setpoint was written as, in the order of `CalSet`, so the voltage the DAC held is exact |
+| `DacCorrectionFull` | the DAC correction in force, in full; the header's `DacCorrection` is its summary |
+| `TaggerLevels` | each input's threshold in volts (negative for a falling edge) and the trigger's |
+
+**What the operator gave**
+
+| Key | Contents |
+|---|---|
+| `InteractionRegion` | `CEC` or `LCR`; empty if not stated |
+| `PmtHv` | the PMTs' high voltage: `Pvs`, read from EPICS where their names are set, and `Entered`, as typed on the Scan tab |
 
 `bunch_number` is the loop's count of bunches taken in the scan, from 0, exactly `BunchesPerChannel` a step: what DENIS assumes when it numbers scans (`bunch // bunches per scan`), now true by construction even when steps pause to settle. The tagger's own count is checked against it live, and a missed trigger is counted.
 

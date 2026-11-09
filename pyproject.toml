@@ -1,6 +1,6 @@
 [project]
 name = "oracle"
-version = "0.4.2"
+version = "0.5.0"
 description = "Online Readout & Acquisition for Collinear Laser spectroscopy Experiments"
 readme = "README.md"
 requires-python = ">=3.11"

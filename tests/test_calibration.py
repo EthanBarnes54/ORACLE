@@ -336,6 +336,23 @@ def test_Gate_Refuses_A_Dead_Readback(plan):
     assert report['Verdict'] == REJECT and _Verdict(report, 'tracking') == REJECT
 
 
+def test_The_Gate_Scales_The_Readings_By_The_Divider_They_Were_Read_Through(plan):
+    # readings through a 1:1250 divider: scaled by the bench's 1000 they span a fifth
+    # less than commanded, and only the divider they were read through puts them back
+    steps = [{'Index': i, 'Volts': v, 'T_Command_Ns': 0} for i, v in enumerate(plan.Setpoints)]
+    readings = plan.Setpoints / 1250.0
+
+    def calibration(divider):
+        return Calibration(steps, readings, np.full(len(steps), SETTLE_NS + 1),
+                           np.full(len(steps), SETTLE_NS), 0,
+                           {'Dac_Status': ('PASS', ''), 'Dac_Correction': (0, 'none')},
+                           np.full(HELD, readings[-1]), divider)
+
+    assert _Verdict(Quality_Report(calibration(DIVIDER), plan), 'span') == REJECT
+    report = Quality_Report(calibration(1250.0), plan)
+    assert report['Verdict'] != REJECT and report['FitGradient'] == pytest.approx(1.0)
+
+
 def test_Gate_Refuses_Half_The_Span(plan):
     report = Quality_Report(_Cal(plan, 0.5 * plan.Setpoints), plan)
     assert _Verdict(report, 'span') == REJECT

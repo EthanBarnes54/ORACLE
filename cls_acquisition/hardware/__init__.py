@@ -1,7 +1,7 @@
 """The rack: the instruments ORACLE drives, real or simulated.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The acquisition process owns the DAC, the PulseBlaster and the tagger
@@ -9,8 +9,15 @@ The acquisition process owns the DAC, the PulseBlaster and the tagger
 (:meth:`Rack.Open_Meters`), since calibration times the line meter's
 readings on the GUI's side. The drivers import their vendor libraries
 only when the hardware rack is opened, so a simulated rack needs none.
-A platform limit set above the amplifier's rating is refused before
-anything opens.
+A platform limit set above the amplifier's rating, or a divider ratio
+that is not a positive number, is refused before anything opens.
+
+:meth:`Rack.Identity` is the rack as it names itself (the meters'
+*IDN?, the DAC board's unique ID, the tagger's wrapper) and as the
+settings name the amplifier, which cannot; :meth:`Rack.Dividers` are
+the dividers as the settings give them, ratios and all. Both are
+recorded with every run and bench record: which runs a hardware change
+touched is often learned only later.
 
 Depends on: .keysight, .mcc_dac, .pulseblaster, .simulated, .timetagger,
 .visa_session.
@@ -30,6 +37,15 @@ class Rack():
             raise ValueError(f"The settings put the platform's limit at {limit:g} V; it must be "
                              f"above 0 and at most the Trek 609E-6's rating of "
                              f"{mcc_dac.LIMIT_V:.0f} V (instruments: hv_limit_v).")
+        self._Hardware = settings['hardware']
+        for key in ('scan_divider', 'cooler_divider'):
+            ratio = self._Hardware[key]['ratio']
+            if not (isinstance(ratio, (int, float)) and ratio > 0):
+                raise ValueError(f"The settings give the {key.replace('_', ' ')} a ratio of "
+                                 f"{ratio!r}; it must be a positive number of platform volts "
+                                 f"per volt at its meter (hardware: {key}: ratio).")
+        self.Scan_Divider = float(self._Hardware['scan_divider']['ratio'])
+        self.Cooler_Divider = float(self._Hardware['cooler_divider']['ratio'])
         self._Correction = settings['dac_correction'] or mcc_dac.CORRECTION
         self._Platform = simulated.Platform(context) if self.Simulated else None
 
@@ -42,10 +58,11 @@ class Rack():
     def Open_Meters(self):
         """``(line meter, cooler meter)``."""
         if self.Simulated:
-            line = lambda _: simulated.Keysight(simulated.Line_Meter_Source(self._Platform),
-                                                simulated.LINE_NOISE_V)
-            cooler = lambda _: simulated.Keysight(simulated.Cooler_Meter_Source(),
-                                                  simulated.COOLER_NOISE_V)
+            line = lambda _: simulated.Keysight(
+                simulated.Line_Meter_Source(self._Platform, self.Scan_Divider),
+                simulated.LINE_NOISE_V)
+            cooler = lambda _: simulated.Keysight(
+                simulated.Cooler_Meter_Source(self.Cooler_Divider), simulated.COOLER_NOISE_V)
         else:
             line = cooler = Pyvisa_Connect
         line_meter = keysight.Line_Meter(Visa_Session.Open(self._Instruments['line_meter'], line))
@@ -57,6 +74,21 @@ class Rack():
             raise
         return line_meter, cooler_meter
 
+    def Dividers(self):
+        """Both dividers as the settings give them, for a record."""
+        return {'Scan': dict(self._Hardware['scan_divider']),
+                'Cooler': dict(self._Hardware['cooler_divider'])}
+
+    def Identity(self, loop, line_meter, cooler_meter):
+        """The rack, for a record: ``loop`` is the acquisition process's
+        'Identity' reply (None if it gave none), the meters as opened."""
+        loop = loop or {}
+        return {'Kind': 'simulated' if self.Simulated else 'hardware',
+                'LineMeter': line_meter.Idn, 'CoolerMeter': cooler_meter.Idn,
+                'Dac': loop.get('Dac'), 'Tagger': loop.get('Tagger'),
+                'Amplifier': {**self._Hardware['amplifier'], 'Gain': mcc_dac.AMPLIFIER_GAIN,
+                              'Wiring': mcc_dac.WIRING}}
+
 
 def Open_Loop_Devices(spec):
     """``(dac, pulse generator, tagger, window gate)``, in the acquisition process."""
@@ -64,7 +96,8 @@ def Open_Loop_Devices(spec):
     dac_args = spec['correction'], instruments['hv_limit_v']
     if spec['simulated']:
         tagger = simulated.Tagger(spec['platform'])
-        dac = mcc_dac.Dac(simulated.Converters(spec['platform']).V_Out, *dac_args)
+        dac = mcc_dac.Dac(simulated.Converters(spec['platform']).V_Out, *dac_args,
+                          {'Board': f"simulated {mcc_dac.BOARD_NAME}", 'UniqueId': None})
         return dac, simulated.Pulse_Generator(tagger), tagger, simulated.Window_Gate(tagger)
     bit = instruments['settle_gate_bit']
     gate = (mcc_dac.No_Gate() if bit is None

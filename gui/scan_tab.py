@@ -1,7 +1,7 @@
 """The Scan tab: scan and buncher parameters, run control, the ELOG panel and the live plots.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's layout, control for control: parameters, buncher controls,
@@ -26,6 +26,12 @@ for the whole scan. ``Show_Settings`` sets every control as a run file
 says it was taken; ``Inputs`` names every input, for the window's memory
 of them.
 
+What the rack cannot say of a run, the operator does: where the laser
+meets the beam (the interaction region, CEC or LCR) and the PMTs' high
+voltage, recorded with each run (``Setup``). The cooler offset differs
+between the regions (Bi in the CEC, Yb+ in the LCR, November 2026), so
+which runs share one is learned from these.
+
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
 cls_acquisition.hardware.timetagger, cls_acquisition.run_file,
 cls_acquisition.scan_plan, cls_acquisition.triggers, gui.plots,
@@ -49,6 +55,7 @@ from gui.scan_queue import ORDERS, Scan_Queue
 from gui.shared_widgets import Scroll_Column, Spin
 
 RANGES = 7
+REGIONS = ('Not stated', 'CEC', 'LCR')    # where the laser meets the beam
 CHANNELS = (1, 2, 3, 4)
 DC_TRIGGER_HZ = 1e9 / triggers.DC_PERIOD_NS
 MAX_TOF_BINS = 50000                # across the gate; the old DAQ's cap
@@ -108,21 +115,30 @@ class Scan_Tab(QWidget):
         self.Per_Step_Box = Spin(1.0, 0.01, 9999999.0)
         self.Step_Box = Spin(1.0, 0.01, 10000.0)
         self.Experiment_Edit = QLineEdit()
-        for row, (text, widget) in enumerate((('Scan type', self.Type_Combo),
-                                              (None, self.Per_Step_Box),
-                                              ('Stepsize (V)', self.Step_Box),
-                                              ('Experiment name', self.Experiment_Edit))):
+        self.Region_Combo = QComboBox()
+        self.Region_Combo.addItems(REGIONS)
+        self.Region_Combo.setToolTip("Where the laser meets the beam: the charge-exchange cell "
+                                     "(CEC, atoms) or the light collection region (LCR, ions). "
+                                     "Recorded with every run.")
+        self.Pmt_Hv_Edit = QLineEdit(placeholderText='e.g. 1: 1850, 2: 1900 V')
+        self.Pmt_Hv_Edit.setToolTip("The PMTs' high voltage as set, recorded with every run "
+                                    "where it is not read from EPICS.")
+        rows = (('Scan type', self.Type_Combo), (None, self.Per_Step_Box),
+                ('Stepsize (V)', self.Step_Box), ('Experiment name', self.Experiment_Edit),
+                ('Interaction region', self.Region_Combo), ('PMT HV', self.Pmt_Hv_Edit))
+        for row, (text, widget) in enumerate(rows):
             grid.addWidget(QLabel(text) if text else self.Per_Step_Label, row, 1)
             grid.addWidget(widget, row, 2)
-        grid.addWidget(QLabel('From (V)'), 5, 1)
-        grid.addWidget(QLabel('To (V)'), 5, 2)
+        top = len(rows) + 1
+        grid.addWidget(QLabel('From (V)'), top, 1)
+        grid.addWidget(QLabel('To (V)'), top, 2)
         self.Range_Checks, self.From_Boxes, self.To_Boxes = [], [], []
         for i in range(RANGES):
             check = QCheckBox(checked=i == 0)
             low = Spin(0.0, -self._Limit_V, self._Limit_V)
             high = Spin(100.0, -self._Limit_V, self._Limit_V)
             for column, widget in enumerate((check, low, high)):
-                grid.addWidget(widget, 6 + i, column)
+                grid.addWidget(widget, top + 1 + i, column)
             self.Range_Checks.append(check)
             self.From_Boxes.append(low)
             self.To_Boxes.append(high)
@@ -323,6 +339,14 @@ class Scan_Tab(QWidget):
     def Channels(self):
         return [c for c, check in zip(CHANNELS, self.Channel_Checks) if check.isChecked()]
 
+    def Setup(self):
+        """What the operator says of the run's setup, for its record: the
+        interaction region and the PMTs' high voltage as entered, each None
+        if not given."""
+        region = self.Region_Combo.currentText()
+        return {'InteractionRegion': None if region == REGIONS[0] else region,
+                'PmtHv': self.Pmt_Hv_Edit.text().strip() or None}
+
     def View(self):
         """How the plots show a run, for its record."""
         gate = self.Tof_Plot.Gate()
@@ -364,6 +388,10 @@ class Scan_Tab(QWidget):
              'its bunches per step', unshown)
         _Put(self.Dwell_Box, int(header['DwellTime']), 'its dwell', unshown)
         self.Experiment_Edit.setText(str(header.get('Experiment') or ''))
+        if 'InteractionRegion' in record:
+            self.Region_Combo.setCurrentText(record['InteractionRegion'] or REGIONS[0])
+        if 'PmtHv' in record:
+            self.Pmt_Hv_Edit.setText((record['PmtHv'] or {}).get('Entered') or '')
         if timing is None:
             unshown.append("its scan type, mode, trigger timing and view, which ORACLE did not "
                            "yet record")
@@ -391,7 +419,8 @@ class Scan_Tab(QWidget):
             self.Range_Checks, self.From_Boxes, self.To_Boxes))
             for part, widget in zip(('on', 'from', 'to'), row)]
         return [('scan_type', self.Type_Combo), ('mode', (self.Dc_Radio, self.Bunched_Radio)),
-                ('per_step', self.Per_Step_Box), ('step', self.Step_Box), *ranges,
+                ('per_step', self.Per_Step_Box), ('step', self.Step_Box),
+                ('region', self.Region_Combo), ('pmt_hv', self.Pmt_Hv_Edit), *ranges,
                 ('dwell', self.Dwell_Box), ('release', self.Release_Box),
                 ('tagger_delay', self.Tagger_Delay_Box), ('gate_start', self.Gate_Start_Box),
                 ('gate_length', self.Gate_Length_Box), ('tof_bin', self.Bin_Box),

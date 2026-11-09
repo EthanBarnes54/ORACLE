@@ -1,7 +1,7 @@
 """The two Keysight 34465A meters: the line meter on the HV divider, and the cooler's.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Both are polled on their owner thread for the display, and both are a
@@ -61,7 +61,9 @@ LINE_CONFIG = ("CONF:VOLT:DC 10,0.00003", "VOLT:APER:ENAB ON", "VOLT:DC:APER 200
 COOLER_CONFIG = ("CONF:VOLT:DC 10,0.00003", "VOLT:APER:ENAB ON", "VOLT:DC:APER 500E-06",
                  "VOLT:IMP:AUTO ON", "SAMP:COUN 1")
 RANGE_V = 10.0                      # both meters' fixed range; they read to 120 % of it
-COOLER_DIVIDER = 10000.0            # cooler platform volts per volt at its meter
+# cooler platform volts per volt at its meter, unless the settings say otherwise
+# (hardware: cooler_divider), and for every run that does not record its own
+COOLER_DIVIDER = 10000.0
 MODELS = ('3446', '3447')           # the Truevolt meters these commands are written for
 
 POLL_PERIOD_S = 0.05

@@ -94,6 +94,60 @@ def test_The_Coolers_Pvs_Come_From_The_Poll_And_Mark_A_Lost_Reading(monkeypatch)
     assert Driver.Status == {'Readback': 3, 'InstantValue': 3}     # invalid, not a stale value
 
 
+def test_The_Commit_Ran_From_Is_Named_And_Nothing_Is_Asked_Of_A_Pc_Without_Git(monkeypatch):
+    if not os.path.isdir(os.path.join(settings.CODE_ROOT, '.git')):
+        pytest.skip("ORACLE is not running from a git checkout here")
+    commit = settings.Commit()
+    assert len(commit['Hash']) == 40 and isinstance(commit['Dirty'], bool)
+
+    def no_git(*_, **__):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr(settings.subprocess, 'run', no_git)
+    assert settings.Commit() is None
+
+
+def test_On_Windows_Git_Runs_Without_A_Console_Window(monkeypatch):
+    """The Windows branch, run here on a stand-in: a window's git call would
+    otherwise flash a console up on the rack PC."""
+    flags = []
+
+    def run(args, **kwargs):
+        flags.append(kwargs.get('creationflags'))
+        return types.SimpleNamespace(stdout='abc\n')
+
+    monkeypatch.setattr(sys, 'platform', 'win32')
+    monkeypatch.setattr(settings.subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
+    monkeypatch.setattr(settings.subprocess, 'run', run)
+    assert settings.Commit() == {'Hash': 'abc', 'Dirty': True}
+    assert flags == [0x08000000, 0x08000000]
+
+
+def test_The_Dividers_Default_To_The_Bench_And_A_Ratio_That_Is_No_Number_Is_Refused():
+    from cls_acquisition.calibration import DIVIDER
+    from cls_acquisition.hardware.keysight import COOLER_DIVIDER
+    rack = Rack(settings.DEFAULTS, multiprocessing.get_context('spawn'))
+    assert (rack.Scan_Divider, rack.Cooler_Divider) == (DIVIDER, COOLER_DIVIDER)
+    assert rack.Dividers()['Scan'] == settings.DEFAULTS['hardware']['scan_divider']
+    for ratio in (0.0, -1000.0, '1000', None):
+        config = settings._Merged(settings.DEFAULTS,
+                                  {'hardware': {'cooler_divider': {'ratio': ratio}}})
+        with pytest.raises(ValueError, match="cooler divider a ratio"):
+            Rack(config, multiprocessing.get_context('spawn'))
+
+
+def test_Pvs_With_No_Name_Are_Not_Asked_Of_Epics(monkeypatch):
+    made = []
+    epics = types.ModuleType('epics')
+    epics.PV = lambda name, **_: made.append(name) or types.SimpleNamespace(
+        disconnect=lambda: None)
+    monkeypatch.setitem(sys.modules, 'epics', epics)
+    pvs = facility.Pv_Monitors(settings.DEFAULTS['pvs'], simulated=False)
+    assert made == ['FURIOS:Wavemeter2:Wavenumber1', 'IGISOL:MagnetControl:Mass',
+                    'IGISOL:MagnetControl:Target']
+    assert pvs.Value('pmt_hv_1') is None
+
+
 def test_A_Limit_Above_The_Amplifiers_Rating_Is_Refused():
     config = settings._Merged(settings.DEFAULTS, {'instruments': {'hv_limit_v': 6000.0}})
     with pytest.raises(ValueError, match="rating of 4000 V"):

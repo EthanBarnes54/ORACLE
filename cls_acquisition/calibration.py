@@ -1,7 +1,7 @@
 """Step-and-confirm calibration, and the gate every calibration must pass.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Calibration pairs each commanded platform voltage with what the line
@@ -81,7 +81,9 @@ THRESHOLDS = {
     'MaxHeldScatterV': 0.5,
 }
 
-DIVIDER = 1000.0                    # platform volts per volt at the line meter
+# platform volts per volt at the line meter, unless the settings say otherwise
+# (hardware: scan_divider), and for every run that does not record its own
+DIVIDER = 1000.0
 SETTLE_MARGIN = 1.25                # on measured settling, for what one test cannot see
 
 PASS, WARN, REJECT = 'PASS', 'WARN', 'REJECT'
@@ -95,14 +97,20 @@ class Calibration_Error(RuntimeError):
 
 class Calibration():
     """One reading per planned setpoint, in plan order: the step records the
-    acquisition process confirmed, the meter's readings (volts at the meter),
-    how long after its write each reading was taken and how long its jump
-    needed to settle, how many setpoints had to be read again, and the last
-    setpoint's readings held."""
+    acquisition process confirmed, with the converter and code each was
+    written as (-1 where a step does not say), the meter's readings (volts
+    at the meter) and the divider that scales them to the platform, how
+    long after its write each reading was taken and how long its jump
+    needed to settle, how many setpoints had to be read again, the last
+    setpoint's readings held, and the DAC correction in force."""
 
-    def __init__(self, steps, readings, stamps_ns, settle_ns, retried, dac, held):
+    def __init__(self, steps, readings, stamps_ns, settle_ns, retried, dac, held,
+                 divider=DIVIDER):
         self.Indices = np.array([s['Index'] for s in steps], dtype=int)
         self.Commanded = np.array([s['Volts'] for s in steps], dtype=float)
+        self.Channels = np.array([s.get('Channel', -1) for s in steps], dtype=int)
+        self.Codes = np.array([s.get('Code', -1) for s in steps], dtype=int)
+        self.Divider = float(divider)
         self.Readings = np.array(readings, dtype=float)
         self.Gaps_Ns = (np.array(stamps_ns, dtype=np.int64)
                         - np.array([s['T_Command_Ns'] for s in steps], dtype=np.int64))
@@ -111,6 +119,7 @@ class Calibration():
         self.Held = np.array(held, dtype=float)
         self.Dac_Status = dac['Dac_Status']
         self.Dac_Correction = dac['Dac_Correction']
+        self.Correction = dac.get('Correction')
 
 
 def Settle_For(model, jump_v):
@@ -162,13 +171,14 @@ def Calibrating(link, meter, setup, setpoints, stop=None):
     meter.Release()
 
 
-def Run_Calibration(link, meter, plan, progress=None, settle_model=None):
+def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider=DIVIDER):
     """Calibrate ``plan`` by step and confirm; returns a :class:`Calibration`.
 
     ``link`` is the acquisition process, which alone drives the DAC;
-    ``meter`` is the line meter; ``progress(index, volts, reading)`` is
-    called after each kept point. Every exit leaves the meter on its live
-    poll and the acquisition process out of calibration. A point waits
+    ``meter`` is the line meter, on a divider of ``divider`` platform volts
+    per volt; ``progress(index, volts, reading)`` is called after each
+    kept point. Every exit leaves the meter on its live poll and the
+    acquisition process out of calibration. A point waits
     SETTLE, or as long as ``settle_model`` says its jump takes if that is
     longer: the first, from where the platform stood, and the first of a
     range after a gap usually are.
@@ -238,7 +248,7 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None):
         # the DAC still holds the last setpoint, and the loop leaves it there
         held = [meter.Read_Settled(THRESHOLDS['HeldWaitS'] if i == 0 else 0.0)[1]
                 for i in range(THRESHOLDS['HeldReadings'])]
-    return Calibration(steps, readings, stamps, needs_ns, retried, dac, held)
+    return Calibration(steps, readings, stamps, needs_ns, retried, dac, held, divider)
 
 
 def Line_Fit(x, y):
@@ -268,7 +278,7 @@ def Step_At_Zero(commanded, readback):
 def Quality_Report(cal, plan):
     """Each check's verdict and message, and the run's verdict: the worst."""
     commanded = cal.Commanded
-    readback = cal.Readings * DIVIDER
+    readback = cal.Readings * cal.Divider
     checks = []
 
     if len(readback) != len(plan) or len(plan) < 3:
@@ -328,7 +338,7 @@ def Quality_Report(cal, plan):
                                        f"its write"))
 
     # the last reading against the same setpoint read held: a lag of k sets it k steps off
-    held = cal.Held * DIVIDER
+    held = cal.Held * cal.Divider
     scatter = float(np.std(held, ddof=1))
     apart = float(readback[-1] - np.mean(held))
     allowed = max(THRESHOLDS['MaxHeldSteps'] * plan.Step,

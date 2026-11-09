@@ -1,7 +1,7 @@
 """The cronologic TimeTagger4, through the rack's compiled wrapper (timetagger4).
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 A read hands over every trigger the card has ready, several if the
@@ -26,7 +26,9 @@ nothing but empty triggers is taken for one. ORACLE keeps every window
 inside the timestamp range, and says at start-up what the old wrapper
 gets wrong; the corrected wrapper, built from
 cls_acquisition/hardware/timetagger4_wrapper, mends all four and marks
-itself ORACLE_WRAPPER 2.
+itself ORACLE_WRAPPER 2. Which wrapper took a run is part of its record
+(:attr:`Time_Tagger.Identity`), as the edges it timed hang on it; the
+wrapper does not give the card's serial.
 
 Depends on: numpy; timetagger4, from the folder settings name
 (instruments: tagger_driver) or the import path.
@@ -113,6 +115,7 @@ class Time_Tagger():
         self._Reading = False
         self._Last = -1                    # the old wrapper's last trigger read
         version = getattr(timetagger4, 'ORACLE_WRAPPER', 0)
+        self.Identity = {'Wrapper': version, 'Serial': None}
         self._Marked = version >= MARKED_WRAPPER
         fault = Edge_Fault(self._Levels, bool(version))
         self.Warnings = [fault] if fault else []

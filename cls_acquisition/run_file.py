@@ -1,7 +1,7 @@
 """The run file, in the ASDF format the archive and its readers expect.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The header's keys and their meaning are frozen: cls_tools and DENIS read
@@ -14,9 +14,12 @@ ORACLE's own record of the run sits beside the header under one more
 key, :data:`ORACLE_KEY`, which readers that look keys up by name pass
 over: what the archive's keys do not hold and opening the run needs to
 show it as it was taken (the scan type, the trigger timing sent to the
-rack, the plots' view, the calibration gate's verdict). It is written
+rack, the plots' view, the calibration gate's verdict), and what the
+rack was (its identity, its dividers, the DAC's codes). It is written
 with the header, before the first event, from settings that are locked
-for the whole scan, so it holds for every event in the file.
+for the whole scan, so it holds for every event in the file. A reader
+takes a run's own divider ratios (:func:`Recorded_Divider`) where it has
+them, never today's settings.
 
 A run's number is one more than the highest already in the data folder,
 counted when the run starts, so numbers survive a restart and a refused
@@ -113,11 +116,21 @@ def Runs(directory):
     return [path for _, path in _Numbered(directory)]
 
 
+def Recorded_Divider(tree, which):
+    """The ratio of the run's ``which`` divider ('Scan' or 'Cooler') as its
+    record holds it, or None for a run that does not record one."""
+    try:
+        return float(tree[ORACLE_KEY]['Dividers'][which]['ratio'])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def Earlier_Calibrations(path, directory, count=3):
     """The start-of-run calibrations of the ``count`` runs numbered before
     ``path`` in ``directory`` that were calibrated as it was, newest first,
-    as ``(run, CalSet, CalReadback)``: only those keys are read, never the
-    events. A run that cannot be read is passed over.
+    as ``(run, CalSet, CalReadback, scan divider)``, the divider as the run
+    recorded it or None: only those keys are read, never the events. A run
+    that cannot be read is passed over.
 
     As it was means by the same DAQ under the same DAC correction (the
     DacCorrection text, which the old DAQ's runs do not have). Across
@@ -142,7 +155,8 @@ def Earlier_Calibrations(path, directory, count=3):
                 if af.tree.get('DacCorrection') != correction:
                     continue
                 calibrations.append((run, np.array(af.tree['CalSet'], dtype=float),
-                                     np.array(af.tree['CalReadback'], dtype=float)))
+                                     np.array(af.tree['CalReadback'], dtype=float),
+                                     Recorded_Divider(af.tree, 'Scan')))
         except (OSError, KeyError, ValueError, TypeError):
             continue
         if len(calibrations) == count:

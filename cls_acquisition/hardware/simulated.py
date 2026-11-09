@@ -1,7 +1,7 @@
 """The simulated rack: a software bench the whole DAQ runs on without hardware.
 
 Date:    2026-11-09
-Version: 0.4.2
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Only the instruments are simulated. The acquisition loop, the DAC
@@ -280,18 +280,20 @@ class Keysight():
         pass
 
 
-def Line_Meter_Source(platform):
-    return lambda t=None: platform.Volts(t) / DIVIDER
+def Line_Meter_Source(platform, divider=DIVIDER):
+    """The line meter's input through a divider of ``divider``: the ratio the
+    settings give, so the simulated rack's divider is what they say."""
+    return lambda t=None: platform.Volts(t) / divider
 
 
-def Cooler_Meter_Source():
+def Cooler_Meter_Source(divider=COOLER_DIVIDER):
     start = CLOCK()
 
     def cooler(t=None):
         t = CLOCK() if t is None else t
         volts = COOLER_V + COOLER_DRIFT_V_S * (t - start)
         volts += sum(a * np.sin(2.0 * np.pi * f * t) for f, a in COOLER_TONES)
-        return volts / COOLER_DIVIDER
+        return volts / divider
 
     return cooler
 
@@ -300,6 +302,8 @@ class Tagger():
     """The tagger as the loop sees it: one packet per trigger edge, its mark
     and its hits, and a read hands over every packet ready, as the driver
     does, so a loop that falls behind gets several triggers in one."""
+
+    Identity = {'Wrapper': 'simulated', 'Serial': None}
 
     def __init__(self, platform):
         self._Platform = platform

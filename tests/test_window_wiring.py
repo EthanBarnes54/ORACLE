@@ -10,6 +10,9 @@ and a real acquisition process, and reads back what the rack, the run
 file, the records, the settings and the ELOG were given.
 """
 
+import copy
+import glob
+import json
 import os
 import re
 import types
@@ -22,9 +25,9 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QLabel, QMessageBox
 
 from cls_acquisition import hardware_calibration as hc
-from cls_acquisition import run_file, settings
+from cls_acquisition import run_file, scan_performance, settings
 from cls_acquisition.acquisition import No_Trigger
-from cls_acquisition.hardware import simulated
+from cls_acquisition.hardware import mcc_dac, simulated
 from cls_acquisition.hardware.visa_session import Scpi_Error
 from gui import main_window
 from gui.input_memory import _Accessors
@@ -419,6 +422,11 @@ def test_The_Settle_Page_Hands_Its_Recommended_Wait_To_The_Linearity_Sweep(qapp,
     assert Pump(qapp, lambda: window._Worker is None)
     assert hardware.Settle.Wait_Button.isEnabled()
     hardware.Settle.Wait_Button.click()
+    # the bench record names the rack it was taken on, as a run does
+    header, _, _ = hc.Read_Record(sorted(glob.glob(os.path.join(
+        window._Data_Dir, 'hardware_calibration', 'settle_2*.csv')))[-1])
+    assert json.loads(header['RackIdentity']) == window._Identity
+    assert json.loads(header['Dividers'])['Scan']['ratio'] == 1000.0
     results = hardware.Settle.Result[0]
     assert hardware.Linearity.Settle_Box.value() == pytest.approx(
         round(hc.Recommended_Wait(results), 2))
@@ -636,6 +644,78 @@ def test_A_Runs_Record_Holds_What_It_Was_Taken_With_And_Its_View_Is_Held(qapp, w
     assert record['View']['channels'] == scan.Channels()
     assert record['Calibration']['Verdict'] in ('PASS', 'WARN')
     assert record['Rack'] == 'simulated' and record['Version'] == main_window.__version__
+
+
+def test_A_Run_Records_The_Rack_It_Was_Taken_On_And_The_Codes_Its_Dac_Held(qapp, window):
+    scan = window.Scan
+    scan.Region_Combo.setCurrentText('LCR')
+    scan.Pmt_Hv_Edit.setText('1: 1850, 2: 1900 V')
+    _Scan(qapp, window)
+    _Finished(qapp, window)
+    [path] = Run_Files(window)
+    header, _, _ = run_file.Read(path)
+    record = header[run_file.ORACLE_KEY]
+    rack = record['RackIdentity']
+    assert rack['Kind'] == 'simulated'
+    assert '34465A' in rack['LineMeter'] and '34465A' in rack['CoolerMeter']
+    assert rack['Dac'] == {'Board': 'simulated USB-231', 'UniqueId': None}
+    assert rack['Tagger'] == {'Wrapper': 'simulated', 'Serial': None}
+    assert rack['Amplifier']['model'] == 'Trek 609E-6'
+    assert rack['Amplifier']['Gain'] == mcc_dac.AMPLIFIER_GAIN
+    assert record['Dividers'] == {'Scan': settings.DEFAULTS['hardware']['scan_divider'],
+                                  'Cooler': settings.DEFAULTS['hardware']['cooler_divider']}
+    # every setpoint's code, which holds it to within half a code at the platform
+    codes = record['DacCodes']
+    assert len(codes['Code']) == len(header['CalSet'])
+    half_code = mcc_dac.LSB_V * mcc_dac.AMPLIFIER_GAIN / 2
+    for volts, channel, code in zip(header['CalSet'], codes['Channel'], codes['Code']):
+        held = (code * mcc_dac.LSB_V - mcc_dac.FULL_SCALE_V) * mcc_dac.AMPLIFIER_GAIN
+        assert channel == mcc_dac.CH_POS and abs(held - volts) <= half_code + 1e-9
+    assert record['DacCorrectionFull'] == mcc_dac.CORRECTION
+    assert record['Commit'] == settings.Commit()
+    assert record['InteractionRegion'] == 'LCR'
+    assert record['PmtHv'] == {'Pvs': None, 'Entered': '1: 1850, 2: 1900 V'}
+    assert record['TaggerLevels'] == {
+        'Inputs': settings.DEFAULTS['instruments']['tagger_levels'],
+        'Trigger': settings.DEFAULTS['instruments']['tagger_trigger_level']}
+    # and opened, the run puts them back as it was taken
+    scan.Region_Combo.setCurrentText('CEC')
+    scan.Pmt_Hv_Edit.clear()
+    window.Show_Run(path)
+    assert scan.Region_Combo.currentText() == 'LCR'
+    assert scan.Pmt_Hv_Edit.text() == '1: 1850, 2: 1900 V'
+
+
+def test_The_Dividers_Set_Scale_The_Gate_The_Readbacks_And_The_Record(qapp, monkeypatch,
+                                                                       tmp_path):
+    """Ratios far from the bench's, so a reading scaled by the old constants
+    would fail the gate's span check: the simulated meters read through the
+    dividers the settings give, and only those ratios put the platform back."""
+    hardware = copy.deepcopy(settings.DEFAULTS['hardware'])
+    hardware['scan_divider']['ratio'] = 1250.0
+    hardware['cooler_divider']['ratio'] = 12500.0
+    window = Open_Window(monkeypatch, tmp_path, hardware=hardware)
+    try:
+        assert Pump(qapp, lambda: abs(float(window.Cooler_Label.text()[:-2])
+                                      - simulated.COOLER_V) < 5.0)
+        _Scan(qapp, window)
+        _Finished(qapp, window)
+        [path] = Run_Files(window)
+        header, raw, monitor = run_file.Read(path)
+        record = header[run_file.ORACLE_KEY]
+        assert record['Dividers']['Scan']['ratio'] == 1250.0
+        assert record['Calibration']['Verdict'] in ('PASS', 'WARN')
+        # 1.25 had the readings been scaled by the bench's 1000; the meter's noise over
+        # the 20 V scan leaves the fit a few parts in 1000
+        assert record['Calibration']['FitGradient'] == pytest.approx(1.0, abs=0.05)
+        assert scan_performance.Dividers(header) == (1250.0, 12500.0)
+        assert np.median(raw[:, 5]) * 12500.0 == pytest.approx(simulated.COOLER_V, abs=5.0)
+        assert np.nanmedian(monitor['cooler_v']) == pytest.approx(simulated.COOLER_V, abs=5.0)
+        window.Show_Run(path)
+        shown = window.Calibration._Readback
+        assert np.allclose(shown, np.asarray(header['CalReadback']) * 1250.0)
+    finally:
+        Close_Window(qapp, window)
 
 
 def test_A_Finished_Run_Keeps_Its_Window_While_The_Next_Is_Set_Up(qapp, window):

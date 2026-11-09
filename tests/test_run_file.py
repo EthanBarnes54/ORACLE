@@ -98,6 +98,17 @@ def test_A_Calibration_Is_Set_Only_Against_Runs_Calibrated_The_Same_Way(tmp_path
         header['DacCorrection'] = correction
         paths[run] = run_file.Create(directory, header)
     assert [c[0] for c in run_file.Earlier_Calibrations(paths[6], directory)] == [5, 3]
+    assert [c[3] for c in run_file.Earlier_Calibrations(paths[6], directory)] == [None, None]
     assert run_file.Earlier_Calibrations(paths[4], directory) == []
     old = paths[3].replace('run_0003', 'run_0002')
     assert [c[0] for c in run_file.Earlier_Calibrations(old, directory)] == [1]
+
+
+def test_An_Earlier_Run_Is_Read_With_The_Divider_It_Recorded(tmp_path):
+    directory = str(tmp_path)
+    record = {'Dividers': {'Scan': {'model': 'KV-10', 'serial': '', 'ratio': 1000.2,
+                                    'ppm': 100.0}}}
+    run_file.Create(directory, _Header(1), record)
+    later = run_file.Create(directory, _Header(2))
+    [(run, _, _, divider)] = run_file.Earlier_Calibrations(later, directory)
+    assert (run, divider) == (1, 1000.2)

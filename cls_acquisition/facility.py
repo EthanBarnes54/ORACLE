@@ -1,7 +1,7 @@
 """The facility's services: the ELOG, the EPICS process variables, and the cooler's PVs.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 All are remote and all are optional, so none may freeze the window or
@@ -47,7 +47,8 @@ log = logging.getLogger('oracle.facility')
 
 
 class Pv_Monitors():
-    """The latest value of each named PV, kept current by EPICS callbacks."""
+    """The latest value of each named PV, kept current by EPICS callbacks; a
+    key with no name is not on EPICS, and has no value."""
 
     def __init__(self, names, simulated):
         self._Values = dict(SIMULATED_PVS) if simulated else {}
@@ -55,6 +56,8 @@ class Pv_Monitors():
         if not simulated:
             import epics
             for key, name in names.items():
+                if not name:
+                    continue
                 self._Pvs.append(epics.PV(name, auto_monitor=True,
                                           callback=partial(self._Keep, key)))
 

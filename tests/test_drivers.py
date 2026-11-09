@@ -95,6 +95,39 @@ def test_An_Expired_Correction_Is_Refused():
     assert dac.Correction_Record()[0] == 1
 
 
+def test_A_Correction_On_The_Write_Is_Warned_Of_Lest_The_Table_Be_Applied_Twice():
+    # production writes are uncorrected and the bench table is applied after collection
+    for valid_days in (None, 30):
+        correction = dict(mcc_dac.CORRECTION, measured='2026-11-01', valid_days=valid_days)
+        verdict, message = Dac(lambda *_: None, correction).Calibration_Status(
+            now=time.mktime((2026, 11, 9, 0, 0, 0, 0, 0, -1)))
+        assert verdict == 'WARN' and 'do not also apply the bench table' in message
+
+
+def _Mcculw_Enums(monkeypatch):
+    enums = types.ModuleType('mcculw.enums')
+    enums.BoardInfo = types.SimpleNamespace(DEVUNIQUEID=218)
+    enums.InfoType = types.SimpleNamespace(BOARDINFO=2)
+    monkeypatch.setitem(sys.modules, 'mcculw', types.ModuleType('mcculw'))
+    monkeypatch.setitem(sys.modules, 'mcculw.enums', enums)
+
+
+def test_The_Boards_Unique_Id_Is_Read_And_A_Board_That_Will_Not_Say_Still_Runs(monkeypatch,
+                                                                                 caplog):
+    _Mcculw_Enums(monkeypatch)
+    asked = []
+    ul = types.SimpleNamespace(get_config_string=lambda *args: asked.append(args) or
+                               '00:80:2F:1A:2B:3C ')
+    assert mcc_dac._Unique_Id(ul, 1) == '00:80:2F:1A:2B:3C'
+    assert asked == [(2, 1, 0, 218, 64)]
+
+    def refuse(*_):
+        raise RuntimeError("UL error 1001")
+
+    assert mcc_dac._Unique_Id(types.SimpleNamespace(get_config_string=refuse), 1) is None
+    assert 'did not give its unique ID' in caplog.text
+
+
 def _Old_Time_Slices(line_pattern):
     """The old DAQ's transformLinesToTimeSlices, as the oracle."""
     boundaries = sorted(set([0] + [t for line in line_pattern for t in line[1:3]]))

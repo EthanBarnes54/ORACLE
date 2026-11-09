@@ -1,7 +1,7 @@
 """ORACLE's settings: the rack, the facility services and the data folder.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 ``settings/settings.yaml`` holds what has been set; :data:`DEFAULTS`
@@ -19,15 +19,23 @@ Settings_Error naming it and the line, rather than starting ORACLE on
 defaults the operator did not choose. The likeliest on Windows is a
 folder in double quotes, where YAML reads each backslash as an escape.
 
-Depends on: PyYAML.
+What the rack cannot say of itself (its dividers and its amplifier) is
+set here, under ``hardware``, and recorded with every run; the dividers'
+ratios are what the readbacks are scaled by. :func:`Commit` says which
+of ORACLE's commits is running, for the same record.
+
+Depends on: PyYAML; git, if ORACLE runs from a checkout.
 """
 
 import copy
 import os
+import subprocess
+import sys
 
 import yaml
 
-APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CODE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+APP_ROOT = CODE_ROOT                # where data, logs and settings go; the tests move it
 
 DEFAULTS = {
     # 'simulated' runs the whole DAQ against a software bench; 'hardware'
@@ -47,6 +55,9 @@ DEFAULTS = {
         'wavenumber': 'FURIOS:Wavemeter2:Wavenumber1',
         'mass': 'IGISOL:MagnetControl:Mass',
         'mass_setpoint': 'IGISOL:MagnetControl:Target',
+        # each tagger input's PMT high voltage, recorded with every run; empty:
+        # not on EPICS, and the Scan tab's PMT HV box is recorded instead
+        'pmt_hv_1': '', 'pmt_hv_2': '', 'pmt_hv_3': '', 'pmt_hv_4': '',
     },
     'instruments': {
         'line_meter': 'USB0::0x2A8D::0x0101::MY57506790::INSTR',
@@ -66,6 +77,15 @@ DEFAULTS = {
         # the inputs with a detector wired to them; Scan Performance reports one
         # that records nothing as a possible fault
         'tagger_channels': [1, 2, 3, 4],
+    },
+    # what the rack cannot say of itself, recorded with every run. The meeting of
+    # November 2026 heard the two dividers are different models (KV-10 and KV-30)
+    # where the slides name the KV-10A for both: set each as its label reads.
+    # ppm is the ratio's stated accuracy, for the systematics
+    'hardware': {
+        'scan_divider': {'model': '', 'serial': '', 'ratio': 1000.0, 'ppm': 100.0},
+        'cooler_divider': {'model': '', 'serial': '', 'ratio': 10000.0, 'ppm': 100.0},
+        'amplifier': {'model': 'Trek 609E-6', 'serial': ''},
     },
     # how the laser meets the ions, as DENIS takes it: the Scan Performance tab
     # converts the wavemeter's drift into scan volts with these
@@ -145,6 +165,24 @@ def Update(**values):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as fh:
         yaml.safe_dump(stored, fh, default_flow_style=False, sort_keys=False)
+
+
+def Commit():
+    """``{'Hash', 'Dirty'}`` of the git commit ORACLE runs from, Dirty true
+    if its files differ from it; None where it does not run from a
+    checkout or git is not installed (the rack PC may have neither)."""
+    # no console flashes up on Windows for a git run from a window
+    hidden = {'creationflags': subprocess.CREATE_NO_WINDOW} if sys.platform == 'win32' else {}
+
+    def git(*args):
+        return subprocess.run(('git', *args), cwd=CODE_ROOT, capture_output=True, text=True,
+                              timeout=5.0, check=True, **hidden).stdout.strip()
+
+    try:
+        return {'Hash': git('rev-parse', 'HEAD'),
+                'Dirty': bool(git('status', '--porcelain', '--untracked-files=no'))}
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def Data_Directory(settings):

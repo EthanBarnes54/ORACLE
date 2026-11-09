@@ -1,7 +1,7 @@
 """Scan performance: how the rack's behaviour during a run shaped its spectrum.
 
 Date:    2026-11-09
-Version: 0.4.2
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 A spectrum is counts against the scanning voltage, and every part of the
@@ -56,7 +56,7 @@ import yaml
 
 from cls_acquisition.calibration import DIVIDER, PASS, THRESHOLDS, WARN, Settle_For
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER
-from cls_acquisition.run_file import ORACLE_KEY
+from cls_acquisition.run_file import ORACLE_KEY, Recorded_Divider
 from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 
 FAIL, NA = 'FAIL', 'N/A'
@@ -220,10 +220,18 @@ def Volts_Per_Hz(beam_v, nu_laser_hz, mass_amu, laser):
     return float(Ion_Frequency(beam_v, 1.0, mass_amu, laser) / per_volt)
 
 
+def Dividers(header):
+    """``(scan, cooler)``: the run's divider ratios as it recorded them, or
+    the constants for a run that did not, never today's settings."""
+    return (Recorded_Divider(header, 'Scan') or DIVIDER,
+            Recorded_Divider(header, 'Cooler') or COOLER_DIVIDER)
+
+
 def _Beam_V(header, axis):
     """The beam's energy mid-scan, in volts, or NaN if the run lacks it."""
     try:
-        return float(header.get('CoolerVoltage', np.nan)) * COOLER_DIVIDER - float(axis.mean())
+        return (float(header.get('CoolerVoltage', np.nan)) * Dividers(header)[1]
+                - float(axis.mean()))
     except (TypeError, ValueError):
         return np.nan
 
@@ -313,9 +321,10 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     on what deserves a look (nothing is cut). ``laser`` is the experiment's
     {'harmonic', 'geometry', 'charge'}, used if the run does not record its
     own; ``settle_model`` estimates an old DAQ run's settling; ``history``
-    holds earlier runs' calibrations, ``(run, CalSet, CalReadback)``,
-    newest first, of runs calibrated as this one was
-    (run_file.Earlier_Calibrations)."""
+    holds earlier runs' calibrations, ``(run, CalSet, CalReadback, scan
+    divider or None)``, newest first, of runs calibrated as this one was
+    (run_file.Earlier_Calibrations). Readbacks are scaled by each run's
+    own divider ratios (:func:`Dividers`)."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -341,7 +350,7 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     del bunch_b
 
     # the spectrum as DENIS builds it, the cooler taken out hit by hit
-    bins = _Bins(raw, axis, step)
+    bins = _Bins(raw, axis, step, Dividers(header)[1])
     bins_t = bins if by_time is None else bins[by_time]
     del bins
     scanned = np.isin(np.round(axis, VOLTS_DECIMALS), np.round(sequence, VOLTS_DECIMALS))
@@ -356,7 +365,7 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=()):
     _Calibration(report, header, scale, history)
     hv = _Readback(report, monitor, header, scale, times_t, t0)
     light = _Laser(report, monitor, header, laser, recorded_laser, scale, times_t, axis, t0)
-    _Cooler(report, raw, monitor, t0)
+    _Cooler(report, raw, monitor, t0, Dividers(header)[1])
     bunch_t = bunch if by_time is None else bunch[by_time]
     per_scan = len(sequence) * per_step
     expectation = None
@@ -428,7 +437,7 @@ def _Plan(header):
     return sequence, _Ladder(sequence.min(), sequence.max(), step), note
 
 
-def _Bins(raw, axis, step):
+def _Bins(raw, axis, step, cooler_divider):
     """Each hit's bin on ``axis`` as DENIS places it: its voltage tag less its
     cooler reading's departure from the run's median (DENIS corrects every
     hit by its own reading), or -1 off the grid. A hit with no cooler
@@ -439,7 +448,7 @@ def _Bins(raw, axis, step):
     work = np.where(known, cooler, 0.0)
     if known.any():
         work[known] -= np.median(cooler[known])
-    work *= -COOLER_DIVIDER
+    work *= -cooler_divider
     work += raw[:, 1]
     work -= axis[0]
     work /= step
@@ -555,7 +564,7 @@ def _Suspects(cal_set, readback):
 
 def _Calibration_Points(header):
     cal_set = np.asarray(header.get('CalSet', []), dtype=float)
-    readback = np.asarray(header.get('CalReadback', []), dtype=float) * DIVIDER
+    readback = np.asarray(header.get('CalReadback', []), dtype=float) * Dividers(header)[0]
     n = min(len(cal_set), len(readback))
     return cal_set[:n], readback[:n]
 
@@ -616,9 +625,9 @@ def _Calibration_History(report, line, cal_set, history, scale):
     right. Agreeing with any one of them is enough, so one bad neighbour
     cannot raise it."""
     found = []
-    for run, set_b, read_b in history:
+    for run, set_b, read_b, divider in history:
         set_b = np.asarray(set_b, dtype=float)
-        read_b = np.asarray(read_b, dtype=float) * DIVIDER
+        read_b = np.asarray(read_b, dtype=float) * (divider or DIVIDER)
         n = min(len(set_b), len(read_b))
         set_b, read_b = set_b[:n], read_b[:n]
         if n < 3 or _Tracking(set_b, read_b) < THRESHOLDS['MinTrackingR']:
@@ -1355,13 +1364,13 @@ def _Laser(report, monitor, header, laser, recorded, scale, times, axis, t0):
     return t, volts
 
 
-def _Cooler(report, raw, monitor, t0):
+def _Cooler(report, raw, monitor, t0, cooler_divider):
     """DENIS corrects every hit by its own cooler reading, so the cooler's
     changes move no line; what matters is that every hit has a reading."""
     cooler = raw[:, 5]
     missing = int(np.count_nonzero(~np.isfinite(cooler) | (cooler == 0)))
     t, volts = ((monitor['time'], monitor['cooler_v']) if monitor is not None
-                else (raw[:, 0], cooler * COOLER_DIVIDER))
+                else (raw[:, 0], cooler * cooler_divider))
     ok = np.isfinite(volts) & (volts != 0)
     if ok.sum() < 3:
         report.Add(SOURCES, 'Cooler', WARN if missing else NA, missing,

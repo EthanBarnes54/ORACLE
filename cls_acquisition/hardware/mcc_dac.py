@@ -1,7 +1,7 @@
 """The MCC USB-231 converters that set the platform voltage through the Trek 609E-6.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The two converters drive the amplifier's two inputs, positive setpoints
@@ -29,7 +29,14 @@ converter's major carry. Each run records which correction was in
 force (DacCorrectionApplied, DacCorrection), a measured table past its
 stated validity is refused at calibration, and a setpoint outside the
 range the non-linearity was measured over is refused rather than
-extrapolated.
+extrapolated. Production runs write uncorrected: the bench table is
+applied to the data after collection (Ethan, 9 November 2026), so a
+correction in force on the write is warned of at every calibration,
+lest it be applied twice.
+
+Each run records the code every setpoint was written as (:func:`Quantised`
+of what each write returns), and the board's own identity (:attr:`Dac.Identity`,
+its name and unique ID from InstaCal), so what the DAC held is known exactly.
 
 The same board's digital line can gate the tagger's window (PulseBlaster
 channel 18, through an AND unit), so a scan step's settling bunches are
@@ -43,6 +50,7 @@ for, whoever asks: a plan beyond it is refused before its first write.
 Depends on: numpy; mcculw, imported only when a board is opened.
 """
 
+import logging
 import time
 
 import numpy as np
@@ -54,6 +62,7 @@ CODES = 65536                       # 16 bits across it
 LSB_V = 2 * FULL_SCALE_V / CODES    # one code at the converter
 LIMIT_V = 4000.0                    # the Trek 609E-6's rated output, +-4 kV
 BOARD_NAME = 'USB-231'
+WIRING = 'differential: two positive outputs, one on each of the Trek\'s inputs'
 INL_REACH_V = 25.0                  # past the outermost knot a table still covers
 
 CORRECTION = {
@@ -64,6 +73,9 @@ CORRECTION = {
     'poly': {CH_POS: [1.0, 0.0], CH_NEG: [1.0, 0.0]},
     'inl': None,                    # {channel: [knots V, platform error V]} once measured
 }
+
+
+log = logging.getLogger('oracle.dac')
 
 
 class Dac_Error(RuntimeError):
@@ -80,10 +92,11 @@ def Quantised(volts):
 class Dac():
     """``v_out(channel, volts)`` drives one converter; everything else is here."""
 
-    def __init__(self, v_out, correction=CORRECTION, limit_v=LIMIT_V):
+    def __init__(self, v_out, correction=CORRECTION, limit_v=LIMIT_V, identity=None):
         self._V_Out = v_out
         self.Correction = correction
         self.Limit_V = limit_v
+        self.Identity = identity or {'Board': None, 'UniqueId': None}
 
     def _Inl(self, channel):
         """``(knots, errors)`` of ``channel``'s non-linearity table, or None."""
@@ -153,20 +166,25 @@ class Dac():
         return 1, text
 
     def Calibration_Status(self, now=None):
-        """``(verdict, message)`` for the gate. Unmeasured passes, since a check
-        that fires on every run teaches operators to ignore them all; a measured
-        table past its validity is worse than none and is refused."""
+        """``(verdict, message)`` for the gate. Uncorrected writes pass: that is
+        how production runs are taken. A measured table past its validity is
+        worse than none and is refused; one in force is warned of, since the
+        bench table is applied after collection and must not be applied to
+        setpoints already corrected on the write."""
         c = self.Correction
         if c['measured'] is None:
             return 'PASS', "DAC correction unmeasured, both channels identity"
+        twice = (f"The DAC correction measured {c['measured']} is applied on the write, so "
+                 f"these setpoints are already corrected: do not also apply the bench table "
+                 f"in the analysis, and clear the correction for production runs")
         if c['valid_days'] is None:
-            return 'PASS', f"DAC correction measured {c['measured']}, no expiry declared"
+            return 'WARN', f"{twice}; no expiry declared"
         measured = time.mktime(time.strptime(c['measured'], '%Y-%m-%d'))
         age_days = ((time.time() if now is None else now) - measured) / 86400.0
         if age_days > c['valid_days']:
             return 'REJECT', (f"The DAC correction is {age_days:.0f} days old and valid for "
                               f"{c['valid_days']}; the two converters drift apart.")
-        return 'PASS', f"DAC correction measured {c['measured']}, {age_days:.0f} days old"
+        return 'WARN', f"{twice}; it is {age_days:.0f} days old"
 
 
 def _Ul(board):
@@ -191,6 +209,20 @@ def _Ul(board):
     return ul, ULRange.BIP10VOLTS, call
 
 
+def _Unique_Id(ul, board):
+    """The board's unique ID (its MAC-like serial, BoardInfo.DEVUNIQUEID), or
+    None if InstaCal will not say: the run is still taken, as the rest of
+    its record names the rack."""
+    try:
+        from mcculw.enums import BoardInfo, InfoType
+        return str(ul.get_config_string(InfoType.BOARDINFO, board, 0, BoardInfo.DEVUNIQUEID,
+                                        64)).strip() or None
+    except Exception as e:
+        log.warning("The MCC board %s did not give its unique ID, so runs record the DAC by "
+                    "name alone: %s", board, e)
+        return None
+
+
 def Open_Mcc(board, correction=CORRECTION, limit_v=LIMIT_V):
     """The DAC on InstaCal board ``board``, which must be the USB-231; its
     outputs start at 0 V."""
@@ -199,13 +231,14 @@ def Open_Mcc(board, correction=CORRECTION, limit_v=LIMIT_V):
     if BOARD_NAME not in name:
         raise Dac_Error(f"InstaCal board {board} is a {name}, not the {BOARD_NAME} that drives "
                         f"the HV amplifier; set instruments: dac_board in the settings.")
+    identity = {'Board': name, 'UniqueId': _Unique_Id(ul, board)}
 
     def v_out(channel, volts):
         # the code bench-proven on this board: its own conversion, then a_out
         code = call(f"convert {volts:+.5f} V", ul.from_eng_units, board, bip10, volts)
         call(f"write {volts:+.5f} V to output {channel}", ul.a_out, board, channel, bip10, code)
 
-    dac = Dac(v_out, correction, limit_v)
+    dac = Dac(v_out, correction, limit_v, identity)
     dac.Zero()
     return dac
 

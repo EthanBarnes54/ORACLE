@@ -1,7 +1,7 @@
 """The acquisition process: the loop that drives the DAC, the triggers and the tagger.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The loop runs in its own process, so the tagger is read on time however
@@ -56,11 +56,13 @@ the run file's columns, and a scan's end is marked ``('scan_end', None)``
 after its last rows, so the GUI closes the run file only once all of
 them are in it. If the loop dies, its last word is a reply with id 0
 saying why. 'Ping' answers with what the devices found wrong as they
-opened (the tagger's wrapper, say), for the window to show.
+opened (the tagger's wrapper, say), for the window to show, and
+'Identity' with what the DAC and the tagger say they are, for the
+record of every run.
 
 Depends on: numpy; cls_acquisition.calibration, .triggers,
-.hardware.timetagger (MARK), and cls_acquisition.hardware inside the
-process.
+.hardware.mcc_dac (Quantised), .hardware.timetagger (MARK), and
+cls_acquisition.hardware inside the process.
 """
 
 import logging
@@ -74,6 +76,7 @@ import numpy as np
 
 from cls_acquisition import triggers
 from cls_acquisition.calibration import Settle_For
+from cls_acquisition.hardware.mcc_dac import Quantised
 from cls_acquisition.hardware.timetagger import MARK
 
 SCAN_TYPES = ('Sawtooth', 'Triangle', 'Single scan')
@@ -155,6 +158,8 @@ class Acquisition_Loop():
                           for warning in getattr(device, 'Warnings', ())]
         self._Handlers = {
             'Ping': lambda: {'Warnings': self._Warnings},
+            'Identity': lambda: {'Dac': dict(getattr(dac, 'Identity', None) or {}),
+                                 'Tagger': dict(getattr(tagger, 'Identity', None) or {})},
             'Start_Scan': self._Start_Scan,
             'Stop_After_Scan': self._Stop_After_Scan,
             'Stop_Now': self._Stop_Now,
@@ -305,7 +310,7 @@ class Acquisition_Loop():
         # stamped once the write has returned: the earliest the HV can settle from
         t_command = time.perf_counter_ns()
         return {'Index': index, 'Volts': volts, 'Channel': channel, 'Dac_V': dac_volts,
-                'T_Command_Ns': t_command}
+                'Code': Quantised(dac_volts)[0], 'T_Command_Ns': t_command}
 
     def _Stop_Calibration(self, ramp_step_v=None, ramp_rate_v_s=None):
         """Out of calibration; a hardware calibration first ramps the platform

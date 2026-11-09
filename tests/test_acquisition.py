@@ -41,6 +41,8 @@ def test_Calibration_Steps_Write_Then_Stamp(loop):
     assert not loop.Send('Calibration_Step', index=len(plan))[0]    # outside the plan
     ok, step = loop.Send('Calibration_Step', index=0)
     assert ok and step['Index'] == 0 and step['Volts'] == -10.0
+    assert step['Code'] == mcc_dac.Quantised(step['Dac_V'])[0]
+    assert step['Code'] * mcc_dac.LSB_V - mcc_dac.FULL_SCALE_V == pytest.approx(step['Dac_V'])
     assert loop.Writes[-2:] == [(mcc_dac.CH_POS, 0.0), (mcc_dac.CH_NEG, pytest.approx(
         0.01, abs=mcc_dac.LSB_V / 2))]
     assert loop.State.Voltage.value == -10.0
@@ -229,6 +231,8 @@ def test_The_Link_Talks_To_A_Spawned_Process():
     from cls_acquisition.hardware import Rack
     link = Rack_Link(Rack(settings.DEFAULTS, get_context('spawn')).Loop_Spec())
     assert link.Send('Ping', timeout=30) == {'Warnings': []}
+    assert link.Send('Identity') == {'Dac': {'Board': 'simulated USB-231', 'UniqueId': None},
+                                     'Tagger': {'Wrapper': 'simulated', 'Serial': None}}
     with pytest.raises(Acquisition_Error, match="not an instruction"):
         link.Send('Make_Coffee')
     link.Close()

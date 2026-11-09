@@ -1,7 +1,7 @@
 """ORACLE's main window and entry point.
 
 Date:    2026-11-09
-Version: 0.4.2
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window: the Scan, Scan Calibration and Time graphs tabs,
@@ -43,11 +43,12 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.4.2'
+__version__ = '0.5.0'
 
 import contextlib
 import ctypes
 import getpass
+import json
 import logging
 import math
 import multiprocessing
@@ -75,7 +76,6 @@ from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
 from cls_acquisition.hardware import Rack
 from cls_acquisition.hardware import mcc_dac
-from cls_acquisition.hardware.keysight import COOLER_DIVIDER
 from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 from gui import plots, session_log, theme
 from gui.calibration_tab import Calibration_Tab
@@ -103,6 +103,15 @@ def _Number(value, fmt):
     return 'unavailable' if value is None else format(value, fmt)
 
 
+def _Volts(value):
+    """A PV's value as a float, or None if it has none or is not a number: a
+    PV that misbehaves is not worth refusing a run for."""
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class _Window_Grid(QGridLayout):
     """The window's grid, said to have no height-for-width (its wrapped
     Shown line has one): a scroll area holds a widget so laid out at its
@@ -128,6 +137,17 @@ class Main_Window(QMainWindow):
         self._Pending = None            # the scan waiting on its calibration
         self._Worker = None             # the calibration in progress, scan or hardware
         self._Correction = config['dac_correction'] or mcc_dac.CORRECTION
+        self._Scan_Divider, self._Cooler_Divider = rack.Scan_Divider, rack.Cooler_Divider
+        self._Tagger_Levels = {'Inputs': list(config['instruments']['tagger_levels']),
+                               'Trigger': config['instruments']['tagger_trigger_level']}
+        # the rack and the code as they are for the whole session, for every record
+        try:
+            loop = link.Send('Identity')
+        except Acquisition_Error as e:
+            log.warning("The acquisition process did not say what its devices are: %s", e)
+            loop = None
+        self._Identity = rack.Identity(loop, line_meter, cooler_meter)
+        self._Commit = settings.Commit()
         self._Settle_Model = config['settle_model']
         self._Analysis = None           # the performance analysis in progress
         self._Analysing = None          # the run it is of
@@ -158,7 +178,7 @@ class Main_Window(QMainWindow):
         self.Tabs.setStyleSheet(theme.Main_Tabs_Qss())
         self._Limit_V = config['instruments']['hv_limit_v']
         self.Scan, self.Time = Scan_Tab(self._Limit_V), Time_Tab()
-        self.Calibration = Calibration_Tab(self._Limit_V)
+        self.Calibration = Calibration_Tab(self._Limit_V, self._Scan_Divider)
         self.Hardware = Hardware_Tab(self._Limit_V)
         self.Performance = Performance_Tab()
         for tab, icon, name in ((self.Scan, 'atom', 'Scan controls'),
@@ -219,12 +239,12 @@ class Main_Window(QMainWindow):
         self.Scan.Queue.Set_Settle_Model(self._Settle_Model)
         self.Calibration.Start_Button.clicked.connect(self._Calibrate_Only)
         hardware = self.Hardware
-        on_line = (link, line_meter, calibration.DIVIDER)
+        on_line = (link, line_meter, self._Scan_Divider)
         for panel, measure in (
                 (hardware.Settle, partial(hardware_calibration.Settle_Test, *on_line)),
                 (hardware.Linearity, partial(hardware_calibration.Linearity_Sweep, *on_line)),
                 (hardware.Cooler, partial(hardware_calibration.Cooler_Monitor, cooler_meter,
-                                          COOLER_DIVIDER))):
+                                          self._Cooler_Divider))):
             panel.Start_Button.clicked.connect(
                 lambda _=False, panel=panel, measure=measure: self._Run_Bench(panel, measure))
             panel.Stop_Button.clicked.connect(self._Stop_Bench)
@@ -369,7 +389,8 @@ class Main_Window(QMainWindow):
             self._Shown_Round = int(raw[:, 2].max() // per_scan) + 1
         self.Run_Label.setText(str(header.get('Run')))
         self.Calibration.Show_Run(name, header.get('CalSet', []), header.get('CalReadback', []),
-                                  record.get('Calibration'))
+                                  record.get('Calibration'),
+                                  scan_performance.Dividers(header)[0])
         self._Refresh_Runs(keep=path)
         self._Analyse(path, run)
         self.Tabs.setCurrentWidget(self.Scan)
@@ -492,6 +513,8 @@ class Main_Window(QMainWindow):
         self.Sweep_To.setValue(plan.Setpoints.max())
         when = datetime.now()
         pvs = {key: self._Pvs.Value(key) for key in ('wavenumber', 'mass', 'mass_setpoint')}
+        pmt_hv = {channel: _Volts(self._Pvs.Value(f"pmt_hv_{channel}"))
+                  for channel in (1, 2, 3, 4)}
         bunches = self.Scan.Bunches_Per_Step()
         text = (f"\n--------------------------------------\n{when:%d/%m/%Y %H:%M:%S}\n"
                 f"START SCAN NUMBER {run}\nscanning ranges:\n"
@@ -505,6 +528,8 @@ class Main_Window(QMainWindow):
                 + (f"Queued scan {queued[0]} of {queued[1]}, {rounds} scans\n" if queued
                    else ""))
         self._Pending = {'plan': plan, 'run': run, 'when': when, 'pvs': pvs, 'text': text,
+                         'pmt_hv': {c: v for c, v in pmt_hv.items() if v is not None},
+                         'setup': self.Scan.Setup(),
                          'bunches': bunches, 'timing': timing, 'rounds': rounds,
                          'queued': queued, 'scan_type': self.Scan.Type_Combo.currentText()}
         self._Calibrate(plan)
@@ -553,7 +578,16 @@ class Main_Window(QMainWindow):
                   'View': {**self.Scan.View(), **self.Time.View()}, 'Calibration': report,
                   'SettleModel': self._Settle_Model, 'Laser': dict(self._Laser),
                   'Channels': list(self._Channels), 'Rounds': pending['rounds'],
-                  'Queue': list(pending['queued']) if pending['queued'] else None}
+                  'Queue': list(pending['queued']) if pending['queued'] else None,
+                  # which hardware and code took it, and what the DAC held exactly: the
+                  # plan is the calibration's, so its codes are the scan's
+                  'RackIdentity': self._Identity, 'Dividers': self._Rack.Dividers(),
+                  'DacCodes': {'Channel': cal.Channels.tolist(), 'Code': cal.Codes.tolist()},
+                  'DacCorrectionFull': cal.Correction, 'Commit': self._Commit,
+                  'InteractionRegion': pending['setup']['InteractionRegion'],
+                  'PmtHv': {'Pvs': pending['pmt_hv'] or None,
+                            'Entered': pending['setup']['PmtHv']},
+                  'TaggerLevels': self._Tagger_Levels}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
@@ -761,7 +795,8 @@ class Main_Window(QMainWindow):
 
         def job(progress, stopped):
             cal = calibration.Run_Calibration(self._Link, self._Line, plan,
-                                              lambda *point: progress(point), self._Settle_Model)
+                                              lambda *point: progress(point), self._Settle_Model,
+                                              self._Scan_Divider)
             return cal, calibration.Quality_Report(cal, plan)
 
         self._Worker = Job_Worker(job, self)
@@ -813,7 +848,10 @@ class Main_Window(QMainWindow):
         if peak is not None and not self._Rack.Simulated and not self._Arm_Hv(panel.Title, peak):
             return
         header = {'ORACLE': __version__, 'Rack': 'simulated' if self._Rack.Simulated else
-                  'hardware', 'Date': f"{datetime.now():%Y-%m-%d %H:%M:%S}", **params}
+                  'hardware', 'Date': f"{datetime.now():%Y-%m-%d %H:%M:%S}", **params,
+                  'RackIdentity': json.dumps(self._Identity),
+                  'Dividers': json.dumps(self._Rack.Dividers()),
+                  'Commit': json.dumps(self._Commit)}
         records = {}
         try:
             for kind, columns in panel.RECORDS.items():
@@ -893,7 +931,7 @@ class Main_Window(QMainWindow):
         setpoint = self._State.Voltage.value
 
         def job(progress, stopped):
-            return hardware_calibration.Precise_Reading(self._Line, calibration.DIVIDER)
+            return hardware_calibration.Precise_Reading(self._Line, self._Scan_Divider)
 
         self._Worker = Job_Worker(job, self)
         self._Worker.Done.connect(lambda reading: self.Hardware.Show_Reading(*reading, setpoint))
@@ -1098,8 +1136,8 @@ class Main_Window(QMainWindow):
         wavenumber = self._Pvs.Value('wavenumber')
         state = self._State
         self._Monitor.append((time.time(), state.Round.value, state.Voltage.value,
-                              self._Line.Voltage * calibration.DIVIDER,
-                              self._Cooler.Voltage * COOLER_DIVIDER,
+                              self._Line.Voltage * self._Scan_Divider,
+                              self._Cooler.Voltage * self._Cooler_Divider,
                               math.nan if wavenumber is None else wavenumber,
                               state.Bunches.value, state.Dropped.value, state.Skipped.value))
         if len(self._Monitor) >= MONITOR_FLUSH_TICKS:
@@ -1134,8 +1172,8 @@ class Main_Window(QMainWindow):
         outputting, calibrating = state.Outputting.is_set(), self._Worker is not None
         self._State.Cooler.value = self._Cooler.Voltage
 
-        self.Cooler_Label.setText(f"{self._Cooler.Voltage * COOLER_DIVIDER:.2f} V")
-        self.Readback_Label.setText(f"{self._Line.Voltage * calibration.DIVIDER:.1f} V")
+        self.Cooler_Label.setText(f"{self._Cooler.Voltage * self._Cooler_Divider:.2f} V")
+        self.Readback_Label.setText(f"{self._Line.Voltage * self._Scan_Divider:.1f} V")
         self.Wavenumber_Label.setText(_Number(self._Pvs.Value('wavenumber'), '.5f') + ' cm⁻¹')
         self.Round_Label.setText(str(state.Round.value if self._Shown_Round is None
                                      else self._Shown_Round))
@@ -1325,7 +1363,7 @@ def main():
             if cooler_pv['enabled'] and not rack.Simulated:
                 try:
                     server = Cooler_Pv_Server(cooler_pv['prefix'], lambda: (
-                        cooler_meter.Voltage * COOLER_DIVIDER))
+                        cooler_meter.Voltage * rack.Cooler_Divider))
                     opened.callback(server.Close)
                 except Exception as e:
                     # the facility's copy of the cooler is not worth refusing a run for
