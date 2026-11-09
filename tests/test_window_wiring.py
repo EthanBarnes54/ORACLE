@@ -173,6 +173,10 @@ def test_Triggers_Stream_To_The_Plots_But_Never_To_A_File(qapp, window):
     assert Pump(qapp, lambda: window.Trigger_Button.text() == 'Disable triggers')
     assert not window.Scan.Control_Group.isEnabled() and not window.Scan.Params_Group.isEnabled()
     assert Pump(qapp, lambda: window._Live.Count > 0, timeout=20)
+    # the PMTs' afterpulsing counted as the data come, shown under the Time graph
+    window.Tabs.setCurrentWidget(window.Time)
+    assert Pump(qapp, lambda: 'Same ÷ other PMT within 10 µs' in window.Time.Afterpulse_Label
+                .text() and 'ch ' in window.Time.Afterpulse_Label.text())
     window.Trigger_Button.click()
     assert Pump(qapp, lambda: not state.Triggering.is_set())
     assert Pump(qapp, lambda: window.Scan.Control_Group.isEnabled())
@@ -677,6 +681,7 @@ def test_A_Run_Records_The_Rack_It_Was_Taken_On_And_The_Codes_Its_Dac_Held(qapp,
     assert record['PmtHv'] == {'Pvs': None, 'Entered': '1: 1850, 2: 1900 V'}
     assert record['CoolerRollingS'] == settings.DEFAULTS['cooler']['rolling_s']
     # each calibration reading over a whole mains cycle, and the poll back at 200 us after
+    assert record['DeadTimeUs'] == settings.DEFAULTS['detectors']['dead_time_us']
     assert record['CalibrationReadings']['Nplc'] == 1
     assert record['CalibrationReadings']['DurationS'] > 0.0
     assert window._Line._Session.Transaction(

@@ -12,7 +12,10 @@ in DENIS, and the report exports beside the run. On the right, one plot
 for each systematic: the HV against its calibration, the beam over time
 against what its setpoints give, the beam rate scan by scan, how far
 reads trailed the first of their step, the cooler (each reading, and
-the rolling mean the analysis takes over them) and the laser. A
+the rolling mean the analysis takes over them), the laser, and each
+PMT's afterpulsing: the time to the previous count on itself and on the
+others against chance, and its counts' scatter against dead time, as
+A. Raggio's slide 9 shows them. A
 check's sentence shows under the list when it is selected, and in its
 tooltip.
 
@@ -40,6 +43,8 @@ from gui import plots, theme
 from gui.shared_widgets import Scroll_Column, Verdict_Html
 
 PANEL_WIDTH = 400                   # px: the checks' names and values side by side
+CHANNEL_COLOURS = {1: theme.TRACE, 2: theme.TRACE_ALT, 3: '#FF5CF0', 4: '#FF9F40'}
+LEGEND_BRUSH = (13, 13, 13, 220)    # the plots' background, so a legend hides what is behind
 
 
 def _Item(parent, name, verdict, value=''):
@@ -176,8 +181,35 @@ class Performance_Tab(QWidget):
             "measured light and sampled every 0.1 s. The Laser check converts it to scan volts "
             "and to MHz at the ions, with the harmonic and geometry recorded with the run."
             + from_first))
+        self.Afterpulse_Plot = plots.Plot('Time to the previous count on a PMT',
+                                          ('Time since the previous count', 'µs'),
+                                          ('Pairs ÷ chance', None), (
+            "For each PMT (by colour), how often a count follows the previous count on the same "
+            "PMT (solid) and on any other PMT (dashed) after each time, relative to chance: 1 is "
+            "chance. Afterpulsing raises the solid curve at short times alone; light and the "
+            "spread of the number of ions per bunch raise both.",
+            "Within each bunch (or DC window), the time from each count back to the previous "
+            "count, histogrammed in 0.5 µs bins up to 50 µs, divided by the same histogram "
+            "with the previous count taken from the next four bunches at the same time in "
+            "their bunch, which keeps the bunch's time-of-flight profile."))
+        self.Afterpulse_Plot.setLogMode(y=True)
+        self.Afterpulse_Plot.addLegend(offset=(-10, 10), labelTextColor=theme.PLOT_FOREGROUND,
+                                          brush=LEGEND_BRUSH)
+        self.Dispersion_Plot = plots.Plot('Count scatter against dead time', ('Dead time', 'µs'),
+                                          ('Variance ÷ mean', None), (
+            "For each PMT (by colour), how far its counts scatter from scan to scan beyond "
+            "Poisson's, with no dead time and with each candidate one: 1 is Poisson. "
+            "Afterpulsing raises it, and a dead time that removes the afterpulses brings it "
+            "down; in bunched mode a dead time also removes real photons at the line's peak.",
+            "Counts per setpoint per complete scan, a count left out if the same PMT counted "
+            "within the dead time before it in its bunch; for each setpoint the variance "
+            "across scans over the mean, pooled over setpoints. Shown only when the run's "
+            "scan numbers are reliable and it holds three complete scans."))
+        self.Dispersion_Plot.addLegend(offset=(-10, 10), labelTextColor=theme.PLOT_FOREGROUND,
+                                          brush=LEGEND_BRUSH)
         self.Plots = (self.Readback_Plot, self.Beam_Plot, self.Rate_Plot, self.Latency_Plot,
-                      self.Cooler_Plot, self.Laser_Plot)
+                      self.Cooler_Plot, self.Laser_Plot, self.Afterpulse_Plot,
+                      self.Dispersion_Plot)
         for i, plot in enumerate(self.Plots):
             plot_grid.addWidget(plot, i // 2, i % 2)
 
@@ -296,3 +328,22 @@ class Performance_Tab(QWidget):
         if 'Laser' in series:
             self.Laser_Plot.addItem(plots.Dense_Curve(*series['Laser'], pen=pen,
                                                       connect='finite'))
+        dashed = pg.mkPen(theme.PLOT_FOREGROUND, width=1, style=Qt.PenStyle.DashLine)
+        for channel, (edges, same, other) in series.get('Afterpulse', {}).items():
+            colour = CHANNEL_COLOURS.get(channel, theme.PLOT_FOREGROUND)
+            for ratio, style, name in ((same, Qt.PenStyle.SolidLine, f"channel {channel}"),
+                                       (other, Qt.PenStyle.DashLine, None)):
+                shown = np.where(ratio > 0, ratio, np.nan)
+                self.Afterpulse_Plot.plot((edges[:-1] + edges[1:]) / 2.0, shown, connect='finite',
+                                          pen=pg.mkPen(colour, width=2, style=style), name=name)
+        if 'Afterpulse' in series:
+            self.Afterpulse_Plot.addItem(pg.InfiniteLine(0.0, angle=0, pen=dashed))
+        if 'Dispersion' in series:
+            dead_times, ratios = series['Dispersion']
+            self.Dispersion_Plot.addItem(pg.InfiniteLine(1.0, angle=0, pen=dashed))
+            for channel, ratio in ratios.items():
+                colour = CHANNEL_COLOURS.get(channel, theme.PLOT_FOREGROUND)
+                self.Dispersion_Plot.plot(dead_times, ratio, pen=pg.mkPen(colour, width=2),
+                                          name=f"channel {channel}",
+                                          **{k: v for k, v in plots.Dots(colour).items()
+                                             if k != 'pen'})

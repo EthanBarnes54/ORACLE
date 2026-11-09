@@ -47,8 +47,15 @@ from whichever fits best, the bunches it took before a step settled are
 estimated from the settle model, and a bunch count that parted from the
 voltage steps (the collinear DAQ's D5) is reported, not cut.
 
+Each PMT is judged for afterpulsing (cls_acquisition.detectors): counts
+that follow one of its own within the dead time beyond what the other
+PMTs show, which light and the beam raise alike; and how far its counts
+scatter across scans beyond Poisson, at dead times from 0 to 20 us, the
+part every PMT shares (the beam) told from its own. A dead time is
+suggested for DENIS, never applied.
+
 Depends on: numpy, PyYAML; cls_acquisition.calibration, .cooler,
-.run_file, .scan_plan and .hardware.keysight.
+.detectors, .run_file, .scan_plan and .hardware.keysight.
 """
 
 import math
@@ -58,7 +65,7 @@ from datetime import datetime
 import numpy as np
 import yaml
 
-from cls_acquisition import cooler
+from cls_acquisition import cooler, detectors
 from cls_acquisition.calibration import DIVIDER, PASS, THRESHOLDS, WARN, Settle_For
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER
 from cls_acquisition.run_file import ORACLE_KEY, Recorded_Divider
@@ -67,6 +74,7 @@ from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 FAIL, NA = 'FAIL', 'N/A'
 RANK = {NA: -1, PASS: 0, WARN: 1, FAIL: 2}
 VOLTAGE, TIMING, BEAM, SOURCES = 'Voltage scan', 'Timing', 'Beam and spectrum', 'Sources'
+DETECTORS = 'Detectors'
 
 NUMERICAL_SCATTER = 1e-9                # of a calibration's span: below it, no scatter at all
 
@@ -100,6 +108,9 @@ TOLERANCES = {
     'TofGateShare': 0.5,                # the gate keeps less of the TOF peak than this
     'TofShareChange': 0.1,              # ... or its share moves this much over the run
     'TofDriftUs': 0.5,
+    'DetectorCounts': 50,               # counts a PMT needs to be judged for afterpulsing
+    'AfterpulseShare': 0.005,           # ... and the share of them beyond its control that matter
+    'OwnScatter': 0.5,                  # variance/mean a PMT adds alone, beyond the PMTs' shared
 }
 WIRED_CHANNELS = (1, 2, 3, 4)               # the tagger's inputs, for a run that does not say
 DC_PERIOD_S = 0.001                         # the DC trigger
@@ -298,8 +309,8 @@ class _Scale():
 class _Report():
 
     def __init__(self):
-        self.Sections = {name: [] for name in (VOLTAGE, TIMING, BEAM, SOURCES)}
-        self.Series, self.Flagged, self.Budget = {}, [], {}
+        self.Sections = {name: [] for name in (VOLTAGE, TIMING, BEAM, SOURCES, DETECTORS)}
+        self.Series, self.Flagged, self.Budget, self.Detectors = {}, [], {}, {}
 
     def Add(self, section, check, verdict, value, message):
         self.Sections[section].append(
@@ -317,11 +328,11 @@ class _Report():
             summary += (f" {unchecked} of the {len(checks)} checks need what this run does not "
                         f"hold (N/A).")
         return {'Verdict': verdict, 'Summary': summary, 'Budget': budget, 'Sections': sections,
-                'Series': self.Series, 'Flagged': self.Flagged}
+                'Series': self.Series, 'Flagged': self.Flagged, 'Detectors': self.Detectors}
 
 
 def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
-            rolling_s=cooler.ROLLING_S):
+            rolling_s=cooler.ROLLING_S, dead_time_us=detectors.DEAD_TIME_US):
     """The report on one run: ``Verdict``, ``Summary``, ``Budget`` (the line's
     width and what moved it, at the ions, in one sentence), ``Sections``
     (name to checks), ``Series`` for the plots and ``Flagged``, sentences
@@ -332,7 +343,10 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
     divider or None)``, newest first, of runs calibrated as this one was
     (run_file.Earlier_Calibrations). Readbacks are scaled by each run's
     own divider ratios (:func:`Dividers`). The cooler is taken as its
-    rolling mean over the window the run recorded, or ``rolling_s``."""
+    rolling mean over the window the run recorded, or ``rolling_s``, and
+    the PMTs are judged at the dead time it recorded, or ``dead_time_us``.
+    ``Detectors`` holds each PMT's afterpulsing and the dead time
+    suggested for it."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -394,6 +408,9 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
     _Channels(report, raw[:, 3] if by_time is None else raw[by_time, 3], times_t,
               record.get('Channels') or WIRED_CHANNELS, t0)
     _Tof(report, raw[:, 4] if by_time is None else raw[by_time, 4], times_t, record, bunched)
+    _Detectors(report, raw, bunch, tags, len(sequence), per_step,
+               record.get('Channels') or WIRED_CHANNELS,
+               float(record.get('DeadTimeUs') or dead_time_us))
 
     summary = (f"{tags['Complete']} complete {tags['Type']} scans of {len(sequence)} "
                f"setpoints, {per_step} bunches per step, {len(raw)} hits over "
@@ -1246,6 +1263,106 @@ def _Channels(report, channels, times, wired, t0):
                    f"Every wired channel counted throughout: {listed}.")
 
 
+# ── The detectors ───────────────────────────────────────────────
+
+def _Detectors(report, raw, bunch, tags, n, per_step, wired, dead_time_us):
+    """Each wired PMT's afterpulsing: its counts within ``dead_time_us`` of
+    one of its own beyond what the other PMTs show, flagged when both
+    improbable and large enough to matter; how far its counts scatter
+    across scans beyond Poisson, with dead times from 0 to 20 us; and the
+    shortest dead time past which no excess is left, suggested for DENIS."""
+    wired = [int(c) for c in wired]
+    keys = detectors.Keys(raw[:, 2], raw[:, 4])
+    order = np.argsort(keys, kind='stable')
+    keys, channel = keys[order], raw[order, 3].astype(np.int8)
+    pairs = detectors.By_Channel(channel, keys, wired)
+    del keys
+    same = np.full(len(channel), np.inf, dtype=np.float32)
+    for c, found in pairs.items():
+        same[channel == c] = np.where(np.isfinite(found.Same), found.Same, np.inf)
+    cells, shape = None, None
+    if tags['Reliable'] and tags['Complete'] >= 3:
+        steps = (bunch[order] // per_step).astype(np.int64)
+        scan = steps // n
+        cells = np.where(scan < tags['Complete'],
+                         scan * n + _Step_Index(steps, n, tags['Kind']), -1).astype(np.int64)
+        shape = (tags['Complete'], n)
+        del steps, scan
+    del order
+    spreads = {tau: detectors.Dispersion(cells, shape, channel, wired,
+                                         same <= tau if tau else None)
+               for tau in detectors.DEAD_TIMES_US} if cells is not None else None
+    curves = {}
+    for c in wired:
+        found = pairs.get(c)
+        if found is None or found.Count < TOLERANCES['DetectorCounts']:
+            report.Add(DETECTORS, f"Afterpulsing, channel {c}", NA, None,
+                       f"Channel {c} counted {found.Count if found else 0} times, too few to "
+                       f"judge its afterpulsing (it needs {TOLERANCES['DetectorCounts']}).")
+            continue
+        edges, seen, chance = found.Histogram('Same')
+        _, seen_other, chance_other = found.Histogram('Other')
+        with np.errstate(divide='ignore', invalid='ignore'):
+            curves[c] = (edges, np.where(chance > 0, seen / chance, np.nan),
+                         np.where(chance_other > 0, seen_other / chance_other, np.nan))
+        excess, z, own, others = found.Excess(0.0, dead_time_us)
+        share = excess / found.Count
+        afterpulses = z > TOLERANCES['Significance'] and share > TOLERANCES['AfterpulseShare']
+        suggested = None
+        if afterpulses:
+            # past it, no excess left: too little to matter, or within a standard error of none
+            left = {tau: found.Excess(tau, detectors.REACH_US)[:2]
+                    for tau in detectors.DEAD_TIMES_US[1:]}
+            beyond = [tau for tau, (pairs, errors) in left.items()
+                      if pairs / found.Count <= TOLERANCES['AfterpulseShare'] or errors <= 1.0]
+            suggested = beyond[0] if beyond else None
+        message = (f"Channel {c}'s {found.Count} counts hold {max(share, 0.0):.1%} more pairs "
+                   f"within {dead_time_us:g} µs of one of its own than chance and the other "
+                   f"PMTs account for, about that share of them afterpulses: its pairs stand at "
+                   f"{own:.2f} × chance against {others:.2f} × on the others ({z:.1f} standard "
+                   f"errors).")
+        bursts = False
+        if spreads is not None:
+            ratio = {tau: spreads[tau][0].get(c) for tau in detectors.DEAD_TIMES_US}
+            common, dof = spreads[0.0][1], spreads[0.0][2]
+            if ratio[0.0] is not None:
+                error = ratio[0.0] * np.sqrt(2.0 / max(dof, 1))
+                alone = ratio[0.0] - 1.0 - common
+                bursts = alone > max(TOLERANCES['OwnScatter'], TOLERANCES['Significance'] * error)
+                message += (f" Its counts scatter across scans {ratio[0.0]:.2f} times as much "
+                            f"as Poisson's (± {error:.2f})"
+                            + (f", {ratio[dead_time_us]:.2f} with a {dead_time_us:g} µs dead "
+                               f"time" if ratio.get(dead_time_us) is not None else "")
+                            + f"; of the excess, {common:+.2f} is common to every PMT, the "
+                              f"beam's, and {alone:+.2f} its own.")
+            if bursts:
+                report.Flag(f"Channel {c}'s counts scatter {ratio[0.0]:.1f} times as much as "
+                            f"Poisson's across scans, {alone:.1f} of it its own: bursts of "
+                            f"counts on that PMT (noise, ringing or its discriminator), so "
+                            f"Poisson errors on its counts are {np.sqrt(ratio[0.0]):.1f} times "
+                            f"too small.")
+        removed = np.count_nonzero(found.Same <= dead_time_us) / found.Count
+        message += (f" A {dead_time_us:g} µs dead time would remove {removed:.1%} of its counts, "
+                    f"{max(removed - max(share, 0.0), 0.0):.1%} of them real photons.")
+        if afterpulses:
+            message += (f" Suggested for DENIS: a {suggested:g} µs dead time, past which no "
+                        f"excess is left; it is never applied here." if suggested is not None
+                        else f" Excess is left past {detectors.DEAD_TIMES_US[-1]:g} µs.")
+            report.Flag(f"Channel {c} afterpulses: {share:.1%} of its counts follow one of its "
+                        f"own within {dead_time_us:g} µs beyond what the other PMTs show; "
+                        f"DENIS's dead time would take them out.")
+        report.Add(DETECTORS, f"Afterpulsing, channel {c}",
+                   WARN if afterpulses or bursts else PASS, share, message)
+        report.Detectors[c] = {'counts': found.Count, 'afterpulse_share': float(share),
+                               'standard_errors': z, 'suggested_dead_time_us': suggested}
+    if curves:
+        report.Series['Afterpulse'] = curves
+    if spreads is not None:
+        report.Series['Dispersion'] = (np.array(detectors.DEAD_TIMES_US), {
+            c: np.array([spreads[tau][0].get(c, np.nan) for tau in detectors.DEAD_TIMES_US])
+            for c in wired if spreads[0.0][0].get(c) is not None})
+
+
 def _Tof(report, tof, times, record, bunched):
     """The time-of-flight peak against the gate the run recorded, period by
     period: a peak drifting against its gate loses counts unevenly over the
@@ -1445,6 +1562,9 @@ def Export(path, result):
                               'message': c['Message']} for c in checks]
                    for section, checks in result['Sections'].items()},
         'flagged': list(result.get('Flagged', [])),
+        # suggested for DENIS's dead time; nothing here applies it
+        'detectors': {f"channel {c}": entry
+                      for c, entry in result.get('Detectors', {}).items()},
     }
     with open(out, 'w', encoding='utf-8') as fh:
         yaml.safe_dump(record, fh, sort_keys=False, allow_unicode=True, width=100)

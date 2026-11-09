@@ -34,7 +34,11 @@ so a capture catches whatever the platform does meanwhile; back-to-back
 readings take READ_TIME_S, not their integration time, to keep tests
 quick. The PulseBlaster's period clocks a tagger that sees three
 resonances on a flat background, the ions in one time-of-flight bunch,
-timed in the card's 500 ps bins.
+timed in the card's 500 ps bins. The PMTs can afterpulse (AFTERPULSE, a
+chance per count per input, the extra count 2 to 5 us later on the same
+input) and the number of ions can spread from bunch to bunch
+(ION_SPREAD), which raises every PMT's counts together; the bench
+measured no PMTs, so both are off unless a test sets them.
 
 The converters live in the acquisition process and the line meter in
 the GUI's, so the platform's state is shared memory (:class:`Platform`),
@@ -109,6 +113,9 @@ FWHM_V = 4.0
 PEAK_RATE_HZ = 60.0                 # counts per second at the top of the strongest
 BACKGROUND_RATE_HZ = 5.0
 TOF_US, TOF_WIDTH_US = 52.0, 1.5
+AFTERPULSE = {}                     # input: chance of an afterpulse after each count
+AFTERPULSE_DELAY_US = (2.0, 5.0)
+ION_SPREAD = 0.0                    # rms of the ions per bunch, as a share of their mean
 
 
 def Step_Remaining(t):
@@ -372,13 +379,20 @@ class Tagger():
         volts = self._Platform.Volts()
         shape = sum(height / (1.0 + ((volts - centre) / (0.5 * FWHM_V)) ** 2)
                     for centre, height in RESONANCES)
+        ions = rng.gamma(ION_SPREAD ** -2, ION_SPREAD ** 2) if ION_SPREAD else 1.0
         times = np.concatenate([
-            rng.normal(TOF_US, TOF_WIDTH_US, rng.poisson(PEAK_RATE_HZ * shape * period_s)),
+            rng.normal(TOF_US, TOF_WIDTH_US, rng.poisson(PEAK_RATE_HZ * shape * period_s * ions)),
             rng.uniform(start, stop, rng.poisson(BACKGROUND_RATE_HZ * period_s))])
+        channels = rng.integers(1, 5, len(times))
+        for channel, chance in AFTERPULSE.items():
+            parents = (channels == channel) & (rng.random(len(times)) < chance)
+            times = np.concatenate([times, times[parents] + rng.uniform(
+                *AFTERPULSE_DELAY_US, np.count_nonzero(parents))])
+            channels = np.concatenate([channels, np.full(np.count_nonzero(parents), channel)])
         times = np.rint(times / BIN_US) * BIN_US
-        times = times[(times >= start) & (times < stop)]
-        hits = np.column_stack([np.full(len(times), float(self._Bunch)),
-                                rng.integers(1, 5, len(times)), times])
+        inside = (times >= start) & (times < stop)
+        times, channels = times[inside], channels[inside]
+        hits = np.column_stack([np.full(len(times), float(self._Bunch)), channels, times])
         self._Packets.put(np.vstack([[self._Bunch, MARK, 0.0], hits]))
 
 

@@ -9,10 +9,10 @@ The acquisition process owns the DAC, the PulseBlaster and the tagger
 (:meth:`Rack.Open_Meters`), since calibration times the line meter's
 readings on the GUI's side. The drivers import their vendor libraries
 only when the hardware rack is opened, so a simulated rack needs none.
-A platform limit set above the amplifier's rating, a divider ratio or
-the cooler's rolling window that is not a positive number, or power
-line cycles the line meter does not take, is refused before anything
-opens.
+A platform limit set above the amplifier's rating, a divider ratio, the
+cooler's rolling window or the PMTs' dead time that is not a positive
+number, or power line cycles the line meter does not take, is refused
+before anything opens.
 
 :meth:`Rack.Identity` is the rack as it names itself (the meters'
 *IDN?, the DAC board's unique ID, the tagger's wrapper) and as the
@@ -46,11 +46,13 @@ class Rack():
                 raise ValueError(f"The settings give the {key.replace('_', ' ')} a ratio of "
                                  f"{ratio!r}; it must be a positive number of platform volts "
                                  f"per volt at its meter (hardware: {key}: ratio).")
-        window = settings['cooler']['rolling_s']
-        if not (isinstance(window, (int, float)) and window > 0):
-            raise ValueError(f"The settings give the cooler's rolling mean a window of "
-                             f"{window!r}; it must be a positive number of seconds (cooler: "
-                             f"rolling_s).")
+        for value, what, key in ((settings['cooler']['rolling_s'],
+                                  "the cooler's rolling mean a window", 'cooler: rolling_s'),
+                                 (settings['detectors']['dead_time_us'],
+                                  "the PMTs a dead time", 'detectors: dead_time_us')):
+            if not (isinstance(value, (int, float)) and value > 0):
+                raise ValueError(f"The settings give {what} of {value!r}; it must be a "
+                                 f"positive number ({key}).")
         nplc = settings['calibration']['nplc']
         if nplc not in keysight.NPLC_CHOICES:
             raise ValueError(f"The settings ask for calibration readings of {nplc!r} power "

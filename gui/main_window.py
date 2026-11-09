@@ -131,7 +131,7 @@ class Main_Window(QMainWindow):
         self._Pvs, self._Elog = pvs, elog
         self._State = link.State
         self._Data_Dir = settings.Data_Directory(config)
-        self._Live = Live_Data()
+        self._Live = Live_Data(float(config['detectors']['dead_time_us']))
         self._Volt_Edges = np.array([0.0, 1.0])
         self._Run = None                # path of the run file being written
         self._Pending = None            # the scan waiting on its calibration
@@ -155,6 +155,7 @@ class Main_Window(QMainWindow):
         self._Laser = config['laser']
         self._Rolling_S = float(config['cooler']['rolling_s'])
         self._Nplc = config['calibration']['nplc']
+        self._Dead_Time_Us = float(config['detectors']['dead_time_us'])
         self._Channels = config['instruments']['tagger_channels']
         self._Monitor = []              # monitor rows of the run, not yet written
         self._Shown_Timing = None       # the shown run's trigger timing; None: the boxes'
@@ -592,7 +593,9 @@ class Main_Window(QMainWindow):
                   'TaggerLevels': self._Tagger_Levels,
                   # the window the analysis takes the cooler's rolling mean over
                   'CoolerRollingS': self._Rolling_S,
-                  'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S}}
+                  'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
+                  # the dead time the PMTs are judged at; never applied to the data
+                  'DeadTimeUs': self._Dead_Time_Us}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
@@ -1030,13 +1033,13 @@ class Main_Window(QMainWindow):
         if self._Analysis is not None:
             return                      # started as the one running finishes
         laser, settle_model, data_dir = self._Laser, self._Settle_Model, self._Data_Dir
-        rolling_s = self._Rolling_S
+        rolling_s, dead_time_us = self._Rolling_S, self._Dead_Time_Us
 
         def job(progress, stopped):
             header, raw, monitor = run or run_file.Read(path)
             return scan_performance.Analyse(header, raw, monitor, laser, settle_model,
                                             run_file.Earlier_Calibrations(path, data_dir),
-                                            rolling_s)
+                                            rolling_s, dead_time_us)
 
         self._Analysing = path
         self._Analysis = Job_Worker(job, self)

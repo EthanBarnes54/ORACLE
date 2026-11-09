@@ -1,7 +1,7 @@
 """The Time graphs tab: counts against time, to watch the beam.
 
-Date:    2026-10-30
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The gated hits of the chosen channels, binned by bunch number and drawn
@@ -9,12 +9,17 @@ in seconds at the trigger rate in force (the old DAQ binned DC data in
 bunches of 1 ms while labelling the bins in seconds). Its channels and
 bin are part of a run's recorded view, held while the run is taken.
 
-Depends on: PySide6; gui.plots.
+Under the plot, each PMT's afterpulsing as the data come in: its pairs
+within the dead time on itself over those on the others, against
+chance (1), an early warning of a tube going bad. Scan Performance
+judges it properly once the run has ended.
+
+Depends on: PySide6; gui.plots, gui.theme.
 """
 
 from PySide6.QtWidgets import QCheckBox, QComboBox, QGridLayout, QLabel, QWidget
 
-from gui import plots
+from gui import plots, theme
 
 CHANNELS = (1, 2, 3, 4)
 BIN_SECONDS = ('100', '10', '1', '0.1')
@@ -45,6 +50,14 @@ class Time_Tab(QWidget):
         self.Bin_Combo.addItems(BIN_SECONDS)
         grid.addWidget(self.Bin_Combo, 1, 6)
         grid.addWidget(QLabel('s'), 1, 7)
+        self.Afterpulse_Label = QLabel()
+        self.Afterpulse_Label.setToolTip(
+            "For each PMT, how many of its counts follow one of its own within the dead time "
+            "(settings: detectors, dead_time_us), over how many follow one on the other PMTs, "
+            "each scaled by the counts it could follow: 1 is chance, and afterpulsing raises "
+            "it. Counted within each bunch as the data arrive; Scan Performance judges it "
+            "against chance once the run has ended.")
+        grid.addWidget(self.Afterpulse_Label, 2, 0, 1, 8)
         grid.setRowStretch(0, 1)
         self._Drawn = None
 
@@ -70,6 +83,16 @@ class Time_Tab(QWidget):
                 *((f"time_channel_{c}", check) for c, check in zip(CHANNELS,
                                                                    self.Channel_Checks))]
 
+    def Show_Afterpulsing(self, ratios, dead_time_us):
+        """Each PMT's ratio, in the warning colour above 2."""
+        cells = [f"ch {channel}: " + ('–' if ratio is None else
+                                      f"<span style='color:{theme.VERDICT_COLOURS['WARN']}'>"
+                                      f"{ratio:.1f}</span>" if ratio > 2.0 else f"{ratio:.1f}")
+                 for channel, ratio in ratios.items()]
+        self.Afterpulse_Label.setText(
+            f"Same ÷ other PMT within {dead_time_us:g} µs, against chance:&nbsp;&nbsp;"
+            + ('&nbsp;&nbsp;&nbsp;'.join(cells) if cells else 'no counts yet'))
+
     def Draw(self, live, trigger_hz, gate):
         """Counts against time from ``live``, counted again only if the data
         or what they are counted by have changed: each count reads every hit."""
@@ -79,6 +102,7 @@ class Time_Tab(QWidget):
         if drawn == self._Drawn:
             return
         self._Drawn = drawn
+        self.Show_Afterpulsing(live.Afterpulse_Ratios(), live.Dead_Time_Us)
         result = live.Counts_In_Time(bin_s, trigger_hz, channels, gate)
         if result is None:
             self.Curve.setData([], [])

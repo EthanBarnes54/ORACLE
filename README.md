@@ -68,10 +68,12 @@ How far the rack's behaviour during a run shaped its data, run by run: the last 
 - **Timing**: whether reads kept up with the bunches; stalls and pauses (a sleeping PC shows here); bunches taken before their step had settled; triggers the loop missed; the TOF peak's drift beyond its own scatter
 - **Beam and spectrum**: beam losses, rate stability and scan-to-scan shape against counting statistics; the strongest peak's centroid scan by scan, its drift and jitter; channel balance
 - **Cooler and laser**: the cooler as the analysis takes it, the rolling mean of its readings over `cooler: rolling_s` (15 s), plotted over the readings: how far the mean moved, which the analysis follows, and how far the readings scatter about it, which no mean removes; the laser converted through the Doppler shift at the run's mass and beam energy
+- **Detectors**: each PMT's afterpulsing, as A. Raggio's slide 9 shows it: the time to the previous count on itself and on the other PMTs against chance (taken from the next bunches, so the bunch's time-of-flight profile is kept), and its counts' scatter across scans against dead time, the part every PMT shares (the beam) told from its own. A PMT is flagged when its own pairs within `detectors: dead_time_us` stand significantly above the other PMTs' and amount to 0.5 % of its counts or more; a dead time is suggested for DENIS, never applied
 - **Flagged for review**: what deserves a look, each with its reason. Nothing is cut: the operator decides in DENIS. **Export report** writes `run_NNNN_performance.yaml` beside the run
 
 ### Time graphs
 - Counts against time for the chosen channels, in bins of 100 s down to 0.1 s at the trigger rate in force
+- Each PMT's afterpulsing as the data come in: its pairs within the dead time on itself over those on the other PMTs, against chance (1), shown in the warning colour above 2, an early warning of a tube going bad
 
 ### Quick tune and experiment information
 - Triggers on and off without a scan; voltage output on and off, set by a slider across a sweep range or by value, both held to the platform's limit. Turning the output on starts from the voltage already on the platform, so it never jumps
@@ -168,6 +170,7 @@ Beside it, `settings/inputs.yaml` is ORACLE's memory of every input in the windo
 | `cooler_pv` | disabled | `enabled`, `prefix` (`FURIOS:Cooler:`): publish the cooler's voltage as EPICS PVs. Needs pcaspy, which has no Windows wheel for Python 3.13 yet; never from a simulated rack |
 | `calibration` | `nplc` 1 | power line cycles each calibration reading integrates (20 ms each): whole cycles take out the mains the divider picks up, which a 200 µs reading caught at a random phase (75 mV a point against about 7 mV). The meter's display poll keeps its 200 µs aperture |
 | `cooler` | `rolling_s` 15 | the window of the cooler's rolling mean, in seconds: the analysis takes the cooler as the mean of its readings over it, since a reading is not taken with the bunch and alone aliases the mains ripple (A. Raggio, November 2026). Recorded with each run; Scan Performance judges a run by it and plots it over the readings |
+| `detectors` | `dead_time_us` 10 | the dead time the PMTs are judged at for afterpulsing (Scan Performance) and counted at as data arrive (the Time graphs tab); recorded with each run. Nothing here applies it: the dead time is the operator's to apply in DENIS |
 | `laser` | harmonic 4, anti-collinear, charge 1 | how the laser meets the ions, as DENIS takes it: Scan Performance puts the laser into scan volts with it |
 
 ---
@@ -189,6 +192,7 @@ One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look 
 | `Calibration` | the gate's verdict, each check's verdict and message, and the numbers it decided on |
 | `SettleModel`, `Laser`, `Channels` | the settle model in force; the laser's harmonic, geometry and charge; the wired tagger inputs |
 | `CoolerRollingS` | the window, in seconds, of the cooler's rolling mean the run is analysed with |
+| `DeadTimeUs` | the dead time, in µs, the run's PMTs are judged at for afterpulsing |
 | `CalibrationReadings` | the power line cycles each calibration reading integrated (`Nplc`) and how long the calibration took (`DurationS`) |
 
 **What the rack was and what it held**

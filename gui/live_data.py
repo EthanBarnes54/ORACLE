@@ -1,7 +1,7 @@
 """What has been acquired since the last clear, and the histograms drawn from it.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-09
+Version: 0.5.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 Rows arrive in packets several times a second. Each update histograms
@@ -28,12 +28,19 @@ from an old run, or more distinct voltages than the codes count) turns
 that column to float64, once, and nothing is rounded. ``Version`` moves
 whenever anything drawn from here changes, so a tab redraws only then.
 
-Depends on: numpy; cls_acquisition.hardware.timetagger (no Qt, so it is
-tested headless).
+As rows arrive, each PMT's pairs within the dead time of a count before
+it in the same bunch are counted, on itself and on the others: a few
+counters, an early warning of a tube that afterpulses
+(cls_acquisition.detectors). A bunch's hits arrive together, so each
+packet is counted on its own.
+
+Depends on: numpy; cls_acquisition.detectors, cls_acquisition.hardware.timetagger
+(no Qt, so it is tested headless).
 """
 
 import numpy as np
 
+from cls_acquisition import detectors
 from cls_acquisition.hardware.timetagger import BIN_US
 
 TIMESTAMP, VOLTS, BUNCH, CHANNEL, TOF, COOLER = range(6)   # run_file.DATA_COLS
@@ -136,14 +143,16 @@ class _Column():
 
 class Live_Data():
 
-    def __init__(self):
+    def __init__(self, dead_time_us=detectors.DEAD_TIME_US):
         self.Version = 0
+        self.Dead_Time_Us = dead_time_us
         self.Clear()
 
     def Clear(self):
         self._Kept = {column: _Column(*codes) for column, codes in KEPT.items()}
         self.Count = 0
         self._Key = None
+        self._Pairs = {}                # channel: [counts, pairs on itself, on the others]
         self.Configure(np.array([0.0, 1.0]), np.array([0.0, 1.0]), None, (), False)
 
     def Add(self, rows):
@@ -153,7 +162,32 @@ class Live_Data():
         for column, kept in self._Kept.items():
             kept.Add(rows[:, column])
         self.Count += len(rows)
+        self._Count_Pairs(rows)
         self.Version += 1
+
+    def _Count_Pairs(self, rows):
+        keys = detectors.Keys(rows[:, BUNCH], rows[:, TOF])
+        order = np.argsort(keys, kind='stable')
+        keys, channels = keys[order], rows[order, CHANNEL]
+        for channel in np.unique(channels):
+            own, mine = keys[channels == channel], channels == channel
+            tally = self._Pairs.setdefault(int(channel), [0, 0, 0])
+            tally[0] += len(own)
+            tally[1] += int(detectors.Counted(own, own, 0.0, self.Dead_Time_Us).sum())
+            tally[2] += int(detectors.Counted(own, keys[~mine], 0.0, self.Dead_Time_Us,
+                                              after=False).sum())
+
+    def Afterpulse_Ratios(self, least=20):
+        """``{channel: ratio}``: each PMT's pairs within the dead time on
+        itself over those on the others, scaled by the others' counts over its
+        own, so that chance gives 1 and afterpulsing more; None where either
+        side has fewer than ``least`` pairs."""
+        total = sum(tally[0] for tally in self._Pairs.values())
+        ratios = {}
+        for channel, (counts, same, other) in sorted(self._Pairs.items()):
+            ratios[channel] = (same / other * (total - counts) / counts
+                               if min(same, other) >= least else None)
+        return ratios
 
     def _Columns(self, start, *columns):
         """``columns`` of every row from ``start``, a block at a time."""

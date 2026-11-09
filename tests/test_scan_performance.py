@@ -35,13 +35,15 @@ def _Run(plan=PLAN, ranges=None, per_step=4, scans=8, period=0.1, kind='Sawtooth
          origin=0, rate=_Flat(1.0), shift=_Flat(0.0), signal=6.0, background=0.3,
          cooler=_Flat(COOLER_V), laser_cm=_Flat(WAVENUMBER), hv_error=_Flat(0.0),
          calibration=lambda v: v, channels=None, tof=None, gate=(48.0, 56.0), bunched=True,
-         pause=None, parted_at=None, seed=3, reading=None):
+         pause=None, parted_at=None, seed=3, reading=None, afterpulse=None, ions=0.0):
     """``(header, raw, monitor)`` of a run with one line at 20 V, 4 V wide.
     The line sits where its ions resonate: a cooler higher by a volt moves it
     a volt up the scan, the laser by PER_HZ a hertz, and an HV that puts out
     more than it is told moves it down by as much. The cooler's meter reads
     ``reading`` (the cooler itself, unless given), on the hits and the
-    monitor alike."""
+    monitor alike. ``afterpulse`` maps a channel to the chance a count on it
+    is followed 2 to 5 us later by another; ``ions`` spreads the number of
+    ions from bunch to bunch (rms, as a share), for every channel at once."""
     reading = reading or cooler
     rng = np.random.default_rng(seed)
     n = len(plan)
@@ -53,6 +55,8 @@ def _Run(plan=PLAN, ranges=None, per_step=4, scans=8, period=0.1, kind='Sawtooth
     centre = (20.0 + shift(t) + (cooler(t) - COOLER_V)
               + (laser_cm(t) - WAVENUMBER) * sp.C_LIGHT * 100 * PER_HZ - hv_error(t))
     mean = rate(t) * (background + signal / (1.0 + ((volts - centre) / 2.0) ** 2))
+    if ions:
+        mean = mean * rng.gamma(ions ** -2, ions ** 2, len(mean))
     hits = rng.poisson(mean)
     times = np.repeat(t, hits)
     count = len(times)
@@ -64,6 +68,10 @@ def _Run(plan=PLAN, ranges=None, per_step=4, scans=8, period=0.1, kind='Sawtooth
         channels(times, count, rng) if channels else rng.integers(1, 5, count),
         tof(times, count, rng) if tof else rng.normal(52.0, 1.0, count),
         np.repeat(reading(t), hits) / COOLER_DIVIDER])
+    for channel, chance in (afterpulse or {}).items():
+        parents = raw[(raw[:, 3] == channel) & (rng.random(len(raw)) < chance)].copy()
+        parents[:, 4] += rng.uniform(2.0, 5.0, len(parents))
+        raw = np.vstack([raw, parents])
     header = {'ScanningRanges': ranges or [[float(plan.min()), float(plan.max())]],
               'StepSize': float(plan[1] - plan[0]) if len(plan) > 1 else 1.0,
               'BunchesPerChannel': per_step, 'DwellTime': period * 1e3, 'MassAMU': MASS,
@@ -409,6 +417,89 @@ def test_A_Bunch_Is_Drawn_Once_However_Many_Hits_It_Holds():
     times, readings, mean, partial = result['Series']['Cooler']
     assert len(times) == len(readings) == len(mean) == len(partial) == bunches
     assert partial[0] and partial[-1] and not partial[len(partial) // 2]
+
+
+# ── The detectors ───────────────────────────────────────────────
+
+def FLAT(times, count, rng):
+    """DC: hits spread evenly over the window."""
+    return rng.uniform(0.0, 200.0, count)
+
+
+@pytest.mark.parametrize('bunched', [True, False])
+def test_A_Pmt_That_Afterpulses_Is_Flagged_With_A_Dead_Time_Suggested_And_Nothing_Cut(bunched):
+    header, raw, monitor = _Run(scans=150, afterpulse={3: 0.05}, bunched=bunched,
+                                tof=None if bunched else FLAT, gate=(48.0, 56.0) if bunched
+                                else None)
+    result = sp.Analyse(header, raw, monitor, LASER)
+    check = _Check(result, 'Afterpulsing, channel 3')
+    assert check['Verdict'] == sp.WARN and check['Value'] == pytest.approx(0.05 / 1.05, abs=0.01)
+    assert 'never applied here' in check['Message']
+    assert any(f.startswith('Channel 3 afterpulses') for f in result['Flagged'])
+    for channel in (1, 2, 4):
+        assert _Check(result, f'Afterpulsing, channel {channel}')['Verdict'] == sp.PASS
+    # past 5 us no afterpulse is left, and that is what DENIS is offered
+    assert result['Detectors'][3]['suggested_dead_time_us'] == 5.0
+    assert 'Afterpulse' in result['Series'] and 'Dispersion' in result['Series']
+
+
+def test_No_Pmt_Is_Flagged_On_Runs_Without_Afterpulses_At_Any_Rate_Or_Mode():
+    flagged = 0
+    for seed in range(30):
+        for bunched in (True, False):
+            header, raw, monitor = _Run(scans=30, seed=seed, bunched=bunched,
+                                        tof=None if bunched else FLAT,
+                                        gate=(48.0, 56.0) if bunched else None)
+            result = sp.Analyse(header, raw, monitor, LASER)
+            flagged += any('afterpulses' in f for f in result['Flagged'])
+    assert flagged <= 1                                 # of 60: about 1 % at most
+    # and a run of a hit a minute is too thin to judge, not afterpulsing
+    header, raw, monitor = _Run(rate=_Flat(0.01))
+    result = sp.Analyse(header, raw, monitor, LASER)
+    assert {_Check(result, f'Afterpulsing, channel {c}')['Verdict'] for c in (1, 2, 3, 4)} == {
+        sp.NA}
+
+
+def test_The_Number_Of_Ions_Spreading_From_Bunch_To_Bunch_Is_Not_Taken_For_Afterpulsing():
+    """It raises every PMT's pairs alike, and their scatter across scans: the
+    other PMTs carry it, so none is flagged, and it shows as the excess they
+    share."""
+    header, raw, monitor = _Run(scans=60, ions=0.6)
+    result = sp.Analyse(header, raw, monitor, LASER)
+    assert not any('afterpulses' in f for f in result['Flagged'])
+    common = float(re.search(r"of the excess, ([+-][\d.]+) is common",
+                             _Check(result, 'Afterpulsing, channel 1')['Message']).group(1))
+    ratio = result['Series']['Dispersion'][1][1][0]
+    assert ratio > 1.15 and common == pytest.approx(ratio - 1.0, abs=0.12)
+
+
+def test_A_Pmt_Counting_In_Bursts_Is_Flagged_For_Its_Own_Scatter():
+    """A few bunches with dozens of counts on one PMT (a ringing discriminator):
+    its scatter across scans, not the others', far beyond Poisson's."""
+    header, raw, monitor = _Run(scans=40)
+    rng = np.random.default_rng(8)
+    bursts = []
+    for bunch in rng.choice(np.unique(raw[:, 2]), 12, replace=False):
+        row = raw[raw[:, 2] == bunch][0].copy()
+        burst = np.repeat(row[None, :], 60, axis=0)
+        burst[:, 3], burst[:, 4] = 2, rng.uniform(40.0, 60.0, 60)
+        bursts.append(burst)
+    result = sp.Analyse(header, np.vstack([raw, *bursts]), monitor, LASER)
+    assert _Check(result, 'Afterpulsing, channel 2')['Verdict'] == sp.WARN
+    assert any(f.startswith("Channel 2's counts scatter") and 'too small' in f
+               for f in result['Flagged'])
+    for channel in (1, 3, 4):
+        assert _Check(result, f'Afterpulsing, channel {channel}')['Verdict'] == sp.PASS
+
+
+def test_The_Report_Offers_DENIS_The_Dead_Time_And_Applies_None(tmp_path):
+    header, raw, monitor = _Run(scans=150, afterpulse={3: 0.05})
+    result = sp.Analyse(header, raw, monitor, LASER)
+    path = str(tmp_path / 'run_0001.asdf')
+    with open(sp.Export(path, result), encoding='utf-8') as fh:
+        exported = yaml.safe_load(fh)
+    assert exported['detectors']['channel 3']['suggested_dead_time_us'] == 5.0
+    assert 'scan_filters' not in exported
 
 
 # ── The pieces ──────────────────────────────────────────────────

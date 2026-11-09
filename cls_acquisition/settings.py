@@ -94,6 +94,10 @@ DEFAULTS = {
     # window (A. Raggio, November 2026), recorded with each run; Scan Performance
     # judges a run by it and plots it over the readings
     'cooler': {'rolling_s': 15.0},
+    # the PMTs as Scan Performance judges them: counts within this dead time of one on
+    # the same PMT are tested for afterpulsing, and the dead time DENIS might apply is
+    # suggested from them; nothing here applies it
+    'detectors': {'dead_time_us': 10.0},
     # how the laser meets the ions, as DENIS takes it: the Scan Performance tab
     # converts the wavemeter's drift into scan volts with these
     'laser': {
