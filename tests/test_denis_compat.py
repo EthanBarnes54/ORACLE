@@ -56,7 +56,9 @@ print('opened', data.Size, 'events; gain', round(fit.coeffs_v[1], 5))
 '''
 
 
-@pytest.mark.skipif(not os.path.exists(PYTHON), reason="DENIS is not installed beside ORACLE")
+# with DENIS not found, PYTHON is a relative path that ORACLE's own .venv can satisfy
+@pytest.mark.skipif(not DENIS or not os.path.exists(PYTHON),
+                    reason="DENIS is not installed beside ORACLE")
 def test_A_Run_ORACLE_Writes_Opens_In_cls_tools_And_DENIS(qapp, monkeypatch, tmp_path):
     window = Open_Window(monkeypatch, tmp_path)
     try:

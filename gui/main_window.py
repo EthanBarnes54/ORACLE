@@ -43,7 +43,7 @@ again if any one of them fails to open.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.4.0'
+__version__ = '0.4.1'
 
 import contextlib
 import ctypes
