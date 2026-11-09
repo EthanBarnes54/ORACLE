@@ -9,7 +9,7 @@ apart at the platform, and its integral non-linearity puts it a few
 hundred mV off any line, each converter (one a branch) its own way. A.
 Raggio's bench table (November 2026) measures it point by point, slowly
 and away from the mains (5 x 200 ms a point), with 0 V checks between,
-and each run is then fitted to it, V = a + b*T (scan_table.Fit, WP5):
+and each run is then fitted to it, V = a + b*T (:func:`Fit_Run`, WP5):
 that took a linear calibration's 262 mV rms to about 10 mV, day to day.
 
 A table is built from a linearity sweep's record (hardware_calibration):
@@ -48,6 +48,8 @@ COLUMNS = ('channel', 'code', 'setpoint_v', 'volts', 'sigma_v', 'readings')
 CHECK_RMS_V = 0.015                 # a table check's residual it passes at (to tune on the bench)
 WARMING_V_PER_H = 0.05              # 0 V checks still drifting this fast: warming up
 DRIFT_TOLERANCE_V = 0.010           # the 0 V drift worth a check: the table's own repeatability
+REPEATABILITY_V = 0.010             # a table's day to day, once 0 V is taken out (Raggio)
+STALE_FACTOR = 2.0                  # a run's residual this many times what is expected: stale
 BRANCHES = ((CH_POS, 'positive'), (CH_NEG, 'negative'))
 
 
@@ -240,9 +242,32 @@ def Fit(table, channels, codes, readback, sigma=None):
     chi2 = (float(np.sum((residual * weights) ** 2) / dof) if weights is not None
             else None)
     return {'Table': table.Id, 'A_V': float(a), 'A_Err_V': float(np.sqrt(cov[1, 1])),
-            'B': float(b), 'B_Err': float(np.sqrt(cov[0, 0])),
+            'B': float(b), 'B_Err': float(np.sqrt(cov[0, 0])), 'Cov_AB': float(cov[0, 1]),
             'Rms_V': float(np.sqrt(np.mean(residual ** 2))), 'Chi2': chi2,
-            'Points': int(inside.sum()), 'Interpolated': int(np.count_nonzero(~exact[inside]))}
+            'Points': int(inside.sum()), 'Interpolated': int(np.count_nonzero(~exact[inside])),
+            'Reach_T_V': float(np.max(np.abs(x)))}
+
+
+def Fit_Run(table, channels, codes, readback, noise_v):
+    """A run's calibration fitted to the table, V = a + b*T (WP5), each point
+    weighted by the meter's noise ``noise_v`` (platform volts) and the
+    table's own repeatability: the fit (:func:`Fit`) with ``Expected_V``,
+    the residual those two account for, and ``Verdict``, WARN when the
+    residual is STALE_FACTOR times that, as the table no longer describes
+    the converters (stale, or the hardware changed). Never a refusal: the
+    table is applied after collection."""
+    expected = float(np.hypot(noise_v, REPEATABILITY_V))
+    fit = Fit(table, channels, codes, readback, np.full(len(readback), expected))
+    stale = fit['Points'] >= 10 and fit['Rms_V'] > STALE_FACTOR * expected
+    fit.update(Expected_V=expected, Verdict='WARN' if stale else 'PASS')
+    return fit
+
+
+def Summary(fit):
+    """One line of a run's fit to the table, for the ELOG and the log."""
+    return (f"a = {fit['A_V'] * 1e3:+.1f} ± {fit['A_Err_V'] * 1e3:.1f} mV, b - 1 = "
+            f"{(fit['B'] - 1.0) * 1e6:+.1f} ± {fit['B_Err'] * 1e6:.1f} ppm, residual "
+            f"{fit['Rms_V'] * 1e3:.1f} mV rms over {fit['Points']} points  {fit['Verdict']}")
 
 
 def Check(table, channels, codes, readback):
@@ -282,14 +307,20 @@ def Matches(table, identity):
         return False, (f"Table {table.Id[:8]} does not record the rack it was measured on, so "
                        f"whether it describes this one cannot be checked.")
     mine_dac, their_dac = identity.get('Dac') or {}, theirs.get('Dac') or {}
+    if (theirs.get('Kind') == identity.get('Kind') and not their_dac.get('UniqueId')
+            and their_dac.get('Board') and their_dac.get('Board') in str(mine_dac.get('Board'))):
+        return False, (f"Table {table.Id[:8]} records its DAC board ({their_dac['Board']}) but "
+                       f"not the board's unique ID, so whether it is this rack's board cannot "
+                       f"be checked; the table check will say whether it still fits.")
     same = (theirs.get('Kind') == identity.get('Kind')
             and their_dac.get('Board') == mine_dac.get('Board')
             and their_dac.get('UniqueId') == mine_dac.get('UniqueId'))
+    board = lambda dac: ' '.join(str(dac[k]) for k in ('Board', 'UniqueId') if dac.get(k))
     return same, ("" if same else
                   f"Table {table.Id[:8]} was measured on another rack (its DAC "
-                  f"{their_dac.get('Board')} {their_dac.get('UniqueId') or ''}, here "
-                  f"{mine_dac.get('Board')} {mine_dac.get('UniqueId') or ''}): it is only "
-                  f"applied after collection, but re-measure the table before trusting it.")
+                  f"{board(their_dac) or 'unrecorded'}, here {board(mine_dac) or 'unknown'}): "
+                  f"it is only applied after collection, but re-measure the table before "
+                  f"trusting it.")
 
 
 def Save(table, directory):

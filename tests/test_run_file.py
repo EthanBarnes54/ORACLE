@@ -112,3 +112,14 @@ def test_An_Earlier_Run_Is_Read_With_The_Divider_It_Recorded(tmp_path):
     later = run_file.Create(directory, _Header(2))
     [(run, _, _, divider)] = run_file.Earlier_Calibrations(later, directory)
     assert (run, divider) == (1, 1000.2)
+
+
+def test_The_Runs_Before_Are_Read_For_Their_Fit_To_The_Same_Table(tmp_path):
+    directory = str(tmp_path)
+    for run, table, a in ((1, 'T1', -0.90), (2, 'T2', -0.95), (3, 'T1', -0.97), (4, None, 0.0)):
+        record = {'TableFit': {'Table': table, 'A_V': a, 'B': 1.00001}} if table else {}
+        run_file.Create(directory, _Header(run), record)
+    assert run_file.Earlier_Table_Fits(directory, 'T1') == [(3, -0.97, 1.00001),
+                                                            (1, -0.90, 1.00001)]
+    assert run_file.Earlier_Table_Fits(directory, 'T1', before=3) == [(1, -0.90, 1.00001)]
+    assert run_file.Earlier_Table_Fits(directory, None) == []

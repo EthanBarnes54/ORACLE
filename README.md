@@ -52,6 +52,7 @@ The window is the collinear DAQ's, with the bench calibration tool's measurement
 
 ### Scan Calibration
 - A stand-alone calibration over any range; the plots fill point by point (readback against set, readback minus set, measured step size), and the gate's verdict and every check are listed when it finishes
+- **Against the bench table**: with a table in force, every calibration (a scan's own, or one taken here) is fitted to it, V = a + b·T at each point's DAC code, each point weighted by the meter's noise (from the held readings) and the table's own 10 mV repeatability. Reported: a (the run's 0 V level) and b − 1 with their errors, the residual against what those two account for (a WARN, never a refusal, when it is twice that: the table is stale or the hardware changed), how many points fell between the table's codes, and a and b of the last runs on the same table. The fitted table is drawn over the readback's departure from the setpoint. It is recorded with the run (`TableFit`) and in its ELOG entry; CalSet and CalReadback are unchanged
 
 ### Hardware Calibration
 The bench calibration tool (cls-cal, A. Raggio), in ORACLE: the measurements that answer the briefing's questions about the rack itself. Each drives the DAC by step and confirm, ramps every unmeasured move (rate and step above the pages), ramps back to 0 V on every exit, stop or failure, and writes its record under `<data>/hardware_calibration/` **as it goes**, so a measurement that fails or is stopped keeps what it took; the record ends with its status and results. On the rack each first asks the operator to arm the high voltage, naming the most it will apply.
@@ -216,6 +217,7 @@ One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look 
 |---|---|
 | `InteractionRegion` | `CEC` or `LCR`; empty if not stated |
 | `ScanTable` | the ID of the bench table in force when the run was taken, or empty |
+| `TableFit` | the calibration fitted to that table, V = a + b·T: `A_V`, `A_Err_V`, `B`, `B_Err`, `Cov_AB`, `Rms_V`, `Expected_V`, `Chi2`, `Points`, `Interpolated`, `Verdict`; or the sentence saying why it was not fitted |
 | `ReferenceRun` | whether the run was taken to measure the beam's offset from the cooler's readback |
 | `PmtHv` | the PMTs' high voltage: `Pvs`, read from EPICS where their names are set, and `Entered`, as typed on the Scan tab |
 
@@ -231,7 +233,7 @@ A run's number is one more than the highest in the data folder, counted when it 
 
 For A. Raggio to review (the November 2026 meeting's Q3); ORACLE adapts to whatever is agreed.
 
-**Bench table**, `<data>/tables/table_<YYYYMMDD>_<id8>.csv`: one row per DAC converter and code, `channel, code, setpoint_v, volts, sigma_v, readings`. `channel` is the converter (0 drives the positive branch, 1 the negative); `code` the 16-bit code it held; `volts` the platform voltage it gave relative to the 0 V level at the time, to the microvolt; `sigma_v` its standard error; `setpoint_v` the setpoint that first wrote the code, for a per-setpoint view. Above the columns, `# key: value` lines (each value JSON) give the table's `id` (the SHA-256 of every number in the file, so a changed file is found), when it was measured, the record it came from, the rack it was measured on, the dividers, the 0 V level's drift during it and the 0 V check interval it recommends. `pandas.read_csv(path, comment='#')` reads the rows. A run's codes are in its `ORACLE` record (`DacCodes`, in the order of `CalSet`), and the table it was taken under is `ScanTable`, so a run's calibration can be fitted to its own table as V = a + b·T(code).
+**Bench table**, `<data>/tables/table_<YYYYMMDD>_<id8>.csv`: one row per DAC converter and code, `channel, code, setpoint_v, volts, sigma_v, readings`. `channel` is the converter (0 drives the positive branch, 1 the negative); `code` the 16-bit code it held; `volts` the platform voltage it gave relative to the 0 V level at the time, to the microvolt; `sigma_v` its standard error; `setpoint_v` the setpoint that first wrote the code, for a per-setpoint view. Above the columns, `# key: value` lines (each value JSON) give the table's `id` (the SHA-256 of every number in the file, so a changed file is found), when it was measured, the record it came from, the rack it was measured on, the dividers, the 0 V level's drift during it and the 0 V check interval it recommends. `pandas.read_csv(path, comment='#')` reads the rows. A run's codes are in its `ORACLE` record (`DacCodes`, in the order of `CalSet`), and the table it was taken under is `ScanTable`, so a run's calibration can be fitted to its own table as V = a + b·T(code); ORACLE's own fit is `TableFit`, with a and b and their errors and covariance.
 
 ## The time tagger's wrapper
 

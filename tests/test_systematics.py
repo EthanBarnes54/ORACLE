@@ -104,3 +104,18 @@ def test_The_Elog_Gets_A_Short_Block_And_The_Whole_Table_On_Request(tmp_path):
     assert written.endswith('run_0007_systematics.yaml')
     assert [s['source'] for s in exported['sources']] == [
         r['Source'] for r in result['Systematics']]
+
+
+def test_A_Run_Fitted_To_The_Bench_Table_Gives_That_Fits_Errors():
+    header, raw, monitor = _Run()
+    header[ORACLE_KEY].update(ScanTable='ab' * 32, TableFit={
+        'Table': 'ab' * 32, 'A_V': -0.99, 'A_Err_V': 0.004, 'B': 1.00002, 'B_Err': 3e-6,
+        'Cov_AB': 0.0, 'Rms_V': 0.0115, 'Reach_T_V': 2000.0})
+    rows = _Rows(sp.Analyse(header, raw, monitor, LASER, declared=DECLARED))
+    calibration = rows['Run calibration']
+    assert calibration['Kind'] == systematics.MEASURED
+    assert calibration['Detail'].startswith('Fitted to bench table abababab: a ± 4.0 mV')
+    # at the scan's furthest point: a's error and b's over 2 kV, 7.2 mV together
+    assert calibration['Volts'] == pytest.approx(np.hypot(0.004, 3e-6 * 2000.0))
+    assert 'bench table abababab was in force' in rows['Bench table repeatability'][
+        'Detail'].lower()

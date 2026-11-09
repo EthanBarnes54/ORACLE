@@ -18,6 +18,11 @@ keeps every control that could interfere disabled until it has finished.
 Readings are scaled to the platform by the scan divider's ratio, the
 settings' for a calibration taken here and the run's own for a run shown.
 
+With a bench table in force, the calibration is fitted to it, V = a +
+b*T (scan_table.Fit_Run): reported beside the gate, with the runs before
+it on the same table, and drawn over the readings' departure from the
+setpoint, the converters' shape the table holds.
+
 Depends on: numpy, PySide6; cls_acquisition.calibration,
 cls_acquisition.scan_plan, gui.plots, gui.shared_widgets.
 """
@@ -28,9 +33,9 @@ from PySide6.QtWidgets import (QGridLayout, QGroupBox, QHBoxLayout, QPushButton,
 
 from cls_acquisition import calibration
 from cls_acquisition.scan_plan import Scan_Plan
-from gui import plots
+from gui import plots, theme
 from gui.shared_widgets import (REPORT_WIDTH, Figure, Form, Muted, Report_Html, Report_Label,
-                                Scroll_Column, Spin, Verdict_Badge)
+                                Report_Table, Scroll_Column, Spin, Verdict_Badge)
 
 # the gate's checks as a report names them
 CHECK_NAMES = {'dac_calibration': 'DAC calibration'}
@@ -77,7 +82,8 @@ class Calibration_Tab(QWidget):
             "offset or a straight-line trend is absorbed by the linear calibration; curvature "
             "and periodic structure (the DAC's integral non-linearity, and its rounding to "
             "codes 0.305 V apart) remain in the voltage axis unless a DAC correction is in "
-            "force."))
+            "force. With a bench table in force, the line is the table fitted to the "
+            "readings, a + b·T, less the setpoint."))
         self.Step_Plot = plots.Plot('Measured voltage step', set_axis, ('Readback step', 'V'), (
             "The change in readback from one calibration step to the next, which should equal "
             "the commanded step size.",
@@ -86,6 +92,8 @@ class Calibration_Tab(QWidget):
             "that had not settled when it was read."))
         self._Curves = [p.plot(**dict(plots.Dots(), pen=plots.Pen()))
                         for p in (self.Readback_Plot, self.Difference_Plot, self.Step_Plot)]
+        # the bench table fitted to the readings, over their departure from the setpoint
+        self._Table_Curve = self.Difference_Plot.plot(pen=plots.Pen(theme.TRACE_ALT))
         plot_grid.addWidget(self.Readback_Plot, 0, 0, 1, 2)
         plot_grid.addWidget(self.Difference_Plot, 1, 0)
         plot_grid.addWidget(self.Step_Plot, 1, 1)
@@ -105,6 +113,7 @@ class Calibration_Tab(QWidget):
     def Begin(self, plan):
         self._Set, self._Readback = [], []
         self._Draw()
+        self._Table_Curve.setData([], [])
         self.Report_Label.setText(f"Calibrating {len(plan)} setpoints...")
 
     def Show_Progress(self, point):
@@ -120,9 +129,12 @@ class Calibration_Tab(QWidget):
         self._Curves[1].setData(set_v, readback - set_v)
         self._Curves[2].setData(set_v[1:], np.diff(readback))
 
-    def Show_Report(self, report):
+    def Show_Report(self, report, table=None, history=(), model=None):
         """The gate's verdict, the figures it decided on, and each check's
-        verdict over what it found."""
+        verdict over what it found; then the fit to the bench table,
+        ``table`` (scan_table.Fit_Run's, or a sentence why there is none),
+        with the ``history`` of (run, a, b) on the same table, and the
+        fitted table ``model`` = (setpoints, volts) drawn."""
         figures = []
         if 'TrackingR' in report:
             figures = [('Tracking |r|', f"{report['TrackingR']:.5f}"),
@@ -134,7 +146,46 @@ class Calibration_Tab(QWidget):
             name = CHECK_NAMES.get(check['Check'], check['Check'].capitalize())
             checks += [(name, Verdict_Badge(check['Verdict'])), Muted(check['Message'])]
         self.Report_Label.setText(Report_Html([((report['Verdict'], 'Calibration gate'), figures),
-                                               ('Checks', checks)]))
+                                               ('Checks', checks),
+                                               *self._Table_Sections(table, history)]))
+        self._Show_Model(model)
+
+    def _Show_Model(self, model):
+        if model is None:
+            self._Table_Curve.setData([], [])
+            return
+        setpoint, volts = (np.asarray(v, dtype=float) for v in model)
+        order = np.argsort(setpoint)
+        self._Table_Curve.setData(setpoint[order], (volts - setpoint)[order])
+
+    @staticmethod
+    def _Table_Sections(table, history):
+        """The fit to the bench table as report sections."""
+        if table is None:
+            return []
+        if isinstance(table, str):
+            return [('Against the bench table', [Muted(table)])]
+        rows = [('Table', table['Table'][:8]),
+                ('a (0 V level)', f"{Figure(table['A_V'] * 1e3, '+.1f')} ± "
+                                  f"{Figure(table['A_Err_V'] * 1e3, '.1f', 'mV')}"),
+                ('b − 1', f"{Figure((table['B'] - 1.0) * 1e6, '+.1f')} ± "
+                          f"{Figure(table['B_Err'] * 1e6, '.1f', 'ppm')}"),
+                ('Residual rms', f"{Figure(table['Rms_V'] * 1e3, '.1f')} mV against "
+                                 f"{Figure(table['Expected_V'] * 1e3, '.1f', 'mV')} expected"),
+                ('Points', f"{table['Points']}" + (f", {table['Interpolated']} between the "
+                                                    f"table's codes"
+                                                    if table['Interpolated'] else ''))]
+        if table['Verdict'] != 'PASS':
+            rows.append(Muted("The readings sit further from the table than the meter and "
+                              "the table's repeatability account for: the table is stale or "
+                              "the hardware changed. Measure the table again."))
+        sections = [((table['Verdict'], 'Against the bench table'), rows)]
+        if history:
+            sections.append(('Earlier runs on this table', [Report_Table(
+                ('Run', 'a (mV)', 'b − 1 (ppm)'),
+                [(run, Figure(a * 1e3, '+.1f'), Figure((b - 1.0) * 1e6, '+.1f'))
+                 for run, a, b in history])]))
+        return sections
 
     def Show_Failure(self, message):
         self.Report_Label.setText(Report_Html([(('FAIL', 'Calibration failed'), [message])]))
@@ -142,13 +193,15 @@ class Calibration_Tab(QWidget):
     def Inputs(self):
         return [('from', self.From_Box), ('to', self.To_Box), ('step', self.Step_Box)]
 
-    def Show_Run(self, name, commanded, readings, report=None, divider=calibration.DIVIDER):
+    def Show_Run(self, name, commanded, readings, report=None, divider=calibration.DIVIDER,
+                 table=None, history=(), model=None):
         """A run file's own calibration: the voltages commanded and the meter's
         readings, as written, scaled by the run's own ``divider``, with the
         gate's ``report`` on them as it was given when the run was taken,
         from ORACLE's record of it. A run with no record gets its line and
         where its branches meet 0 V; the gate is not run again, since a file
-        keeps no stamps."""
+        keeps no stamps. ``table``, ``history`` and ``model`` are its fit to
+        the bench table, as :meth:`Show_Report` takes them."""
         commanded = np.asarray(commanded, dtype=float)
         readback = np.asarray(readings, dtype=float) * divider
         if len(commanded) != len(readback) or len(commanded) < 2:
@@ -157,12 +210,14 @@ class Calibration_Tab(QWidget):
             self.Report_Label.setText(Report_Html([(name, [
                 f"No usable calibration: {len(readback)} readings for {len(commanded)} "
                 f"setpoints."])]))
+            self._Show_Model(None)
             return
         self._Set, self._Readback = list(commanded), list(readback)
         self._Draw()
         if report is not None:
-            self.Show_Report(report)
+            self.Show_Report(report, table, history, model)
             return
+        self._Show_Model(None)
         gain, offset, rms = calibration.Line_Fit(commanded, readback)
         seam = calibration.Step_At_Zero(commanded, readback)
         self.Report_Label.setText(Report_Html([(f"{name}, its straight line", [

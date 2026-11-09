@@ -122,6 +122,43 @@ def test_The_Library_Keeps_Every_Table_As_It_Was_And_Suggests_The_Racks_Own(oct2
     same, why = st.Matches(table, other)
     assert not same and 'measured on another rack' in why and 'B2' in why
     assert [p for p, _ in st.Library(str(tmp_path))] == [path]
+    # the bench tool recorded the board but not its unique ID: that cannot be checked
+    unknown = st.Table(table.Channels, dict(table.Meta, id=None, rack={
+        'Kind': 'hardware', 'Dac': {'Board': 'USB-231', 'UniqueId': None}}))
+    same, why = st.Matches(unknown, rack)
+    assert not same and "not the board's unique ID" in why
+
+
+def _Run_Calibration(points, rng, low=-2000.0, high=-1000.0, every=5, noise=0.007):
+    """A run's calibration out of a sweep: every ``every`` volts across the
+    scan, one reading each at the meter's ``noise``."""
+    pick = [p for p in points if p['Kind'] == 'sweep' and low <= p['Set_V'] <= high
+            and int(p['Set_V']) % every == 0]
+    return (np.array([p['Channel'] for p in pick]), st.Codes([p['Dac_V'] for p in pick]),
+            np.array([p['Read_V'] for p in pick]) + rng.normal(0.0, noise, len(pick)))
+
+
+def test_A_Runs_Calibration_Fits_The_Table_With_Its_0_V_Level_And_Gain(oct25, oct26):
+    table, _ = oct25
+    channels, codes, readback = _Run_Calibration(oct26[0], np.random.default_rng(1))
+    fit = st.Fit_Run(table, channels, codes, readback, 0.007)
+    # a is the run's 0 V level, known to a few mV over two hundred points (Raggio: 6 mV
+    # over 293); b within tens of ppm of one; the residual the meter and the table's own
+    assert fit['Verdict'] == 'PASS' and fit['Points'] == len(readback) > 190
+    assert fit['A_V'] == pytest.approx(-0.99, abs=0.02) and fit['A_Err_V'] < 0.006
+    assert abs(fit['B'] - 1.0) < 50e-6 and fit['Chi2'] == pytest.approx(1.0, abs=0.3)
+    assert fit['Rms_V'] < st.STALE_FACTOR * fit['Expected_V']
+    assert st.Summary(fit).startswith('a = -99') and st.Summary(fit).endswith('PASS')
+
+
+def test_A_Table_That_No_Longer_Describes_The_Converters_Is_Warned_Of(oct25, oct26):
+    table, _ = oct25
+    channels, codes, readback = _Run_Calibration(oct26[0], np.random.default_rng(2))
+    # the converters' shape moved by 40 codes since the table was measured
+    moved = st.Table({c: dict(t, volts=np.roll(t['volts'], 40))
+                      for c, t in table.Channels.items()}, {})
+    fit = st.Fit_Run(moved, channels, codes, readback, 0.007)
+    assert fit['Verdict'] == 'WARN' and fit['Rms_V'] > 0.1
 
 
 def test_A_Sweep_Without_Its_0_V_Checks_Makes_No_Table():

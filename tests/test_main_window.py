@@ -61,6 +61,7 @@ def _Run_Files(w):
 
 def test_A_Scan_Is_Calibrated_Gated_Written_And_Closed(qapp, window):
     state = window._Link.State
+    window.Scan.Per_Step_Box.setValue(30)       # hits enough that the run is never empty
     window.Scan.Start_Button.click()
     assert not window.Scan.Control_Group.isEnabled()          # disabled at once
     assert _Pump(qapp, lambda: state.Scanning.is_set()), window.Dialogs

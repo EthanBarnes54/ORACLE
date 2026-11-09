@@ -403,9 +403,18 @@ class Main_Window(QMainWindow):
             per_scan = len(plan) * max(int(header['BunchesPerChannel']), 1)
             self._Shown_Round = int(raw[:, 2].max() // per_scan) + 1
         self.Run_Label.setText(str(header.get('Run')))
+        fit, model, history = record.get('TableFit'), None, ()
+        if isinstance(fit, dict):
+            table = self._Library_Table(fit['Table'])
+            codes = record.get('DacCodes') or {}
+            if table is not None and codes.get('Code'):
+                volts, _ = table.Volts(codes['Channel'], codes['Code'])
+                model = (header.get('CalSet', []), fit['A_V'] + fit['B'] * volts)
+            history = run_file.Earlier_Table_Fits(self._Data_Dir, fit['Table'],
+                                                  before=header.get('Run'))
         self.Calibration.Show_Run(name, header.get('CalSet', []), header.get('CalReadback', []),
                                   record.get('Calibration'),
-                                  scan_performance.Dividers(header)[0])
+                                  scan_performance.Dividers(header)[0], fit, history, model)
         self._Refresh_Runs(keep=path)
         self._Analyse(path, run)
         self.Tabs.setCurrentWidget(self.Scan)
@@ -555,8 +564,11 @@ class Main_Window(QMainWindow):
     def _Begin_Scan(self, pending, cal, report):
         """After the calibration: the gate's verdict, then the file and the scan."""
         applied, description = cal.Dac_Correction
+        fit = getattr(cal, 'Table_Fit', None)
         text = (pending['text'] + f"Calibration:  {calibration.Summary(report)}\n"
-                f"DAC correction: {description}\n"
+                + (f"Bench table {fit['Table'][:8]}: {scan_table.Summary(fit)}\n" if fit
+                   else "")
+                + f"DAC correction: {description}\n"
                 + ''.join(f"  {c['Verdict']}  {c['Check']}: {c['Message']}\n"
                           for c in report['Checks'] if c['Verdict'] != calibration.PASS))
         if report['Verdict'] == calibration.REJECT:
@@ -607,6 +619,10 @@ class Main_Window(QMainWindow):
                   'TaggerLevels': self._Tagger_Levels,
                   'ReferenceRun': pending['setup']['ReferenceRun'],
                   'ScanTable': self._Table.Id if self._Table else None,
+                  # the calibration fitted to it, V = a + b*T, or why it was not; CalSet and
+                  # CalReadback as ever
+                  'TableFit': getattr(cal, 'Table_Fit', None) or getattr(cal, 'Table_Note',
+                                                                         None),
                   # the window the analysis takes the cooler's rolling mean over
                   'CoolerRollingS': self._Rolling_S,
                   'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
@@ -834,8 +850,14 @@ class Main_Window(QMainWindow):
         self._Show_State()              # disable the controls now, not at the next tick
 
     def _Calibrated(self, cal, report):
-        self.Calibration.Show_Report(report)
+        cal.Table_Fit, cal.Table_Note, model = self._Fit_Table(cal)
+        self.Calibration.Show_Report(
+            report, cal.Table_Fit or cal.Table_Note, run_file.Earlier_Table_Fits(
+                self._Data_Dir, self._Table.Id) if self._Table else (), model)
         log.info("Calibration: %s", calibration.Summary(report))
+        if cal.Table_Fit:
+            log.info("Against bench table %s: %s", self._Table.Id[:8],
+                     scan_table.Summary(cal.Table_Fit))
         pending, self._Pending = self._Pending, None
         if pending is not None:
             self._Begin_Scan(pending, cal, report)
@@ -995,6 +1017,30 @@ class Main_Window(QMainWindow):
         log.info("Showing the %s record %s", kind, path)
 
     # ── The bench table ──────────────────────────────────────────
+
+    def _Fit_Table(self, cal):
+        """``(fit, sentence, model)``: the calibration fitted to the table in
+        force (None, and why, when there is none or it does not cover the
+        scan), and the fitted table at each setpoint, to draw."""
+        if self._Table is None:
+            return None, ("No bench table in force (Hardware Calibration ▸ Scan table), so "
+                          "the calibration is not fitted to one."), None
+        noise = (float(np.std(cal.Held, ddof=1)) * cal.Divider if len(cal.Held) > 1
+                 else scan_table.REPEATABILITY_V)
+        try:
+            fit = scan_table.Fit_Run(self._Table, cal.Channels, cal.Codes,
+                                     cal.Readings * cal.Divider, noise)
+        except scan_table.Table_Error as e:
+            return None, str(e), None
+        table, _ = self._Table.Volts(cal.Channels, cal.Codes)
+        return fit, None, (cal.Commanded, fit['A_V'] + fit['B'] * table)
+
+    def _Library_Table(self, table_id):
+        """The library's table with ``table_id``, or None."""
+        for path, meta in scan_table.Library(self._Data_Dir):
+            if meta.get('id') == table_id:
+                return scan_table.Load(path)
+        return None
 
     def _Active_Table(self, table_id):
         """``(table, its path, sentences)`` of the table the settings name,

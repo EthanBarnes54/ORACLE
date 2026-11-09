@@ -496,14 +496,31 @@ def test_A_Bench_Table_Is_Made_From_A_Sweep_Kept_And_Named_By_Each_Run(qapp, win
     assert table.Meta['rack'] == window._Identity            # the rack it was measured on
     assert f"<td align='right'>{table.Id[:8]}</td>" in page.Report_Label.text()
     assert len(page.Residual_Plot.listDataItems()) == 2      # a branch each
-    # every run names the table it is fitted to
-    _Scan(qapp, window)
-    _Finished(qapp, window)
-    [path] = Run_Files(window)
+    # every run names the table its calibration is fitted to, and the fit
+    for _ in range(2):
+        _Scan(qapp, window)
+        _Finished(qapp, window)
+    first, path = Run_Files(window)
     header, _, _ = run_file.Read(path)
-    assert header[run_file.ORACLE_KEY]['ScanTable'] == table.Id
+    record = header[run_file.ORACLE_KEY]
+    fit = record['TableFit']
+    assert record['ScanTable'] == fit['Table'] == table.Id
+    assert fit['Verdict'] == 'PASS' and fit['Points'] == len(header['CalSet'])
+    assert fit['Interpolated'] == fit['Points']     # the sweep stepped 50 V, the scan 2 V
+    report = window.Calibration.Report_Label.text()
+    assert 'Against the bench table' in report and 'Earlier runs on this table' in report
+    assert len(window.Calibration._Table_Curve.getData()[0]) == len(header['CalSet'])
+    assert any(f"Bench table {table.Id[:8]}: a = " in text for text in window._Elog.Texts())
+    # opened, a run shows its fit as it was taken, with the runs before it on that table
+    window.Show_Run(first)
+    assert 'Earlier runs on this table' not in window.Calibration.Report_Label.text()
+    window.Show_Run(path)
+    assert 'Earlier runs on this table' in window.Calibration.Report_Label.text()
     page.Clear_Button.click()
     assert window._Table is None and settings.Load()['scan_table'] is None
+    window.Calibration.Start_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None)
+    assert 'No bench table in force' in window.Calibration.Report_Label.text()
 
 
 def test_A_Table_From_Another_Rack_Or_Missing_Is_Said_At_Start(qapp, monkeypatch, tmp_path):
@@ -521,6 +538,10 @@ def test_A_Table_From_Another_Rack_Or_Missing_Is_Said_At_Start(qapp, monkeypatch
         warning = [w for w in window.findChildren(QLabel) if w.text().strip() == 'Rack warning']
         assert warning and 'measured on another rack' in warning[0].toolTip()
         assert 'WARN' in window.Hardware.Table.Report_Label.text()
+        # it covers -3000 to -226 V, not the scan's 20 to 40 V: said, not fitted
+        window.Calibration.Start_Button.click()
+        assert Pump(qapp, lambda: window._Worker is None)
+        assert 'does not cover this scan' in window.Calibration.Report_Label.text()
     finally:
         Close_Window(qapp, window)
     window = Open_Window(monkeypatch, tmp_path, scan_table='0' * 64)
@@ -611,6 +632,7 @@ def test_The_Line_Meter_Is_Read_Precisely_Against_The_Platforms_Setpoint(qapp, w
 
 def test_A_Finished_Run_Is_Analysed_And_Its_Report_Exported(qapp, window):
     window.Scan.Reference_Check.setChecked(True)
+    window.Scan.Per_Step_Box.setValue(30)       # hits enough that the run is never empty
     _Scan(qapp, window)
     _Finished(qapp, window)
     assert Pump(qapp, lambda: window.Performance.Result is not None)
@@ -782,6 +804,7 @@ def test_The_Dividers_Set_Scale_The_Gate_The_Readbacks_And_The_Record(qapp, monk
     hardware['scan_divider']['ratio'] = 1250.0
     hardware['cooler_divider']['ratio'] = 12500.0
     window = Open_Window(monkeypatch, tmp_path, hardware=hardware)
+    window.Scan.Per_Step_Box.setValue(30)       # hits enough that the run is never empty
     try:
         assert Pump(qapp, lambda: abs(float(window.Cooler_Label.text()[:-2])
                                       - simulated.COOLER_V) < 5.0)

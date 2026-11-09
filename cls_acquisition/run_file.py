@@ -164,6 +164,30 @@ def Earlier_Calibrations(path, directory, count=3):
     return calibrations
 
 
+def Earlier_Table_Fits(directory, table_id, before=None, count=5):
+    """``(run, a, b)`` of the ``count`` runs in ``directory`` (numbered below
+    ``before``, if given) whose calibrations were fitted to the bench table
+    ``table_id``, newest first: how a run's 0 V level and gain have moved
+    against the same table. Only ORACLE's record is read, never the events."""
+    if not table_id or not os.path.isdir(directory):
+        return []
+    fits = []
+    for run, other in _Numbered(directory):
+        if before is not None and run >= before:
+            continue
+        try:
+            with asdf.open(other, memmap=False) as af:
+                fit = (af.tree.get(ORACLE_KEY) or {}).get('TableFit')
+                # a run not fitted keeps the sentence saying why instead
+                if isinstance(fit, dict) and fit.get('Table') == table_id:
+                    fits.append((run, float(fit['A_V']), float(fit['B'])))
+        except (OSError, KeyError, ValueError, TypeError):
+            continue
+        if len(fits) == count:
+            break
+    return fits
+
+
 def Monitor_Path(path):
     return path[:-len('.asdf')] + '_monitor.csv'
 

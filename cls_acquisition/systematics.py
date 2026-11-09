@@ -91,7 +91,18 @@ def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, de
     cal_set = np.asarray(header.get('CalSet', []), dtype=float)
     readback = np.asarray(header.get('CalReadback', []), dtype=float) * dividers[0]
     fit = _Calibration(cal_set[:len(readback)], readback[:len(cal_set)])
-    if fit is None:
+    table = record.get('TableFit')
+    if isinstance(table, dict):
+        # a + b*T at the table's furthest point from 0 V in the scan, with their covariance
+        reach = table['Reach_T_V']
+        axis = float(np.sqrt(table['A_Err_V'] ** 2 + (table['B_Err'] * reach) ** 2
+                             + 2.0 * table.get('Cov_AB', 0.0) * reach))
+        rows.append(_Row('Run calibration', MEASURED, axis, mhz_per_v,
+                         f"Fitted to bench table {table['Table'][:8]}: a ± "
+                         f"{table['A_Err_V'] * 1e3:.1f} mV, b ± {table['B_Err'] * 1e6:.1f} ppm, "
+                         f"the axis ± {axis:.3f} V at the scan's furthest setpoint; the "
+                         f"readings sit {table['Rms_V'] * 1e3:.1f} mV rms from the table."))
+    elif fit is None:
         rows.append(_Row('Run calibration', UNKNOWN, None, mhz_per_v,
                          "The run holds no calibration to fit."))
     else:
@@ -99,10 +110,11 @@ def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, de
         rows.append(_Row('Run calibration', MEASURED, reach, mhz_per_v,
                          f"The straight line through the run's calibration: offset ± "
                          f"{offset_error:.3f} V, gain ± {gain_error * 1e6:.0f} ppm, the axis "
-                         f"± {reach:.3f} V at the scan's ends; against the bench table once "
-                         f"there is one."))
+                         f"± {reach:.3f} V at the scan's ends; no bench table was in force."))
     rows.append(_Row('Bench table repeatability', UNKNOWN, None, mhz_per_v,
-                     "No bench table has been measured with ORACLE yet."))
+                     f"Bench table {record['ScanTable'][:8]} was in force; a table check "
+                     f"measures how well it still fits, and none has been made yet."
+                     if record.get('ScanTable') else "No bench table was in force."))
     drift = declared.get('zero_drift_v')
     rows.append(_Row('0 V drift during the run', DECLARED if drift else UNKNOWN, drift,
                      mhz_per_v, f"{drift * 1e3:.0f} mV, assumed as in the November 2026 budget "
