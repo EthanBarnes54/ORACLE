@@ -1502,7 +1502,9 @@ class Main_Window(QMainWindow):
         scan = self.Scan
         scan.Params_Group.setEnabled(not (scanning or triggering or calibrating))
         scan.Buncher_Group.setEnabled(not (scanning or triggering or calibrating))
-        scan.Control_Group.setEnabled(not (calibrating or triggering))
+        # live as the scan is, though the calibration it began from may still be winding
+        # up its thread: until then a Stop would fall on a disabled button
+        scan.Control_Group.setEnabled(scanning or not (calibrating or triggering))
         # the view a run's record holds, from Start until its last event
         locked = scanning or self._Pending is not None
         scan.Lock_View(locked)

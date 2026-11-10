@@ -157,6 +157,17 @@ def test_Stop_Now_Ends_The_Run_At_Once_And_Says_So(qapp, window):
     assert window.Scan.Start_Button.text() == 'Start scan'
 
 
+def test_Stop_Is_Live_Before_The_Calibration_Thread_Has_Wound_Up(qapp, window, monkeypatch):
+    # a scan starts from its calibration's result, while that job's thread is still
+    # winding up; held here, it would have kept Stop disabled until the next tick
+    monkeypatch.setattr(window, '_Worker_Finished', lambda: None)
+    _Scan(qapp, window, 'Sawtooth')
+    assert window._Worker is not None and window.Scan.Stop_Button.isEnabled()
+    main_window.Main_Window._Worker_Finished(window)
+    window.Scan.Stop_Button.click()
+    _Finished(qapp, window)
+
+
 def test_Stop_After_Scan_Finishes_The_Round_It_Is_In(qapp, window):
     _Scan(qapp, window, 'Sawtooth')
     window.Scan.Start_Button.click()                       # now 'Stop after scan'
