@@ -101,7 +101,7 @@ class Scan_Tab(QWidget):
                 ('Interaction region', self.Region_Combo), ('PMT HV', self.Pmt_Hv_Edit),
                 ('', self.Reference_Check))
         for row, (text, widget) in enumerate(rows):
-            grid.addWidget(QLabel(text) if text else self.Per_Step_Label, row, 1)
+            grid.addWidget(self.Per_Step_Label if text is None else QLabel(text), row, 1)
             grid.addWidget(widget, row, 2)
         top = len(rows) + 1
         grid.addWidget(QLabel('From (V)'), top, 1)

@@ -237,6 +237,9 @@ def test_A_Dc_Scan_Counts_Seconds_At_The_Dc_Trigger_With_Its_Gate_Settable(qapp,
     scan = window.Scan
     scan.Dc_Radio.setChecked(True)
     assert scan.Per_Step_Label.text() == 'Seconds per channel'
+    grid = scan.Per_Step_Box.parentWidget().layout()        # beside its box, not Reference run
+    assert len({grid.getItemPosition(grid.indexOf(w))[0]
+                for w in (scan.Per_Step_Label, scan.Per_Step_Box)}) == 1
     assert scan.Per_Step_Box.value() == pytest.approx(0.1) and scan.Bunches_Per_Step() == 100
     assert not scan.Dwell_Box.isEnabled() and not scan.Release_Box.isEnabled()
     # DC hits come through the tagger, so its window is in force and settable

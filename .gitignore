@@ -19,9 +19,10 @@ venv/
 ORIGINAL_DAQ_STUFF/
 
 # User settings (the defaults live in cls_acquisition/settings.py), and the
-# window's last inputs
+# window's last inputs and the rack the last session ran on
 settings/settings.yaml
 settings/inputs.yaml
+settings/rack.yaml
 
 # IDE / OS
 .vscode/
