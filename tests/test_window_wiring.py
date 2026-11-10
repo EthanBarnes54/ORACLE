@@ -643,6 +643,43 @@ def test_A_Bench_Table_Is_Measured_Resumed_Made_And_Checked(qapp, window, monkey
         page.Report_Label.text()
 
 
+def test_The_Health_Check_Reports_The_Rack_And_Is_Set_Against_The_Last(qapp, window,
+                                                                        monkeypatch):
+    """With no table in force: the cooler's ripple, every wired PMT counting,
+    every trigger counted and both meters on command, kept and posted on
+    request. With a table the converters do not match, its check runs first
+    and is warned of, and the rest is set against the check before."""
+    from cls_acquisition import health, scan_table
+    from tests.test_scan_table import _Points
+    monkeypatch.setattr(health, 'COOLER_S', 1.0)
+    # the simulated PMTs' background, 1.25 counts a second each at 0 V: none silent
+    monkeypatch.setattr(health, 'COUNT_S', 8.0)
+    monkeypatch.setattr(scan_table, 'CHECK', {'points': 12, 'readings': 1, 'nplc': 1.0})
+    _Fast_Bench(window)
+    page = window.Hardware.Health
+    page.Run_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None and page.Post_Button.isEnabled())
+    report = page.Report_Label.text()
+    assert 'Bench table' in report and 'No table is in force' in report
+    assert '50 Hz ripple' in report and 'Every trigger given was counted' in report
+    assert 'Both read when asked (IMM)' in report and 'first check here' in report
+    kept = health.Last(window._Data_Dir)
+    assert set(kept['Counts']) == {1, 2, 3, 4} and all(kept['Counts'].values())
+    assert kept['Cooler']['Ripple_V'] == pytest.approx(0.438, abs=0.05)
+    assert kept['Verdicts']['Triggers'] == 'PASS'
+    page.Post_Button.click()
+    assert window._Elog.Texts()[-1].startswith('HEALTH CHECK  PASS')
+
+    window._Set_Table(scan_table.Build(_Points('linearity_3kv_26oct.npz',
+                                               'zero_3kv_26oct.npz')))
+    page.Run_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None and window.Table_Check is not None
+                and page.Post_Button.isEnabled(), timeout=120.0)
+    report = page.Report_Label.text()
+    assert 'measure it again' in report and 'As at the last check' in report
+    assert window.Hardware.Pages.currentWidget() is page
+
+
 def test_A_Failed_Sweep_Keeps_Its_Partial_Analysis(qapp, window, monkeypatch):
     _Fast_Bench(window)
     fetch, calls = window._Line.Fetch_When_Done, []

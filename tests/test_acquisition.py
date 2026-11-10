@@ -60,6 +60,21 @@ def test_Nothing_Starts_While_Something_Else_Runs(loop):
     assert loop.Send('Stop_Triggering')[0]
 
 
+def test_A_Count_Of_Triggers_And_Hits_Keeps_Nothing_And_Leaves_Them_Off(loop):
+    """The health check's count: every trigger the period gives numbered and
+    read, each input's hits counted, nothing sent as data, the triggers off."""
+    ok, counted = loop.Send('Count', timing=TIMING, seconds=1.0)
+    assert ok and counted['Seconds'] == pytest.approx(1.0, abs=0.1)
+    assert counted['Expected'] == pytest.approx(200.0 * counted['Seconds'])
+    assert abs(counted['Numbered'] - counted['Expected']) <= 3
+    assert counted['Received'] == counted['Numbered']
+    assert set(counted['Counts']) <= {1, 2, 3, 4} and sum(counted['Counts'].values()) > 0
+    assert loop.Data.empty() and not loop.Pulses._Running
+    assert loop.Send('Start_Triggering', timing=TIMING)[0]
+    assert not loop.Send('Count', timing=TIMING, seconds=1.0)[0]   # not over a stream
+    assert loop.Send('Stop_Triggering')[0]
+
+
 def test_Nothing_Can_Pulse_The_Bunch_Line_During_A_Calibration(loop):
     # the bunch trigger and the calibration's readings stay apart: while the meter pairs
     # readings with setpoints the PulseBlaster, and the buncher with it, stays off

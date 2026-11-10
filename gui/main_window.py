@@ -53,8 +53,8 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, Q
                                QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea,
                                QSlider, QSplashScreen, QStyle, QTabWidget, QWidget)
 
-from cls_acquisition import (calibration, hardware_calibration, run_file, scan_performance,
-                             scan_table, settings, systematics)
+from cls_acquisition import (calibration, hardware_calibration, health, run_file,
+                             scan_performance, scan_table, settings, systematics)
 from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
@@ -268,7 +268,9 @@ class Main_Window(QMainWindow):
         hardware.Table.Measure_Button.clicked.connect(
             lambda: self._Table_Sweep(hardware.Table.Params(hardware.Ramp())))
         hardware.Table.Resume_Button.clicked.connect(self._Resume_Table)
-        hardware.Table.Check_Button.clicked.connect(self._Check_Table)
+        hardware.Table.Check_Button.clicked.connect(lambda: self._Check_Table())
+        hardware.Health.Run_Button.clicked.connect(self._Health_Check)
+        hardware.Health.Post_Button.clicked.connect(self._Post_Health)
         hardware.Table.Load_Button.clicked.connect(self._Use_Table)
         hardware.Table.Compare_Button.clicked.connect(self._Compare_Table)
         hardware.Table.Clear_Button.clicked.connect(lambda: self._Set_Table(None))
@@ -911,12 +913,13 @@ class Main_Window(QMainWindow):
         worker = Job_Worker(lambda progress, stopped: measure(
             progress=progress, stopped=stopped, records=records, **params), self)
 
+        ended = []
+
         def done(result):
             self._Finish_Records(records, 'stopped' if worker.Stopped() else 'completed',
                                  panel, result)
             panel.Show_Result(result, [record.Path for record in records.values()])
-            if then:
-                then([record.Path for record in records.values()], not worker.Stopped())
+            ended.append(([record.Path for record in records.values()], not worker.Stopped()))
 
         def failed(message):
             # analysed as far as it went, as the bench tool's results_partial was
@@ -936,6 +939,8 @@ class Main_Window(QMainWindow):
         worker.Failed.connect(failed)
         worker.finished.connect(lambda: panel.Running(False))
         worker.finished.connect(self._Worker_Finished)
+        # once the worker is gone, so ``then`` may start another
+        worker.finished.connect(lambda: then and ended and then(*ended[0]))
         panel.Begin()
         worker.start()
         self._Show_State()
@@ -1136,13 +1141,15 @@ class Main_Window(QMainWindow):
         self._Table_Sweep(dict(params, ramp=self.Hardware.Ramp(), skip=rungs),
                           {'Resumes': os.path.basename(path)})
 
-    def _Check_Table(self):
-        """The table in force checked against the converters as they are now."""
+    def _Check_Table(self, then=None):
+        """The table in force checked against the converters as they are now;
+        ``then()`` follows a check that ends without a fault."""
         if self._Table is not None:
             params = self.Hardware.Table.Check_Params(self._Table, self.Hardware.Ramp(),
                                                       int(time.time()) % 1000000)
             self._Table_Sweep(params, {'Purpose': 'table check', 'ScanTable': self._Table.Id},
-                              self._Table_Checked)
+                              lambda paths, completed: (self._Table_Checked(paths, completed),
+                                                        then and then()))
 
     def _Table_Checked(self, paths, completed):
         points = [p for p in hardware_calibration.Read_Linearity(paths[0])
@@ -1161,6 +1168,55 @@ class Main_Window(QMainWindow):
                  scan_table.Summary(dict(fit, Verdict=verdict)))
         self.Hardware.Table.Show_Check(verdict, fit, paths[0])
         self.Hardware.Pages.setCurrentWidget(self.Hardware.Table)
+
+    # ── The health check ─────────────────────────────────────────
+
+    def _Health_Check(self):
+        """The health check: the table check first, if a table is in force
+        and the page asks for it, then what the rack says of itself."""
+        if self._Worker is not None:
+            return
+        self.Table_Check = None
+        if self._Table is not None and self.Hardware.Health.Table_Check.isChecked():
+            self._Check_Table(then=self._Health_Rest)
+        else:
+            self._Health_Rest()
+
+    def _Health_Rest(self):
+        page = self.Hardware.Health
+        self.Hardware.Pages.setCurrentWidget(page)
+        try:
+            timing = self.Scan.Timing()
+        except ValueError as e:
+            page.Show_Failure(f"The scan tab's timing gives no triggers to count: {e}")
+            return
+        inputs = range(1, len(self._Tagger_Levels['Inputs']) + 1)
+        worker = Job_Worker(lambda progress, stopped: health.Run(
+            self._Link, self._Line, self._Cooler, self._Cooler_Divider, timing, inputs,
+            progress, stopped), self)
+        worker.Progress.connect(page.Show_Progress)
+        worker.Done.connect(self._Health_Done)
+        worker.Failed.connect(page.Show_Failure)
+        worker.finished.connect(self._Worker_Finished)
+        self._Worker = worker
+        page.Begin()
+        worker.start()
+        self._Show_State()
+
+    def _Health_Done(self, found):
+        checks = health.Judge(found, health.Last(self._Data_Dir), self.Table_Check)
+        try:
+            path = health.Save(self._Data_Dir, found, checks)
+        except OSError as e:
+            log.exception("Keeping the health check failed")
+            path = f"not kept: {e}"
+        self._Health = (checks, found['When'])
+        log.info("Health check %s: %s", health.Verdict(checks), path)
+        self.Hardware.Health.Show(found, checks, path)
+
+    def _Post_Health(self):
+        self._Elog.Append(health.Elog_Text(*self._Health), self._Experiment())
+        self.statusBar().showMessage("The health check was posted to the ELOG.", 5000)
 
     def _Pick_Table(self, title):
         """A table chosen from the library, or anywhere, or None."""
@@ -1466,7 +1522,8 @@ class Main_Window(QMainWindow):
         for widget in (self.Calibration.Params_Group, self.Calibration.Control_Group,
                        self.Quick_Group, scan.New_Entry_Button, hardware.Ramp_Group,
                        hardware.Read_Group, hardware.Linearity.Correction_Group,
-                       hardware.Settle.Model_Group,
+                       hardware.Settle.Model_Group, hardware.Table.Measure_Group,
+                       hardware.Health.Run_Button,
                        *(panel.Params_Group for panel in hardware.Panels),
                        *(panel.Start_Button for panel in hardware.Panels),
                        *(panel.Open_Button for panel in hardware.Panels)):

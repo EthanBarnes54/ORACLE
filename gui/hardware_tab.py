@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHB
                                QVBoxLayout, QWidget)
 
 from cls_acquisition import hardware_calibration as hc
-from cls_acquisition import scan_table
+from cls_acquisition import health, scan_table
 from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
@@ -1003,6 +1003,64 @@ class Table_Panel(QWidget):
         self.Report_Label.setText(Report_Html([*self._Sections, ('Compared', rows)]))
 
 
+class Health_Panel(QWidget):
+    """The health check (cls_acquisition.health): what it found, part by
+    part, the cooler it read, and its post to the ELOG."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.Cooler_Plot = plots.Plot(
+            'Cooler voltage during the health check', (f"Time {plots.Sym('t')}", 's'),
+            (f"{plots.U_COOL} − ⟨{plots.U_COOL}⟩", 'V'), (
+                "The cooler as the health check read it, about its mean: the mains ripple it "
+                "sets against the last check.",
+                f"{health.COOLER_S:g} s at {1 / health.COOLER_INTERVAL_S:g} readings a "
+                f"second, each over {health.COOLER_APERTURE_S * 1e6:g} µs; the ripple is the "
+                f"50 Hz line of its spectrum, corrected for the aperture's attenuation."))
+        self.Group = QGroupBox('Health check')
+        self.Group.setMinimumWidth(REPORT_WIDTH)
+        column = QVBoxLayout(self.Group)
+        self.Table_Check = QCheckBox('Check the bench table first', checked=True)
+        self.Table_Check.setToolTip("The table check drives the platform across the table's "
+                                    "span, a few minutes; done first when a table is in force.")
+        self.Run_Button = QPushButton('Run health check')
+        self.Post_Button = QPushButton('Post to ELOG', enabled=False)
+        buttons = QHBoxLayout()
+        for button in (self.Run_Button, self.Post_Button):
+            buttons.addWidget(button)
+        column.addWidget(self.Table_Check)
+        column.addLayout(buttons)
+        self.Report_Label = Report_Label(
+            f"Not run in this session. It reads the cooler for {health.COOLER_S:g} s, runs the "
+            f"triggers for {health.COUNT_S:g} s to count each PMT (with the beam off, its dark "
+            f"counts) and the triggers, reads both meters' trigger sources, and first checks "
+            f"the bench table if one is in force. Each is set against the last check.")
+        column.addWidget(self.Report_Label)
+        column.addStretch(1)
+        Side_By_Side(self, ((self.Group, 1),), self.Cooler_Plot)
+
+    def Begin(self):
+        self.Report_Label.setText('Checking...')
+        self.Post_Button.setEnabled(False)
+        self.Cooler_Plot.clear()
+
+    def Show_Progress(self, text):
+        self.Report_Label.setText(html.escape(text))
+
+    def Show(self, found, checks, path):
+        """What the check ``found``, judged in ``checks``, kept at ``path``."""
+        self.Report_Label.setText(Report_Html([
+            ((health.Verdict(checks), 'Health'), [('Checked', found['When'])]),
+            *(((c['Verdict'], c['Check']), [*c['Rows'], Muted(c['Note'])]) for c in checks),
+            Saved_Section([path])]))
+        times, volts = found['Trace']
+        self.Cooler_Plot.plot(times, volts - np.mean(volts), pen=plots.Pen())
+        self.Post_Button.setEnabled(True)
+
+    def Show_Failure(self, message):
+        self.Report_Label.setText(Report_Html([(('FAIL', 'Not completed'), [message])]))
+
+
 class Hardware_Tab(QWidget):
 
     def __init__(self, limit_v, parent=None):
@@ -1033,10 +1091,12 @@ class Hardware_Tab(QWidget):
         self.Linearity = Linearity_Panel(self.Ramp, limit_v)
         self.Cooler = Cooler_Panel()
         self.Table = Table_Panel(limit_v, self.Linearity.Settle_Box)
+        self.Health = Health_Panel()
         self.Panels = (self.Settle, self.Linearity, self.Cooler)
         self.Pages = QTabWidget()
-        for page, name in zip((*self.Panels, self.Table),
-                              ('Settle time', 'Linearity', 'Cooler monitor', 'Scan table')):
+        for page, name in zip((*self.Panels, self.Table, self.Health),
+                              ('Settle time', 'Linearity', 'Cooler monitor', 'Scan table',
+                               'Health check')):
             self.Pages.addTab(page, name)
         column = QVBoxLayout(self)
         column.addLayout(header)

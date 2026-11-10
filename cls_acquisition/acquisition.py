@@ -140,6 +140,7 @@ class Acquisition_Loop():
             'Stop_Now': self._Stop_Now,
             'Start_Triggering': self._Start_Triggering,
             'Stop_Triggering': self._Stop_Triggering,
+            'Count': self._Count,
             'Output_Volts': self._Output_Volts,
             'Calibrate': self._Calibrate,
             'Calibration_Step': self._Calibration_Step,
@@ -260,6 +261,34 @@ class Acquisition_Loop():
         self._State.Triggering.clear()
         self._Stop_Triggers()
         return {}
+
+    def _Count(self, timing, seconds):
+        """The triggers and hits of ``seconds`` of ``timing``'s triggers, none
+        of it kept, for the health check: ``Seconds`` (timed), ``Expected``
+        (the triggers the pattern's period gives so long), ``Numbered`` (the
+        tagger's count of them), ``Received`` (those that reached the loop)
+        and each input's ``Counts``."""
+        self._Require_Idle('count the triggers')
+        self._Start_Triggers(timing)
+        started, numbers, inputs = time.perf_counter(), [], []
+        try:
+            while time.perf_counter() - started < seconds:
+                rows = self._Tagger.Read(READ_WAIT_S)
+                if rows is not None:
+                    marked = rows[:, 1] == MARK
+                    numbers.append(rows[marked, 0])
+                    inputs.append(rows[~marked, 1])
+        finally:
+            elapsed = time.perf_counter() - started
+            self._Stop_Triggers()
+        numbers = np.concatenate(numbers) if numbers else np.zeros(0)
+        channels, counts = np.unique(np.concatenate(inputs) if inputs else np.zeros(0),
+                                     return_counts=True)
+        return {'Seconds': elapsed,
+                'Expected': elapsed * 1e9 / triggers.Period_Ns(triggers.Pattern(timing)),
+                'Numbered': int(numbers.max() - numbers.min() + 1) if len(numbers) else 0,
+                'Received': len(numbers),
+                'Counts': {int(c): int(n) for c, n in zip(channels, counts)}}
 
     def _Output_Volts(self, on):
         (self._State.Outputting.set if on else self._State.Outputting.clear)()

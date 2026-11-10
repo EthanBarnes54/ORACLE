@@ -144,6 +144,10 @@ class _Meter():
                              f"where IMM was sent, so it would read on its trigger input (the "
                              f"buncher's line), not when asked.")
 
+    def Trigger_Source(self):
+        """What the meter reads TRIG:SOUR as, now."""
+        return self._Session.Transaction(lambda inst: inst.Query("TRIG:SOUR?").strip().upper())
+
     def _Refuse_On(self, errors, what):
         """Raise Scpi_Error naming the meter if its error queue held anything."""
         if errors:
