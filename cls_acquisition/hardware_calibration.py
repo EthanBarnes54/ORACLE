@@ -853,11 +853,10 @@ def Read_Linearity(path):
 
 
 def Read_Table_Sweep(path):
-    """``(points, rungs)`` of the linearity sweep at ``path`` and the
-    stopped ones it resumes (its ``Resumes``, each in the same folder), on
-    the first one's clock, each cut after its last 0 V check, since a point
-    after it has no check on its far side; ``rungs`` is how many of the
-    plan's rungs they hold, where a sweep resuming them takes up."""
+    """``(points, rungs)`` of the linearity sweep at ``path`` and the stopped
+    ones it ``Resumes`` (in the same folder), on the first one's clock, each
+    cut after its last 0 V check (a point past it has none beyond it);
+    ``rungs`` is how many of the plan's rungs they hold."""
     chain, seen = [], set()
     while path and path not in seen:
         seen.add(path)

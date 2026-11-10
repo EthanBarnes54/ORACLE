@@ -32,14 +32,14 @@ import numpy as np
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QComboBox, QFormLayout,
-                               QHBoxLayout, QHeaderView, QPlainTextEdit, QPushButton,
+                               QHeaderView, QPlainTextEdit, QPushButton,
                                QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton,
                                QVBoxLayout, QWidget)
 
 from cls_acquisition.calibration import THRESHOLDS, Settle_For
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import theme
-from gui.shared_widgets import Duration_Text
+from gui.shared_widgets import Duration_Text, Row
 
 RANGES, STEP, PER_STEP, ORDER, SCANS, STATE = range(6)
 COLUMNS = ('ranges', 'step', 'per_step', 'order', 'scans', 'state')
@@ -210,10 +210,8 @@ class Scan_Queue(QWidget):
 
         form = QFormLayout()
         form.addRow('Mode:', self.Mode_Combo)
-        buttons = QHBoxLayout()
-        for widget in (self.Add_Button, self.Show_Button, self.Up_Button, self.Down_Button,
-                       self.Remove_Button):
-            buttons.addWidget(widget)
+        buttons = Row(self.Add_Button, self.Show_Button, self.Up_Button, self.Down_Button,
+                      self.Remove_Button)
         buttons.addStretch()
         buttons.addWidget(self.Clear_Button)
         column = QVBoxLayout(self)

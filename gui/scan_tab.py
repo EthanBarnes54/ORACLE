@@ -30,9 +30,9 @@ gui.scan_queue, gui.shared_widgets, gui.theme.
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QRadioButton, QSpinBox, QTextEdit,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QLabel, QLineEdit,
+                               QPushButton, QRadioButton, QSpinBox, QTextEdit, QVBoxLayout,
+                               QWidget)
 
 from cls_acquisition import triggers
 from cls_acquisition.acquisition import SCAN_TYPES
@@ -41,7 +41,7 @@ from cls_acquisition.run_file import ORACLE_KEY
 from cls_acquisition.scan_plan import Scan_Plan
 from gui import plots, theme
 from gui.scan_queue import ORDERS, Scan_Queue
-from gui.shared_widgets import Side_By_Side, Spin
+from gui.shared_widgets import Row, Side_By_Side, Spin
 
 RANGES = 7
 REGIONS = ('Not stated', 'CEC', 'LCR')    # where the laser meets the beam
@@ -49,13 +49,6 @@ CHANNELS = (1, 2, 3, 4)
 DC_TRIGGER_HZ = 1e9 / triggers.DC_PERIOD_NS
 MAX_TOF_BINS = 50000                # across the gate; the old DAQ's cap
 SCAN_AXIS = ('Scan voltage <i>U</i><sub>scan</sub>', 'V')
-
-
-def _Row(*widgets):
-    row = QHBoxLayout()
-    for widget in widgets:
-        row.addWidget(widget)
-    return row
 
 
 def _Put(box, value, what, unshown):
@@ -137,11 +130,9 @@ class Scan_Tab(QWidget):
     def _Build_Buncher(self):
         self.Buncher_Group = QGroupBox('Buncher controls')
         column = QVBoxLayout(self.Buncher_Group)
-        radios = QHBoxLayout()
         self.Dc_Radio = QRadioButton('DC mode')
         self.Bunched_Radio = QRadioButton('Bunched mode', checked=True)
-        radios.addWidget(self.Dc_Radio)
-        radios.addWidget(self.Bunched_Radio)
+        radios = Row(self.Dc_Radio, self.Bunched_Radio)
         radios.addStretch(1)
         column.addLayout(radios)
 
@@ -171,21 +162,16 @@ class Scan_Tab(QWidget):
 
     def _Build_Control(self):
         self.Control_Group = QGroupBox('Scan controls')
-        row = QHBoxLayout(self.Control_Group)
         self.Start_Button = QPushButton('Start scan')
         self.Stop_Button = QPushButton('Stop now!', enabled=False)
-        row.addWidget(self.Start_Button)
-        row.addWidget(self.Stop_Button)
+        Row(self.Start_Button, self.Stop_Button, parent=self.Control_Group)
         return self.Control_Group
 
     def _Build_Elog(self):
         column = QVBoxLayout()
-        buttons = QHBoxLayout()
         self.Send_Text_Button = QPushButton('Send additional text')
         self.New_Entry_Button = QPushButton('Start new entry')
-        buttons.addWidget(self.Send_Text_Button)
-        buttons.addWidget(self.New_Entry_Button)
-        column.addLayout(buttons)
+        column.addLayout(Row(self.Send_Text_Button, self.New_Entry_Button))
         self.Screen_Button = QPushButton('Send HFS screen')
         column.addWidget(self.Screen_Button)
         self.Elog_Edit = QTextEdit()
@@ -230,9 +216,9 @@ class Scan_Tab(QWidget):
         grid.addWidget(self.Tof_Plot, 1, 0)
         grid.addWidget(self.Map_Plot, 1, 1)
         right = Qt.AlignmentFlag.AlignRight
-        grid.addLayout(_Row(QLabel('Bin size:'), self.Bin_Box), 2, 0, right)
+        grid.addLayout(Row(QLabel('Bin size:'), self.Bin_Box), 2, 0, right)
         grid.addWidget(self.Map_Check, 2, 1, right)
-        grid.addLayout(_Row(*self.Channel_Checks), 3, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+        grid.addLayout(Row(*self.Channel_Checks), 3, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
         grid.setRowStretch(0, 1)
         grid.setRowStretch(1, 1)
         grid.setColumnStretch(0, 1)

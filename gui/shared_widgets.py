@@ -186,6 +186,14 @@ class Scroll_Column(QScrollArea):
                      super().minimumSizeHint().height())
 
 
+def Row(*widgets, parent=None):
+    """``widgets`` side by side, in ``parent`` if given."""
+    row = QHBoxLayout(parent) if parent is not None else QHBoxLayout()
+    for widget in widgets:
+        row.addWidget(widget)
+    return row
+
+
 def Side_By_Side(page, controls, plots):
     """``page`` laid out as every tab is: ``controls``, (widget or layout,
     stretch) pairs, in a scrolling column, and ``plots`` beside them taking

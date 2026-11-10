@@ -263,11 +263,9 @@ class Acquisition_Loop():
         return {}
 
     def _Count(self, timing, seconds):
-        """The triggers and hits of ``seconds`` of ``timing``'s triggers, none
-        of it kept, for the health check: ``Seconds`` (timed), ``Expected``
-        (the triggers the pattern's period gives so long), ``Numbered`` (the
-        tagger's count of them), ``Received`` (those that reached the loop)
-        and each input's ``Counts``."""
+        """``seconds`` of ``timing``'s triggers counted, none kept (the health
+        check): ``Seconds``, ``Expected`` (by the pattern's period), ``Numbered``
+        (by the tagger), ``Received`` (by the loop) and each input's ``Counts``."""
         self._Require_Idle('count the triggers')
         self._Start_Triggers(timing)
         started, numbers, inputs = time.perf_counter(), [], []

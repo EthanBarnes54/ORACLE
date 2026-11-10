@@ -1,7 +1,6 @@
 """The scan queue's page: rows read and checked as a scan is as it starts,
 edited as DENIS's optimiser tables are, and kept, states and all."""
 
-import numpy as np
 import pytest
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent, QKeySequence

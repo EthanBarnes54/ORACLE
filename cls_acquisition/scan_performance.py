@@ -1548,21 +1548,16 @@ def _Cooler(report, raw, readings, rolling, reference, scale, t0):
 
 
 def _Readings_Against_The_Line(report, bins, departures, readings, axis, scale):
-    """Whether each hit's own cooler reading is what its ions saw (WP2c).
-    The meter's readings, each held by the hits until the next, are sorted
-    by how far they sat from the rolling mean and cut into quarters of the
-    hits; each quarter's line is laid over the whole's, and its shift fitted
-    against the quarter's mean departure. A slope of 1 means the readings
-    are what the ions saw; 0, that they are not, and the rolling mean loses
-    nothing. The run calibrates the slope on its own hits, the departures
-    shuffled among the readings from a fixed seed: left so, for its error
-    (the link under test broken, every count kept); with the hits moved by
-    them (rounded at random to the grid, so on average by exactly as much),
-    for the slope a true 1 gives, which the fit returns a little below 1.
-    Flagged only when the slope stands above 0 by the significance and
-    beyond every shuffle (thin runs' shuffles have tails heavier than a
-    Gaussian's), and the narrowing it implies matters; not judged where a
-    true 1 could not be told from 0."""
+    """Whether each hit's own cooler reading is what its ions saw (WP2c): the
+    readings, sorted by departure from the rolling mean, cut into quarters of
+    the hits, and each quarter's line shift fitted against its departure.
+    1: the readings are what the ions saw; 0: the rolling mean loses nothing.
+    Calibrated on the run's own hits, the departures shuffled among the
+    readings from a fixed seed: as they are, for the error; moving the hits
+    (rounded to the grid at random), for what a true 1 gives, a little
+    below 1. Flagged only above the significance, beyond every shuffle (thin
+    runs' tails are heavier than Gaussian) and where the narrowing matters;
+    N/A where a true 1 cannot be told from 0."""
     name, ok = 'Cooler readings against the line', (bins >= 0) & np.isfinite(departures)
     if not scale.Width or ok.sum() < QUARTERS * TOLERANCES['LineCounts']:
         report.Add(SOURCES, name, NA, None,

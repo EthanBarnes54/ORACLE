@@ -17,14 +17,15 @@ which the window asks the operator to arm), and names its records
 as it went (``Partial``). Results are reported in labelled sections
 (shared_widgets.Report_Html), ending with the files saved.
 
-The Scan table page keeps the bench table (cls_acquisition.scan_table):
-made from a linearity record or chosen from the library, put in force,
-compared with another. The line meter can be read precisely (the bench
-tool's 'Read DMM') above the pages.
+The Scan table page measures, resumes and checks the bench table
+(cls_acquisition.scan_table), makes one from a record or takes it from
+the library, puts it in force and compares it with another; the Health
+check page runs cls_acquisition.health. The line meter can be read
+precisely (the bench tool's 'Read DMM') above the pages.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.calibration,
 cls_acquisition.hardware_calibration, cls_acquisition.hardware.mcc_dac,
-cls_acquisition.scan_table, gui.plots, gui.shared_widgets, gui.theme.
+cls_acquisition.health, cls_acquisition.scan_table, gui.plots, gui.shared_widgets, gui.theme.
 """
 
 import html
@@ -44,7 +45,8 @@ from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
 from gui.shared_widgets import (REPORT_WIDTH, Duration_Text, Figure, Form, Muted, Report_Html,
-                                Report_Label, Report_Table, Saved_Section, Side_By_Side, Spin)
+                                Report_Label, Report_Table, Row, Saved_Section, Side_By_Side,
+                                Spin)
 
 STEP_ROWS = 4
 NPLC_CHOICES = ('0.02', '0.2', '1', '10', '100')
@@ -85,15 +87,12 @@ class _Panel(QWidget):
         self.Control_Group = QGroupBox(f'{title} control')
         self.Control_Group.setMinimumWidth(REPORT_WIDTH)
         column = QVBoxLayout(self.Control_Group)
-        buttons = QHBoxLayout()
         self.Start_Button = QPushButton(f'Run {title.lower()}')
         self.Stop_Button = QPushButton('Stop', enabled=False)
         self.Open_Button = QPushButton(theme.Icon('folder-open'), 'Open record...')
         self.Open_Button.setToolTip(f"Show a {title.lower()} record saved earlier, here or "
                                     f"by the rack: its plots, its table and its analysis.")
-        for button in (self.Start_Button, self.Stop_Button, self.Open_Button):
-            buttons.addWidget(button)
-        column.addLayout(buttons)
+        column.addLayout(Row(self.Start_Button, self.Stop_Button, self.Open_Button))
         self.Report_Label = Report_Label('Not run yet in this session.')
         self._Sections, self._Notes = [], {}
         column.addWidget(self.Report_Label)
@@ -822,11 +821,9 @@ class Cooler_Panel(_Panel):
 
 
 class Table_Panel(QWidget):
-    """The bench table: measuring one, the one in force, what it says of
-    the converters and of the 0 V level, and its shape about a straight
-    line. A table is measured as a linearity sweep (scan_table.TABLE), run
-    and watched on the Linearity page at its settle time, and checked
-    against the one in force by a quick one (scan_table.CHECK)."""
+    """The bench table: measured (scan_table.TABLE, watched on the Linearity
+    page) and checked (scan_table.CHECK); the one in force, what it says of
+    the converters and the 0 V level, and its shape about a straight line."""
 
     def __init__(self, limit_v, settle_box, parent=None):
         super().__init__(parent)
@@ -892,10 +889,8 @@ class Table_Panel(QWidget):
             f"NPLC {scan_table.CHECK['nplc']:g} each, fitted to the table in force: PASS at "
             f"{scan_table.CHECK_RMS_V * 1e3:.0f} mV rms or less. Start of a shift and after "
             f"a power cycle.")
-        buttons = QHBoxLayout()
-        for button in (self.Measure_Button, self.Resume_Button, self.Check_Button):
-            buttons.addWidget(button)
-        grid.addLayout(buttons, grid.rowCount(), 0, 1, 2)
+        grid.addLayout(Row(self.Measure_Button, self.Resume_Button, self.Check_Button),
+                       grid.rowCount(), 0, 1, 2)
         self.Span_Combo.currentIndexChanged.connect(self._Estimate)
         settle_box.valueChanged.connect(self._Estimate)
         self._Estimate()
@@ -1025,11 +1020,8 @@ class Health_Panel(QWidget):
                                     "span, a few minutes; done first when a table is in force.")
         self.Run_Button = QPushButton('Run health check')
         self.Post_Button = QPushButton('Post to ELOG', enabled=False)
-        buttons = QHBoxLayout()
-        for button in (self.Run_Button, self.Post_Button):
-            buttons.addWidget(button)
         column.addWidget(self.Table_Check)
-        column.addLayout(buttons)
+        column.addLayout(Row(self.Run_Button, self.Post_Button))
         self.Report_Label = Report_Label(
             f"Not run in this session. It reads the cooler for {health.COOLER_S:g} s, runs the "
             f"triggers for {health.COUNT_S:g} s to count each PMT (with the beam off, its dark "
@@ -1081,9 +1073,7 @@ class Hardware_Tab(QWidget):
         self.Read_Button.setToolTip("Read the platform precisely, to check the wiring and "
                                     "polarity against what quick tune holds on it.")
         self.Read_Label = QLabel('–')
-        read = QHBoxLayout(self.Read_Group)
-        read.addWidget(self.Read_Button)
-        read.addWidget(self.Read_Label, 1)
+        Row(self.Read_Button, parent=self.Read_Group).addWidget(self.Read_Label, 1)
         header = QHBoxLayout()
         header.addWidget(self.Ramp_Group, 1)
         header.addWidget(self.Read_Group, 1)

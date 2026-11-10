@@ -10,16 +10,14 @@ A. Raggio's bench table (November 2026) measures it slowly, with 0 V
 checks between, and each run is fitted to it, V = a + b*T
 (:func:`Fit_Run`): 262 mV rms for a linear calibration became about 10 mV.
 
-A table is measured as a linearity sweep with 0 V checks (TABLE: 1 V
-steps over +-1 kV for a quick table, +-3 kV for a full one, 5 readings
-at NPLC 10, 0 V every 10 points), resumable from its record if it is
-stopped, and checked in a few minutes against a few hundred points
-across its span (CHECK). It is built from the sweep's record (and the
-records it resumes): each reading less the 0 V level
-interpolated between the checks (it warms up by 0.2 V in the first
-hour), averaged by converter and code, the codes being what the
-converters held, as each run records them (DacCodes). A code not visited
-is interpolated and said to be; nothing is extrapolated.
+A table is measured as a linearity sweep (TABLE: 1 V steps over +-1 kV,
+quick, or +-3 kV, full; 5 readings at NPLC 10; 0 V every 10 points),
+resumable from its record, and checked in minutes against a few hundred
+points (CHECK). It is built from the sweep's records: each reading less
+the 0 V level interpolated between the checks (it warms up by 0.2 V in
+the first hour), averaged by converter and code (the codes the converters
+held, as runs record them in DacCodes). A code not visited is
+interpolated and said to be; nothing is extrapolated.
 
 The library under ``<data>/tables`` keeps one CSV per table, its details
 as ``#`` lines above the rows (the format proposed for cls_tools), named
