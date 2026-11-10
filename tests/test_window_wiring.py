@@ -650,8 +650,12 @@ def test_The_Line_Meter_Is_Read_Precisely_Against_The_Platforms_Setpoint(qapp, w
     text = window.Hardware.Read_Label.text()
     found = re.search(r"readback − setpoint ([+-][\d.]+) V \(setpoint 500 V\)", text)
     assert found, text
-    # the measured rack's departure at 500 V, to the converter's code rounding
-    assert float(found.group(1)) == pytest.approx(simulated.Platform_Error(500.0), abs=0.2)
+    # the measured rack's departure at 500 V and its 0 V level warming up, to the
+    # converter's code rounding
+    platform = window._Rack._Platform
+    expected = simulated.Platform_Error(500.0) + simulated.Warm_Up(
+        simulated.CLOCK() - platform._On)
+    assert float(found.group(1)) == pytest.approx(expected, abs=0.2)
     assert window._Line.Mode == 'continuous'
 
 

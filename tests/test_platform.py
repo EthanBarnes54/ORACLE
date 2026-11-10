@@ -64,6 +64,22 @@ def test_The_Simulated_Rack_Times_Its_Step_Finer_Than_A_Millisecond():
     assert 100.0 < platform.Volts() < 1000.0           # part way up, not a 15.6 ms staircase
 
 
+def test_The_Simulated_0_V_Level_Warms_Up_And_Then_Wanders():
+    """0.2 V low at power-on, settled within the first hour, then wandering
+    by 10-20 mV over tens of minutes, as the bench's 0 V checks did; a step
+    leaves it as it was."""
+    assert simulated.Warm_Up(0.0) == pytest.approx(-0.2, abs=1e-9)
+    hour = np.arange(3600.0, 3 * 3600.0, 60.0)
+    later = np.array([simulated.Warm_Up(t) for t in hour])
+    assert np.all(np.abs(later) < 0.025) and 0.01 < np.ptp(later) < 0.04
+    platform = simulated.Platform(multiprocessing.get_context('spawn'))
+    platform.Set(1000.0)
+    time.sleep(0.05)
+    t = simulated.CLOCK()
+    assert platform.Volts(t) - 1000.0 == pytest.approx(
+        simulated.Warm_Up(t - platform._On), abs=0.01)
+
+
 # ── Keeping the PC awake ────────────────────────────────────────
 
 @pytest.mark.skipif(sys.platform != 'darwin', reason="macOS's own power assertions")

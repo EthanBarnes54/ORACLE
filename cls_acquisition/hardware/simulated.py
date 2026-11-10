@@ -12,6 +12,9 @@ It imitates the rack the bench tool measured on 24 and 25 October 2026:
   0.5 V of a 1 kV jump in 17 ms);
 * both converters' gain and non-linearity and the amplifier's -1 V
   offset, as readback less setpoint on 50 V knots from the 1 V sweep;
+* the 0 V level warming up, 0.2 V low at power-on (the platform's
+  making) and settling over the first hour, then wandering by 10-20 mV
+  over tens of minutes (A. Raggio, November 2026);
 * the line meter's 0.069 V of noise at 200 us, falling as the root of
   the integration, and 0.041 V of mains averaged over each reading's
   integration, so whole power line cycles take it out;
@@ -69,6 +72,11 @@ ERROR_V = (
 )
 END_SLOPES = (-0.000490, -0.000613)     # d(readback - set)/d(set) past each end
 
+# the 0 V level after power-on: WARM_UP_V low, settling with WARM_UP_S, then a
+# wander of (volts, period s) tones, all in platform volts
+WARM_UP_V, WARM_UP_S = 0.2, 1200.0
+WANDER = ((0.012, 2400.0), (0.006, 1020.0))
+
 # per reading at a 200 us aperture, in volts at each meter's input; the line
 # meter's from the bench's settled steps (the 1 kV and 2 kV traces, 0.3 s each),
 # where a 50 Hz fit leaves 0.069 V and takes out 0.041 V of mains, the 0.075 V
@@ -110,26 +118,38 @@ def Step_Remaining(t):
             - OVERSHOOT * x * x * np.exp(2.0 * (1.0 - x)))
 
 
+def Warm_Up(t):
+    """How far the 0 V level sits from its settled value ``t`` seconds
+    after power-on."""
+    return (-WARM_UP_V * np.exp(-max(t, 0.0) / WARM_UP_S)
+            + sum(volts * np.sin(2.0 * np.pi * t / period) for volts, period in WANDER))
+
+
 class Platform():
     """The platform voltage, shared between processes: where it was, where
-    it is going, and since when (CLOCK, the same in both)."""
+    it is going, and since when (CLOCK, the same in both), the 0 V level
+    warming up from the platform's making."""
 
     def __init__(self, context):
-        self._State = context.Array('d', [0.0, 0.0, CLOCK()])
+        self._On = CLOCK()
+        self._State = context.Array('d', [0.0, 0.0, self._On])
 
     def Set(self, volts):
         with self._State.get_lock():
             now = CLOCK()
-            self._State[:] = [self._At(now), volts, now]
+            self._State[:] = [self._Stepping(now), volts, now]
 
     def Volts(self, t=None):
         """At CLOCK time ``t``, or now."""
         with self._State.get_lock():
             return self._At(CLOCK() if t is None else t)
 
-    def _At(self, now):
+    def _Stepping(self, now):
         start, target, since = self._State[:]
         return target + (start - target) * Step_Remaining(now - since)
+
+    def _At(self, now):
+        return self._Stepping(now) + Warm_Up(now - self._On)
 
 
 def Platform_Error(setpoint):

@@ -318,12 +318,15 @@ class _Slow_Link():
         return payload
 
 
-def test_Each_Reading_Holds_Its_Own_Setpoint_Whatever_The_Latencies():
+def test_Each_Reading_Holds_Its_Own_Setpoint_Whatever_The_Latencies(monkeypatch):
     # Mode B's cause was two clocks lined up afterwards, which any latency shifted by k
     # readings. Here the real loop, meter driver and calibration run with the loop's
     # replies, the DAC's writes and the meter's answers each delayed at random by up to
     # 0.2 s (seven of the old 30 ms trigger periods), and each reading is judged by the
-    # setpoint the platform really held as the meter sampled it
+    # setpoint the platform really held as the meter sampled it (the 0 V level held
+    # still, so settled means on the target)
+    monkeypatch.setattr(simulated, 'WARM_UP_V', 0.0)
+    monkeypatch.setattr(simulated, 'WANDER', ())
     plan = Scan_Plan([-30], [30], 2)
     bench = Loop_Bench()
     delays = {site: random.Random(seed) for seed, site in enumerate(('link', 'dac', 'meter'))}
