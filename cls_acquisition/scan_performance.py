@@ -97,6 +97,9 @@ MAX_REJECT_ITER = 10                        # DENIS's, for its robust calibratio
 FIT_ROWS = 64                               # shifts tried at once, so the fit stays small
 NULL_BUDGET = 2e7                           # bins times shifts the random deals may cost
 BIN_CHUNK = 1 << 20                         # hits placed at once, so the analysis stays small
+QUARTERS = 4                                # groups of hits by their cooler reading (WP2c)
+SHUFFLES = 100                              # their departures shuffled, for its error
+RESPONSES = 12                              # and moved by, for what a true 1 gives
 
 C_LIGHT = 299792458.0
 AMU_EV = 931.49410242e6                     # one atomic mass unit, in eV
@@ -301,7 +304,7 @@ class _Report():
     def __init__(self):
         self.Sections = {name: [] for name in (VOLTAGE, TIMING, BEAM, SOURCES, DETECTORS)}
         self.Series, self.Flagged, self.Budget, self.Detectors = {}, [], {}, {}
-        self.Systematics = []
+        self.Systematics, self.Readings = [], None
 
     def Add(self, section, check, verdict, value, message):
         self.Sections[section].append(
@@ -320,7 +323,7 @@ class _Report():
                         f"hold (N/A).")
         return {'Verdict': verdict, 'Summary': summary, 'Budget': budget, 'Sections': sections,
                 'Series': self.Series, 'Flagged': self.Flagged, 'Detectors': self.Detectors,
-                'Systematics': self.Systematics}
+                'Systematics': self.Systematics, 'Readings': self.Readings}
 
 
 def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
@@ -365,9 +368,10 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
                               float(record.get('CoolerRollingS') or rolling_s))
                if len(readings[0]) else None)
     reference = float(np.median(readings[1])) if len(readings[1]) else 0.0
-    bins = _Bins(raw, axis, step, rolling, reference)
+    bins, departures = _Bins(raw, axis, step, rolling, reference, Dividers(header)[1])
     bins_t = bins if by_time is None else bins[by_time]
-    del bins
+    departures_t = departures if by_time is None else departures[by_time]
+    del bins, departures
     scanned = np.isin(np.round(axis, VOLTS_DECIMALS), np.round(sequence, VOLTS_DECIMALS))
     total = np.bincount(bins_t[bins_t >= 0], minlength=len(axis)).astype(float)
     line = _Line(axis, total, scanned)
@@ -381,6 +385,9 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
     hv = _Readback(report, monitor, header, scale, times_t, t0)
     light = _Laser(report, monitor, header, laser, recorded_laser, scale, times_t, axis, t0)
     _Cooler(report, raw, readings, rolling, reference, scale, t0)
+    _Readings_Against_The_Line(report, bins_t, departures_t,
+                               raw[:, 5] if by_time is None else raw[by_time, 5], axis, scale)
+    del departures_t
     bunch_t = bunch if by_time is None else bunch[by_time]
     per_scan = len(sequence) * per_step
     expectation = None
@@ -478,17 +485,22 @@ def _Cooler_Readings(raw, monitor, cooler_divider):
     return t[ok][order], volts[ok][order], source
 
 
-def _Bins(raw, axis, step, rolling, reference):
-    """Each hit's bin on ``axis`` as the analysis places it: its voltage tag
-    less the cooler's departure from ``reference`` at its time, by the
-    ``rolling`` mean of its readings (None: there are none), or -1 off the
-    grid. A hit with no reading within the window stays at its tag. One
-    working array, placed a chunk at a time and rounded in place."""
+def _Bins(raw, axis, step, rolling, reference, cooler_divider):
+    """``(bins, departures)``: each hit's bin on ``axis`` as the analysis
+    places it, its voltage tag less the cooler's departure from
+    ``reference`` at its time by the ``rolling`` mean of its readings (None:
+    there are none), -1 off the grid; and how far the hit's own reading sat
+    from that mean (NaN where either is missing). A hit with no reading
+    within the window stays at its tag. Placed a chunk at a time."""
     work = np.zeros(len(raw))
+    departures = np.full(len(raw), np.nan, dtype=np.float32)
     if rolling is not None:
         for start in range(0, len(raw), BIN_CHUNK):
             part = slice(start, start + BIN_CHUNK)
             mean, _ = rolling.At(raw[part, 0])
+            own = raw[part, 5]
+            departures[part] = np.where(np.isfinite(own) & (own != 0),
+                                        own * cooler_divider - mean, np.nan)
             mean -= reference
             work[part] = np.nan_to_num(mean, nan=0.0)
     np.negative(work, out=work)
@@ -498,7 +510,7 @@ def _Bins(raw, axis, step, rolling, reference):
     np.rint(work, out=work)
     bins = work.astype(np.int32)
     bins[(bins < 0) | (bins >= len(axis))] = -1
-    return bins
+    return bins, departures
 
 
 def _Step_Index(steps, n, kind):
@@ -1535,6 +1547,104 @@ def _Cooler(report, raw, readings, rolling, reference, scale, t0):
     report.Series['Cooler'] = (t - t0, volts - reference, mean - reference, partial)
 
 
+def _Readings_Against_The_Line(report, bins, departures, readings, axis, scale):
+    """Whether each hit's own cooler reading is what its ions saw (WP2c).
+    The meter's readings, each held by the hits until the next, are sorted
+    by how far they sat from the rolling mean and cut into quarters of the
+    hits; each quarter's line is laid over the whole's, and its shift fitted
+    against the quarter's mean departure. A slope of 1 means the readings
+    are what the ions saw; 0, that they are not, and the rolling mean loses
+    nothing. The run calibrates the slope on its own hits, the departures
+    shuffled among the readings from a fixed seed: left so, for its error
+    (the link under test broken, every count kept); with the hits moved by
+    them (rounded at random to the grid, so on average by exactly as much),
+    for the slope a true 1 gives, which the fit returns a little below 1.
+    Flagged only when the slope stands above 0 by the significance and
+    beyond every shuffle (thin runs' shuffles have tails heavier than a
+    Gaussian's), and the narrowing it implies matters; not judged where a
+    true 1 could not be told from 0."""
+    name, ok = 'Cooler readings against the line', (bins >= 0) & np.isfinite(departures)
+    if not scale.Width or ok.sum() < QUARTERS * TOLERANCES['LineCounts']:
+        report.Add(SOURCES, name, NA, None,
+                   "It needs a line standing out of the background and enough hits with a "
+                   "cooler reading to place it in four groups.")
+        return
+    bins, departures, readings = bins[ok], departures[ok].astype(float), readings[ok]
+    spread = float(np.std(departures))
+    if not scale.Matters(spread):
+        report.Add(SOURCES, name, PASS, None,
+                   f"The hits' own cooler readings scatter {spread:.3f} V rms about the rolling "
+                   f"mean, too little to matter whether they are what the ions saw.")
+        return
+    ids = np.concatenate(([0], np.cumsum(readings[1:] != readings[:-1])))
+    hits = np.bincount(ids).astype(float)
+    own = np.bincount(ids, departures) / hits
+    step = axis[1] - axis[0]
+    reach = min(max(2.0 * scale.Width, 3.0 * step), 0.5 * (axis[-1] - axis[0]))
+    sigma_bins, resolution = max(scale.Width / 4.0 / step, 1.0), min(step, scale.Width) / 20.0
+
+    def slope(placed, by):
+        """The line's shift against the departure, the hits at bins
+        ``placed`` grouped by their reading's departure ``by``, or None."""
+        order = np.argsort(by, kind='stable')
+        middle = np.cumsum(hits[order]) - hits[order] / 2.0
+        quarter = np.empty(len(by), dtype=np.intp)
+        quarter[order] = np.minimum(middle * QUARTERS // hits.sum(), QUARTERS - 1)
+        x = np.bincount(quarter, hits * by, QUARTERS) / np.bincount(quarter, hits, QUARTERS)
+        on = (placed >= 0) & (placed < len(axis))
+        counts = np.bincount(quarter[ids[on]] * len(axis) + placed[on],
+                             minlength=QUARTERS * len(axis)).reshape(QUARTERS, -1).astype(float)
+        template = _Smoothed(counts.sum(axis=0), sigma_bins)
+        found = []
+        for q in range(QUARTERS):
+            fitted = _Shift(counts[q], template, axis, reach, resolution)
+            if fitted is not None and np.isfinite(x[q]):
+                found.append((x[q], *fitted))
+        if len(found) < 3:
+            return None
+        x, y, e = (np.array(column) for column in zip(*found))
+        return float(np.polyfit(x, y, 1, w=1.0 / e)[0])
+
+    measured, null, response = slope(bins, own), [], []
+    rng = np.random.default_rng(0)
+    for k in range(SHUFFLES):
+        shuffled = rng.permutation(own)
+        null.append(slope(bins, shuffled))
+        if k < RESPONSES:
+            moved = np.floor(bins + shuffled[ids] / step + rng.random(len(bins)))
+            response.append(slope(moved.astype(np.intp), shuffled))
+    null, response = ([s for s in drawn if s is not None] for drawn in (null, response))
+    gain = float(np.mean(response)) if len(response) >= 3 else 0.0
+    if measured is None or len(null) < 3 or gain <= 0.0:
+        report.Add(SOURCES, name, NA, None,
+                   "The line could not be placed in enough of the four groups of hits.")
+        return
+    beyond = measured > max(null)
+    measured, error = measured / gain, float(np.std(null)) / gain
+    # kept for a campaign's runs to be combined, as one run rarely tells
+    report.Readings = {'slope': round(measured, 4), 'error': round(error, 4),
+                       'departure_rms_v': round(spread, 4)}
+    stated = (f"Split by each hit's own cooler reading's departure from the rolling mean "
+              f"(σ = {spread:.3f} V), the line shifts {measured:.2f} ± {error:.2f} V per volt "
+              f"of departure (1: the readings are what the ions saw; 0: they are not).")
+    if TOLERANCES['Significance'] * error >= 1.0:
+        report.Add(SOURCES, name, NA, measured, f"{stated} This run cannot tell 1 from 0.")
+        return
+    narrowing = max(measured, 0.0) * spread
+    tracks = measured > TOLERANCES['Significance'] * error and beyond
+    flagged = tracks and scale.Matters(narrowing)
+    report.Add(SOURCES, name, WARN if flagged else PASS, measured, stated + (
+        f" Significant, and beyond all {len(null)} shuffles of the readings: they carry what "
+        f"the ions saw, and correcting each hit by {measured:.2f} × its departure would take "
+        f"{scale.Text(narrowing)} out of the line in quadrature."
+        + (" Its own reading in full would add more than it took out." if measured < 0.5 else "")
+        if tracks else " Not significant: no sign the rolling mean discards what they knew."))
+    if flagged:
+        report.Flag(f"The line follows each hit's own cooler reading ({measured:.2f} ± "
+                    f"{error:.2f} per volt): a correction hit by hit would narrow it by "
+                    f"{scale.Text(narrowing)}.")
+
+
 def Export(path, result):
     """The report beside the run as ``run_NNNN_performance.yaml``: the
     verdict, the summary, every check and what was flagged. Nothing in it
@@ -1551,6 +1661,8 @@ def Export(path, result):
         # suggested for DENIS's dead time; nothing here applies it
         'detectors': {f"channel {c}": entry
                       for c, entry in result.get('Detectors', {}).items()},
+        # the line against each hit's own cooler reading (1: what the ions saw)
+        'cooler_readings': result.get('Readings'),
     }
     with open(out, 'w', encoding='utf-8') as fh:
         yaml.safe_dump(record, fh, sort_keys=False, allow_unicode=True, width=100)

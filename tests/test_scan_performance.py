@@ -246,6 +246,59 @@ def test_Readings_Off_The_Bunch_Do_Not_Broaden_The_Line_On_The_Rolling_Axis():
     assert _Width(hit_by_hit) > 1.1 * clean
 
 
+def _Jumpy(t, share=1.0):
+    """The cooler jumping 1.5 V rms from bunch to bunch, ``share`` of it."""
+    return COOLER_V + share * np.random.default_rng(len(t)).normal(0.0, 1.5, len(t))
+
+
+def test_Readings_The_Ions_Saw_Are_Found_To_Follow_The_Line(tmp_path):
+    """Where the cooler truly jumps with its readings, the line follows them;
+    the rolling mean leaves that broadening, so it is flagged, and the slope
+    is exported for a campaign's runs to be combined. Recording is unchanged:
+    this only reads the run."""
+    header, raw, monitor = _Run(cooler=_Jumpy, reading=_Jumpy, scans=40)
+    result = sp.Analyse(header, raw, monitor, LASER)
+    check = _Check(result, 'Cooler readings against the line')
+    assert check['Verdict'] == sp.WARN and check['Value'] == pytest.approx(1.0, abs=0.15)
+    assert any('follows each hit' in f for f in result['Flagged'])
+    assert 'in full' not in check['Message']
+    with open(sp.Export(str(tmp_path / 'run_0001.asdf'), result), encoding='utf-8') as fh:
+        exported = yaml.safe_load(fh)['cooler_readings']
+    assert exported['slope'] == pytest.approx(check['Value'], abs=1e-4)
+    assert 0 < exported['error'] < 0.15
+    assert exported['departure_rms_v'] == pytest.approx(1.5, rel=0.05)
+
+
+def test_The_Share_Of_Each_Jump_The_Ions_Saw_Is_Measured_And_Weighed():
+    """Ions that saw a third of each jump move the line by as much: significant,
+    but too little narrowing to flag, and the reading in full would hurt."""
+    header, raw, monitor = _Run(cooler=lambda t: _Jumpy(t, 0.3), reading=_Jumpy, scans=40)
+    result = sp.Analyse(header, raw, monitor, LASER)
+    check = _Check(result, 'Cooler readings against the line')
+    assert check['Value'] == pytest.approx(0.3, abs=0.1) and 'Significant' in check['Message']
+    assert check['Verdict'] == sp.PASS and result['Flagged'] == []
+    assert 'in full would add more' in check['Message']
+
+
+def test_Readings_Off_The_Bunch_Are_Found_Not_To_Follow_The_Line():
+    header, raw, monitor = _Run(reading=_Jumpy, scans=40)
+    result = sp.Analyse(header, raw, monitor, LASER)
+    check = _Check(result, 'Cooler readings against the line')
+    assert check['Verdict'] == sp.PASS and abs(check['Value']) < 0.1
+    assert 'Not significant' in check['Message'] and result['Flagged'] == []
+
+
+def test_The_Cross_Check_Judges_Only_What_It_Can_Tell():
+    """Readings too steady to matter pass unjudged; a run too thin to tell
+    readings the ions saw from readings they did not is not judged."""
+    check = _Check(sp.Analyse(*_Run(), LASER), 'Cooler readings against the line')
+    assert check['Verdict'] == sp.PASS and 'too little to matter' in check['Message']
+    thin = sp.Analyse(*_Run(reading=lambda t: _Jumpy(t, 0.5), rate=_Flat(0.3)), LASER)
+    check = _Check(thin, 'Cooler readings against the line')
+    assert check['Verdict'] == sp.NA and 'cannot tell' in check['Message']
+    assert thin['Flagged'] == []
+
+
 def test_The_Window_A_Run_Recorded_Is_The_One_It_Is_Judged_By():
     header, raw, monitor = _Run()
     header[ORACLE_KEY]['CoolerRollingS'] = 5.0
