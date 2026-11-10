@@ -15,6 +15,7 @@ import glob
 import json
 import os
 import re
+import time
 import types
 
 import asdf
@@ -590,6 +591,56 @@ def test_A_Stopped_Sweep_Keeps_What_It_Took_Analysed(qapp, window):
     record = _Record(window, 'linearity')
     assert '# status: stopped' in record and '# Gain:' in record
     assert linearity.Result is not None and window.Dialogs == []
+
+
+def test_A_Bench_Table_Is_Measured_Resumed_Made_And_Checked(qapp, window, monkeypatch):
+    """Measured from the Scan table page as a linearity sweep, stopped part
+    way and resumed from its record, the two make one table, put in force;
+    checked against the converters it passes, and a table they do not
+    match is warned of."""
+    from cls_acquisition import scan_table
+    from tests.test_scan_table import _Points
+    monkeypatch.setattr(scan_table, 'TABLE', {'step_v': 25.0, 'readings': 4, 'nplc': 1.0,
+                                              'zero_every': 4})
+    monkeypatch.setattr(scan_table, 'CHECK', {'points': 12, 'readings': 1, 'nplc': 10.0})
+    monkeypatch.setattr(main_window.QMessageBox, 'question',
+                        lambda *_, **__: QMessageBox.StandardButton.Yes)
+    _Fast_Bench(window)
+    page, linearity = window.Hardware.Table, window.Hardware.Linearity
+    linearity.Settle_Box.setValue(0.2)  # past the overshoot, to the millivolts a check judges
+    page.Span_Combo.addItem('±200 V', 200.0)
+    page.Span_Combo.setCurrentIndex(page.Span_Combo.count() - 1)
+    page.Measure_Button.click()
+    assert window.Hardware.Pages.currentWidget() is linearity
+    assert Pump(qapp, lambda: len([p for p in linearity._Points if p['Kind'] == 'sweep']) >= 7)
+    linearity.Stop_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None)
+    assert window._Table is None
+    stopped = sorted(glob.glob(os.path.join(window._Data_Dir, 'hardware_calibration',
+                                            'linearity_2*.csv')))[-1]
+    time.sleep(1.0)                     # a record a second later has a name of its own
+    monkeypatch.setattr(main_window.QFileDialog, 'getOpenFileName',
+                        lambda *_, **__: (stopped, ''))
+    page.Resume_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None and window._Table is not None)
+    resumed = _Record(window, 'linearity')
+    assert f"# Resumes: {os.path.basename(stopped)}" in resumed and '# skip: ' in resumed
+    visited = np.concatenate([c['setpoint_v'] for c in window._Table.Channels.values()])
+    assert sorted(np.round(visited, 6)) == pytest.approx(np.arange(-200.0, 201.0, 25.0))
+    assert 'In use' in page.Report_Label.text()
+
+    page.Check_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None and window.Table_Check is not None)
+    assert window.Table_Check['Verdict'] == 'PASS', window.Table_Check['Fit']['Rms_V']
+    assert window.Hardware.Pages.currentWidget() is page and 'Check' in page.Report_Label.text()
+    assert '# Purpose: table check' in _Record(window, 'linearity')
+
+    other = scan_table.Build(_Points('linearity_3kv_26oct.npz', 'zero_3kv_26oct.npz'))
+    window._Set_Table(other)
+    page.Check_Button.click()
+    assert Pump(qapp, lambda: window._Worker is None and window.Table_Check is not None)
+    assert window.Table_Check['Verdict'] == 'WARN' and 'Measure it again' in \
+        page.Report_Label.text()
 
 
 def test_A_Failed_Sweep_Keeps_Its_Partial_Analysis(qapp, window, monkeypatch):

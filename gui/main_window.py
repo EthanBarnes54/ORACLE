@@ -105,6 +105,13 @@ class _Window_Grid(QGridLayout):
         return False
 
 
+# the settings a table's sweep is resumed with, as its record keeps them
+RESUMED = (*((key, float) for key in ('start', 'stop', 'step_v', 'settle_s', 'nplc',
+                                      'fine_span_v', 'fine_step_v')),
+           *((key, lambda text: int(float(text))) for key in ('readings', 'zero_every', 'seed')),
+           ('direction', str), ('autocal', lambda text: text == 'True'))
+
+
 class Main_Window(QMainWindow):
 
     def __init__(self, config, rack, link, line_meter, cooler_meter, pvs, elog, warnings=()):
@@ -140,6 +147,7 @@ class Main_Window(QMainWindow):
         # the bench table runs are fitted to, from the library; a missing one or one
         # measured on another rack is said for the whole session, never refused
         self._Table, self._Table_Path, missing = self._Active_Table(config['scan_table'])
+        self.Table_Check = None         # the last check of the table in force, this session
         warnings = [*warnings, *missing]
         self._Settle_Model = config['settle_model']
         self._Analysis = None           # the performance analysis in progress
@@ -238,9 +246,10 @@ class Main_Window(QMainWindow):
         self.Calibration.Start_Button.clicked.connect(self._Calibrate_Only)
         hardware = self.Hardware
         on_line = (link, line_meter, self._Scan_Divider)
+        self._Sweep = partial(hardware_calibration.Linearity_Sweep, *on_line)
         for panel, measure in (
                 (hardware.Settle, partial(hardware_calibration.Settle_Test, *on_line)),
-                (hardware.Linearity, partial(hardware_calibration.Linearity_Sweep, *on_line)),
+                (hardware.Linearity, self._Sweep),
                 (hardware.Cooler, partial(hardware_calibration.Cooler_Monitor, cooler_meter,
                                           self._Cooler_Divider))):
             panel.Start_Button.clicked.connect(
@@ -255,7 +264,11 @@ class Main_Window(QMainWindow):
             hardware_calibration.Settle_Model(hardware.Settle.Result[0])))
         hardware.Settle.Clear_Button.clicked.connect(lambda: self._Set_Settle_Model(None))
         hardware.Settle.Show_Model(self._Settle_Model)
-        hardware.Table.Make_Button.clicked.connect(self._Make_Table)
+        hardware.Table.Make_Button.clicked.connect(lambda: self._Make_Table())
+        hardware.Table.Measure_Button.clicked.connect(
+            lambda: self._Table_Sweep(hardware.Table.Params(hardware.Ramp())))
+        hardware.Table.Resume_Button.clicked.connect(self._Resume_Table)
+        hardware.Table.Check_Button.clicked.connect(self._Check_Table)
         hardware.Table.Load_Button.clicked.connect(self._Use_Table)
         hardware.Table.Compare_Button.clicked.connect(self._Compare_Table)
         hardware.Table.Clear_Button.clicked.connect(lambda: self._Set_Table(None))
@@ -864,14 +877,16 @@ class Main_Window(QMainWindow):
 
     # ── Hardware calibration ─────────────────────────────────────
 
-    def _Run_Bench(self, panel, measure):
+    def _Run_Bench(self, panel, measure, params=None, note=None, then=None):
         """Run ``panel``'s measurement, ``measure(progress=, stopped=, records=,
-        **its parameters)``, on the worker, its records written as it goes;
-        on the rack, only once the operator has armed the high voltage."""
+        **params)`` (its page's own, unless given), on the worker, its records
+        written as it goes with ``note`` in their settings; on the rack, only
+        once the operator has armed the high voltage. ``then(paths,
+        completed)`` follows a measurement that ends without a fault."""
         if self._Worker is not None:
             return
         try:
-            params = panel.Params()
+            params = panel.Params() if params is None else params
         except ValueError as e:
             QMessageBox.warning(self, f"{panel.Title} not started", str(e))
             return
@@ -882,7 +897,7 @@ class Main_Window(QMainWindow):
                   'hardware', 'Date': f"{datetime.now():%Y-%m-%d %H:%M:%S}", **params,
                   'RackIdentity': json.dumps(self._Identity),
                   'Dividers': json.dumps(self._Rack.Dividers()),
-                  'Commit': json.dumps(self._Commit)}
+                  'Commit': json.dumps(self._Commit), **(note or {})}
         records = {}
         try:
             for kind, columns in panel.RECORDS.items():
@@ -900,6 +915,8 @@ class Main_Window(QMainWindow):
             self._Finish_Records(records, 'stopped' if worker.Stopped() else 'completed',
                                  panel, result)
             panel.Show_Result(result, [record.Path for record in records.values()])
+            if then:
+                then([record.Path for record in records.values()], not worker.Stopped())
 
         def failed(message):
             # analysed as far as it went, as the bench tool's results_partial was
@@ -1055,19 +1072,22 @@ class Main_Window(QMainWindow):
                 meta[key] = float(header[key])
         return meta
 
-    def _Make_Table(self):
-        """A table from a linearity record, kept in the library, and in force
-        if the operator says so."""
-        path, _ = QFileDialog.getOpenFileName(
-            self, 'Make a bench table from a linearity record',
-            os.path.join(self._Data_Dir, 'hardware_calibration'),
-            'Linearity records (linearity_2*.csv)')
+    def _Linearity_Record(self, title):
+        """A linearity record chosen from the data folder, or anywhere, or ''."""
+        return QFileDialog.getOpenFileName(
+            self, title, os.path.join(self._Data_Dir, 'hardware_calibration'),
+            'Linearity records (linearity_2*.csv)')[0]
+
+    def _Make_Table(self, path=None):
+        """A table from a linearity record (and the stopped ones it resumes),
+        kept in the library, and in force if the operator says so."""
+        path = path or self._Linearity_Record('Make a bench table from a linearity record')
         if not path:
             return
         try:
             header, _, _ = hardware_calibration.Read_Record(path)
-            table = scan_table.Build(hardware_calibration.Read_Linearity(path),
-                                     self._Table_Meta(header, path))
+            points, _ = hardware_calibration.Read_Table_Sweep(path)
+            table = scan_table.Build(points, self._Table_Meta(header, path))
             saved = scan_table.Save(table, self._Data_Dir)
         except (OSError, ValueError, hardware_calibration.Calibration_Error) as e:
             QMessageBox.warning(self, 'No table made', f"{os.path.basename(path)} made no bench "
@@ -1082,6 +1102,65 @@ class Main_Window(QMainWindow):
         else:
             self.statusBar().showMessage(f"Bench table {table.Id[:8]} kept, not in use: {saved}",
                                          10000)
+
+    def _Table_Sweep(self, params, note=None, then=None):
+        """The linearity sweep ``params`` for the bench table, watched on the
+        Linearity page; by default made into a table once it completes."""
+        self.Hardware.Pages.setCurrentWidget(self.Hardware.Linearity)
+        self._Run_Bench(self.Hardware.Linearity, self._Sweep, params,
+                        {'Purpose': 'bench table', **(note or {})}, then or self._Table_Swept)
+
+    def _Table_Swept(self, paths, completed):
+        if completed:
+            self._Make_Table(paths[0])
+        else:
+            self.statusBar().showMessage("The table's sweep stopped: Scan table ▸ Resume... "
+                                         "takes it up from its record.", 15000)
+
+    def _Resume_Table(self):
+        """A table's sweep that stopped, taken up after its last 0 V check
+        as its record set it, in a record of its own that names it."""
+        path = self._Linearity_Record("Resume a bench table's sweep from its record")
+        if not path:
+            return
+        try:
+            header, _, footer = hardware_calibration.Read_Record(path)
+            if footer.get('status') == 'completed':
+                raise ValueError("it completed: make the table from it instead")
+            _, rungs = hardware_calibration.Read_Table_Sweep(path)
+            params = {key: cast(header[key]) for key, cast in RESUMED}
+        except (OSError, KeyError, ValueError, hardware_calibration.Calibration_Error) as e:
+            QMessageBox.warning(self, 'Not resumed', f"{os.path.basename(path)} cannot be "
+                                                     f"resumed: {e}")
+            return
+        self._Table_Sweep(dict(params, ramp=self.Hardware.Ramp(), skip=rungs),
+                          {'Resumes': os.path.basename(path)})
+
+    def _Check_Table(self):
+        """The table in force checked against the converters as they are now."""
+        if self._Table is not None:
+            params = self.Hardware.Table.Check_Params(self._Table, self.Hardware.Ramp(),
+                                                      int(time.time()) % 1000000)
+            self._Table_Sweep(params, {'Purpose': 'table check', 'ScanTable': self._Table.Id},
+                              self._Table_Checked)
+
+    def _Table_Checked(self, paths, completed):
+        points = [p for p in hardware_calibration.Read_Linearity(paths[0])
+                  if p['Kind'] == 'sweep']
+        try:
+            verdict, fit = scan_table.Check(
+                self._Table, np.array([p['Channel'] for p in points]),
+                scan_table.Codes([p['Dac_V'] for p in points]),
+                np.array([p['Read_V'] for p in points]))
+        except scan_table.Table_Error as e:
+            QMessageBox.warning(self, 'Table not checked', str(e))
+            return
+        self.Table_Check = {'Verdict': verdict, 'Fit': fit, 'Path': paths[0],
+                            'Complete': completed}
+        log.info("Table %s check: %s", self._Table.Id[:8],
+                 scan_table.Summary(dict(fit, Verdict=verdict)))
+        self.Hardware.Table.Show_Check(verdict, fit, paths[0])
+        self.Hardware.Pages.setCurrentWidget(self.Hardware.Table)
 
     def _Pick_Table(self, title):
         """A table chosen from the library, or anywhere, or None."""
@@ -1112,7 +1191,7 @@ class Main_Window(QMainWindow):
 
     def _Set_Table(self, table, path=None):
         """``table`` (None: none) in force from now on, and in the settings."""
-        self._Table, self._Table_Path = table, path
+        self._Table, self._Table_Path, self.Table_Check = table, path, None
         settings.Update(scan_table=table.Id if table else None)
         why = '' if table is None else scan_table.Matches(table, self._Identity)[1]
         self.Hardware.Table.Show(table, path, why)

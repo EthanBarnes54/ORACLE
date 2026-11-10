@@ -134,13 +134,14 @@ def Linearity_Marks(rungs, zero_every):
 
 
 def Linearity_Plan(start, stop, step_v, direction, ramp_step_v, fine_span_v=0.0,
-                   fine_step_v=0.0, zero_every=0, seed=0):
+                   fine_step_v=0.0, zero_every=0, seed=0, skip=0):
     """A ladder laid out by count (no float accumulation), with a finer grid
     across ``+-fine_span_v``, visited in ``direction`` and measured at every
-    rung, 0 V read again before every ``zero_every`` rungs and at the end.
-    Each rung is labelled ``('sweep', way, volts)`` and each check
-    ``('zero', '', 0.0)``."""
-    sequence = Linearity_Rungs(start, stop, step_v, direction, fine_span_v, fine_step_v, seed)
+    rung after the first ``skip`` (taken by a sweep this one resumes), 0 V
+    read again before every ``zero_every`` rungs and at the end. Each rung
+    is labelled ``('sweep', way, volts)`` and each check ``('zero', '', 0.0)``."""
+    sequence = Linearity_Rungs(start, stop, step_v, direction, fine_span_v, fine_step_v,
+                               seed)[skip:]
     plan = Bench_Plan(ramp_step_v)
     for i, (volts, way) in enumerate(sequence):
         if zero_every and i % zero_every == 0:
@@ -365,7 +366,7 @@ LINEARITY_COLUMNS = ('kind', 'direction', 'set_v', 'read_v', 'sigma_v', 'channel
 
 def Linearity_Sweep(link, meter, divider, start, stop, step_v, direction, settle_s, readings,
                     nplc, ramp, progress, stopped, fine_span_v=0.0, fine_step_v=0.0,
-                    zero_every=0, seed=0, autocal=False, records=None):
+                    zero_every=0, seed=0, autocal=False, records=None, skip=0):
     """Read every mark of :func:`Linearity_Plan` ``readings`` times at
     ``nplc`` with autozero, ``settle_s`` after its write, the meter first
     autocalibrated if ``autocal``; ``progress(point)`` after each, and each
@@ -399,7 +400,7 @@ def Linearity_Sweep(link, meter, divider, start, stop, step_v, direction, settle
         progress(point)
 
     plan = Linearity_Plan(start, stop, step_v, direction, ramp[0], fine_span_v, fine_step_v,
-                          zero_every, seed)
+                          zero_every, seed, skip)
     dac = Run_Bench(link, meter, setup, plan, ramp, measure, stopped)
     return dict(Linearity_Analysis(points), Dac=dac)
 
@@ -849,6 +850,32 @@ def Read_Linearity(path):
              'Sigma_V': float(numbers['sigma_v'][i]), 'Channel': int(numbers['channel'][i]),
              'Dac_V': float(numbers['dac_v'][i]), 'Time_S': float(numbers['time_s'][i])}
             for i in range(len(columns['kind']))]
+
+
+def Read_Table_Sweep(path):
+    """``(points, rungs)`` of the linearity sweep at ``path`` and the
+    stopped ones it resumes (its ``Resumes``, each in the same folder), on
+    the first one's clock, each cut after its last 0 V check, since a point
+    after it has no check on its far side; ``rungs`` is how many of the
+    plan's rungs they hold, where a sweep resuming them takes up."""
+    chain, seen = [], set()
+    while path and path not in seen:
+        seen.add(path)
+        header, _, _ = Read_Record(path)
+        chain.insert(0, (path, header))
+        earlier = header.get('Resumes')
+        path = os.path.join(os.path.dirname(path), earlier) if earlier else None
+    points, rungs, first = [], 0, None
+    for path, header in chain:
+        taken = Read_Linearity(path)
+        zeros = [i for i, point in enumerate(taken) if point['Kind'] == 'zero']
+        taken = taken[:zeros[-1] + 1] if zeros else []
+        when = datetime.strptime(header['Date'], '%Y-%m-%d %H:%M:%S')
+        first = first or when
+        shift = (when - first).total_seconds()
+        points += [dict(point, Time_S=point['Time_S'] + shift) for point in taken]
+        rungs += sum(point['Kind'] == 'sweep' for point in taken)
+    return points, rungs
 
 
 def Read_Cooler(path):

@@ -78,6 +78,18 @@ def test_The_0_V_Level_Is_Taken_Out_As_It_Warms_And_Gives_The_Check_Interval(oct
     assert st.Analysis(table)['Check_Interval_S'] == table.Meta['check_interval_s'] == interval
 
 
+def test_Warming_Up_Is_Said_While_The_0_V_Checks_Still_Move_Clear_Of_Their_Noise(oct25):
+    """The bench's own checks: warming in their first hour, settled in their
+    last; a few early checks too close together to tell say nothing."""
+    times, volts = st.Zero_Level(oct25[1])
+    early = times <= times[0] + 3600.0
+    # falling 0.13 V/h, as the 0 V level did through its first hour
+    assert st.Warming(times[early], volts[early]) == pytest.approx(-0.135, abs=0.01)
+    assert st.Warming(times, volts) is None
+    assert st.Warming(times[:3], volts[:3] + np.array([0.0, 0.003, -0.002])) is None
+    assert st.Warming(times[:2], volts[:2]) is None
+
+
 def test_A_Second_Days_Table_Agrees_With_The_First(oct25, oct26):
     table, _ = oct25
     later = st.Build(oct26[0])

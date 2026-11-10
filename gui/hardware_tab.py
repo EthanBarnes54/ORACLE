@@ -577,6 +577,8 @@ class Linearity_Panel(_Panel):
         sweep = [p for p in self._Points if p['Kind'] == 'sweep']
         zeros = [p for p in self._Points if p['Kind'] == 'zero']
         self._Zeros.setData([p['Set_V'] for p in zeros], [p['Read_V'] for p in zeros])
+        if point['Kind'] == 'zero' and len(zeros) >= 3:
+            self._Warming([p['Time_S'] for p in zeros], [p['Read_V'] for p in zeros])
         text = (f"last: set {point['Set_V']:.1f} V  read {point['Read_V']:.3f} V  "
                 f"σ {point['Sigma_V']:.3f} V")
         if not sweep:
@@ -595,6 +597,19 @@ class Linearity_Panel(_Panel):
             difference.setData(set_v[side], (read_v - set_v)[side])
             residual.setData(set_v[side], (read_v - fitted)[side])
         self.Fit_Label.setText(text)
+
+    def _Warming(self, times, volts):
+        """A warning while the 0 V checks say the rack is still warming up."""
+        slope = scan_table.Warming(times, volts)
+        if slope is None:
+            if self._Notes.pop('Warming up', None):
+                self._Render()
+            return
+        self.Add_Note(('WARN', 'Warming up'), [
+            ('0 V level', Figure(slope, '+.3f', 'V/h')),
+            Muted(f"The rack is still warming up: a table measured now carries the drift the "
+                  f"0 V checks cannot follow. Measure it once the level moves less than "
+                  f"{scan_table.WARMING_V_PER_H:g} V/h.")])
 
     def Show_Result(self, result, paths):
         fits = result['Fits']
@@ -807,11 +822,15 @@ class Cooler_Panel(_Panel):
 
 
 class Table_Panel(QWidget):
-    """The bench table: the one in force, what it says of the converters
-    and of the 0 V level, and its shape about a straight line."""
+    """The bench table: measuring one, the one in force, what it says of
+    the converters and of the 0 V level, and its shape about a straight
+    line. A table is measured as a linearity sweep (scan_table.TABLE), run
+    and watched on the Linearity page at its settle time, and checked
+    against the one in force by a quick one (scan_table.CHECK)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, limit_v, settle_box, parent=None):
         super().__init__(parent)
+        self._Limit_V, self._Settle_Box = limit_v, settle_box
         self.Residual_Plot = plots.Plot('Bench-table residuals from a linear fit',
                                         (f"Setpoint {plots.U_SET}", 'V'),
                                         (f"{plots.Sym('T')} − {plots.LINE_FIT}", 'V'), (
@@ -842,15 +861,98 @@ class Table_Panel(QWidget):
         self.Report_Label = Report_Label('No bench table in use.')
         column.addWidget(self.Report_Label)
         column.addStretch(1)
-        self._Sections = []
-        Side_By_Side(self, ((self.Group, 1),), self.Residual_Plot)
+        self._Sections, self._Check = [], []
+
+        self.Measure_Group = QGroupBox('Measure')
+        self.Span_Combo = QComboBox()
+        for span in scan_table.TABLE_SPANS_V:
+            self.Span_Combo.addItem(f"±{min(span, limit_v):g} V", min(span, limit_v))
+        self.Order_Combo = QComboBox()
+        self.Order_Combo.addItems((hc.DIRECTIONS[0], hc.DIRECTIONS[3]))
+        self.Order_Combo.setToolTip("Random order separates the converters' shape from any "
+                                    "drift the 0 V checks do not follow.")
+        self.Estimate_Label = QLabel()
+        self.Estimate_Label.setWordWrap(True)
+        grid = Form(self.Measure_Group, (('Span', self.Span_Combo),
+                                         ('Order', self.Order_Combo)))
+        grid.addWidget(self.Estimate_Label, grid.rowCount(), 0, 1, 2)
+        self.Measure_Button = QPushButton('Measure table')
+        self.Measure_Button.setToolTip(
+            f"Sweep the span in {scan_table.TABLE['step_v']:g} V steps, "
+            f"{scan_table.TABLE['readings']} readings at NPLC {scan_table.TABLE['nplc']:g} a "
+            f"point, 0 V every {scan_table.TABLE['zero_every']} points, at the Linearity "
+            f"page's settle time; made into a table when it ends. Overnight for the full "
+            f"span.")
+        self.Resume_Button = QPushButton(theme.Icon('folder-open'), 'Resume...')
+        self.Resume_Button.setToolTip("Take up a table's sweep that stopped, from its record, "
+                                      "after its last 0 V check.")
+        self.Check_Button = QPushButton('Check table', enabled=False)
+        self.Check_Button.setToolTip(
+            f"{scan_table.CHECK['points']} points across the table's span, one reading at "
+            f"NPLC {scan_table.CHECK['nplc']:g} each, fitted to the table in force: PASS at "
+            f"{scan_table.CHECK_RMS_V * 1e3:.0f} mV rms or less. Start of a shift and after "
+            f"a power cycle.")
+        buttons = QHBoxLayout()
+        for button in (self.Measure_Button, self.Resume_Button, self.Check_Button):
+            buttons.addWidget(button)
+        grid.addLayout(buttons, grid.rowCount(), 0, 1, 2)
+        self.Span_Combo.currentIndexChanged.connect(self._Estimate)
+        settle_box.valueChanged.connect(self._Estimate)
+        self._Estimate()
+        Side_By_Side(self, ((self.Measure_Group, 0), (self.Group, 1)), self.Residual_Plot)
+
+    def _Estimate(self):
+        span, table = self.Span_Combo.currentData(), scan_table.TABLE
+        rungs = int(round(2 * span / table['step_v'])) + 1
+        marks = rungs + -(-rungs // table['zero_every']) + 1
+        # each reading integrates its NPLC, and autozero doubles it
+        point_s = (self._Settle_Box.value()
+                   + 2 * table['readings'] * table['nplc'] / hc.POWER_LINE_HZ)
+        self.Estimate_Label.setText(f"{marks} points with the 0 V checks, about "
+                                    f"{Duration_Text(marks * point_s)}")
+
+    def _Sweep(self, ramp, **params):
+        return {'settle_s': self._Settle_Box.value(), 'ramp': ramp, 'fine_span_v': 0.0,
+                'fine_step_v': 0.0, 'seed': 0, 'autocal': False, **params}
+
+    def Params(self, ramp):
+        """The linearity sweep that measures a table, as the page sets it."""
+        span, table = self.Span_Combo.currentData(), scan_table.TABLE
+        return self._Sweep(ramp, start=-span, stop=span, step_v=table['step_v'],
+                           direction=self.Order_Combo.currentText(),
+                           readings=table['readings'], nplc=table['nplc'],
+                           zero_every=table['zero_every'])
+
+    def Check_Params(self, table, ramp, seed):
+        """The quick sweep that checks ``table``: its span (within the
+        platform's limit) in random order from ``seed``."""
+        visited = np.concatenate([c['setpoint_v'] for c in table.Channels.values()])
+        low, high = max(visited.min(), -self._Limit_V), min(visited.max(), self._Limit_V)
+        check = scan_table.CHECK
+        return self._Sweep(ramp, start=float(low), stop=float(high),
+                           step_v=float(high - low) / (check['points'] - 1),
+                           direction=hc.DIRECTIONS[3], readings=check['readings'],
+                           nplc=check['nplc'], zero_every=0, seed=seed)
+
+    def Show_Check(self, verdict, fit, path):
+        """A table check's ``verdict`` and ``fit`` under the table's report."""
+        self._Check = [((verdict, 'Check'), [
+            ('Residual', f"{fit['Rms_V'] * 1e3:.1f} mV rms"),
+            ('a', Figure(fit['A_V'] * 1e3, '+.1f', 'mV')),
+            ('b − 1', Figure((fit['B'] - 1.0) * 1e6, '+.1f', 'ppm')),
+            ('Points', fit['Points']), ('Record', os.path.basename(path)),
+            Muted("The converters are as the table says." if verdict == 'PASS' else
+                  f"Above {scan_table.CHECK_RMS_V * 1e3:.0f} mV rms: the table no longer "
+                  f"describes the converters. Measure it again.")])]
+        self.Report_Label.setText(Report_Html([*self._Sections, *self._Check]))
 
     def Show(self, table, path=None, mismatch=''):
         """``table`` as the one in force (None: none), from its library file
         ``path``, with why it may not describe this rack."""
         self.Residual_Plot.clear()
-        self.Compare_Button.setEnabled(table is not None)
-        self.Clear_Button.setEnabled(table is not None)
+        self._Check = []
+        for button in (self.Compare_Button, self.Clear_Button, self.Check_Button):
+            button.setEnabled(table is not None)
         if table is None:
             self._Sections = []
             self.Report_Label.setText('No bench table in use: runs are not fitted to one.')
@@ -930,7 +1032,7 @@ class Hardware_Tab(QWidget):
         self.Settle = Settle_Panel(self.Ramp, limit_v)
         self.Linearity = Linearity_Panel(self.Ramp, limit_v)
         self.Cooler = Cooler_Panel()
-        self.Table = Table_Panel()
+        self.Table = Table_Panel(limit_v, self.Linearity.Settle_Box)
         self.Panels = (self.Settle, self.Linearity, self.Cooler)
         self.Pages = QTabWidget()
         for page, name in zip((*self.Panels, self.Table),

@@ -3,6 +3,7 @@ analyses, the DAC correction they propose, their records, and a run of each on t
 simulated rack."""
 
 import multiprocessing
+import os
 
 import numpy as np
 import pytest
@@ -74,6 +75,46 @@ def test_A_Random_Sweep_Visits_Every_Rung_Once_In_An_Order_Its_Seed_Fixes():
         -200.0, 200.0, 50.0, hc.DIRECTIONS[3], 500.0, seed=seed))]
     assert sorted(rungs(1)) == pytest.approx(np.arange(-200.0, 201.0, 50.0))
     assert rungs(1) == rungs(1) and rungs(1) != rungs(2)
+
+
+def test_A_Resumed_Sweep_Takes_Up_The_Rungs_Its_Records_Did_Not_Take(tmp_path):
+    """A sweep that stopped is resumed after its last 0 V check, in a record
+    of its own naming it; the two read back as one sweep on the first's
+    clock, without the rungs left with no check on their far side."""
+    args = (-200.0, 200.0, 50.0, hc.DIRECTIONS[3], 500.0)
+    whole = [volts for _, volts in _Measured(hc.Linearity_Plan(*args, seed=4))]
+    assert [volts for _, volts in _Measured(hc.Linearity_Plan(*args, seed=4, skip=3))] == \
+        whole[3:]
+
+    def record(name, date, points, resumes=None):
+        header = {'Date': date, **({'Resumes': resumes} if resumes else {})}
+        kept = hc.Record(str(tmp_path), 'linearity', header, hc.LINEARITY_COLUMNS)
+        kept.Add(*([p[key] for p in points] for key in hc.POINT_KEYS))
+        kept.Close('stopped')
+        os.rename(kept.Path, tmp_path / 'hardware_calibration' / name)
+
+    def point(kind, volts, t):
+        return {'Kind': kind, 'Direction': 'random' if kind == 'sweep' else '',
+                'Set_V': volts, 'Read_V': volts - 1.0, 'Sigma_V': 0.001, 'Channel': 0,
+                'Dac_V': volts / 1000.0, 'Time_S': t}
+
+    first = [point('zero', 0.0, 0.0), *(point('sweep', v, 1.0 + i)
+                                        for i, v in enumerate(whole[:4])),
+             point('zero', 0.0, 5.0), point('sweep', whole[4], 6.0)]
+    second = [point('zero', 0.0, 0.0), *(point('sweep', v, 1.0 + i)
+                                         for i, v in enumerate(whole[4:])),
+              point('zero', 0.0, 9.0)]
+    record('linearity_2026-11-10_100000.csv', '2026-11-10 10:00:00', first)
+    record('linearity_2026-11-10_120000.csv', '2026-11-10 12:00:00', second,
+           resumes='linearity_2026-11-10_100000.csv')
+    points, rungs = hc.Read_Table_Sweep(
+        str(tmp_path / 'hardware_calibration' / 'linearity_2026-11-10_120000.csv'))
+    assert rungs == len(whole) == 9
+    assert [p['Set_V'] for p in points if p['Kind'] == 'sweep'] == whole
+    assert [p['Time_S'] for p in points if p['Kind'] == 'zero'] == [0.0, 5.0, 7200.0, 7209.0]
+    # the first alone: cut after its last check, where its resumption takes up
+    assert hc.Read_Table_Sweep(
+        str(tmp_path / 'hardware_calibration' / 'linearity_2026-11-10_100000.csv'))[1] == 4
 
 
 def _First_Order(tau, height=1000.0, noise=0.1, interval=1e-4, count=4000, step_at=0.04):

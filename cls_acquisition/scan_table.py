@@ -10,7 +10,12 @@ A. Raggio's bench table (November 2026) measures it slowly, with 0 V
 checks between, and each run is fitted to it, V = a + b*T
 (:func:`Fit_Run`): 262 mV rms for a linear calibration became about 10 mV.
 
-A table is built from a linearity record: each reading less the 0 V level
+A table is measured as a linearity sweep with 0 V checks (TABLE: 1 V
+steps over +-1 kV for a quick table, +-3 kV for a full one, 5 readings
+at NPLC 10, 0 V every 10 points), resumable from its record if it is
+stopped, and checked in a few minutes against a few hundred points
+across its span (CHECK). It is built from the sweep's record (and the
+records it resumes): each reading less the 0 V level
 interpolated between the checks (it warms up by 0.2 V in the first
 hour), averaged by converter and code, the codes being what the
 converters held, as each run records them (DacCodes). A code not visited
@@ -44,6 +49,9 @@ DRIFT_TOLERANCE_V = 0.010           # the 0 V drift worth a check: the table's o
 REPEATABILITY_V = 0.010             # a table's day to day, once 0 V is taken out (Raggio)
 STALE_FACTOR = 2.0                  # a run's residual this many times what is expected: stale
 BRANCHES = ((CH_POS, 'positive'), (CH_NEG, 'negative'))
+TABLE = {'step_v': 1.0, 'readings': 5, 'nplc': 10.0, 'zero_every': 10}
+TABLE_SPANS_V = (1000.0, 3000.0)    # either way of 0 V: a quick table and a full one
+CHECK = {'points': 250, 'readings': 1, 'nplc': 10.0}
 
 
 class Table_Error(ValueError):
@@ -150,8 +158,7 @@ def Build(points, meta=None):
                             'volts': np.round(mean, 6), 'sigma_v': np.round(error, 6),
                             'readings': counts}
     hours = (zero_t - zero_t[0]) / 3600.0
-    last = hours >= hours[-1] - 1.0
-    tail = np.polyfit(hours[last], zero_v[last], 1)[0] if last.sum() >= 3 else np.nan
+    tail = Zero_Slope(zero_t, zero_v)[0]
     info = {'measured': f"{datetime.now():%Y-%m-%d %H:%M:%S}",
             'span_v': [float(setpoint.min()), float(setpoint.max())],
             'points': len(sweep),
@@ -185,6 +192,27 @@ def Analysis(table, zero=None):
     result['Check_Interval_S'] = (Check_Interval(*zero) if zero is not None
                                   else table.Meta.get('check_interval_s'))
     return result
+
+
+def Zero_Slope(times, volts):
+    """``(slope, its standard error)`` of the 0 V checks over their last
+    hour, in V/h; NaN with fewer than three."""
+    hours = (np.asarray(times, dtype=float) - times[0]) / 3600.0
+    last = hours >= hours[-1] - 1.0
+    if last.sum() < 3:
+        return np.nan, np.nan
+    x, y = hours[last], np.asarray(volts, dtype=float)[last]
+    slope, offset = np.polyfit(x, y, 1)
+    spread = np.sum((x - x.mean()) ** 2)
+    rest = np.sum((y - slope * x - offset) ** 2) / max(len(x) - 2, 1)
+    return float(slope), float(np.sqrt(rest / spread)) if spread > 0 else np.nan
+
+
+def Warming(times, volts):
+    """The 0 V checks' slope (V/h) while they still drift faster than
+    WARMING_V_PER_H, three standard errors clear of their noise, else None."""
+    slope, error = Zero_Slope(times, volts)
+    return slope if abs(slope) > max(WARMING_V_PER_H, 3.0 * error) else None
 
 
 def Allan(times, volts):
