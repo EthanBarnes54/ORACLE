@@ -1,6 +1,6 @@
 """ORACLE's settings: the rack, the facility services and the data folder.
 
-Date:    2026-11-09
+Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
@@ -27,6 +27,7 @@ of ORACLE's commits is running, for the same record.
 Depends on: PyYAML; git, if ORACLE runs from a checkout.
 """
 
+import contextlib
 import copy
 import os
 import subprocess
@@ -141,6 +142,26 @@ def Settings_Path():
 def Inputs_Path():
     """Where the window keeps what was last entered in it: beside the settings."""
     return os.path.join(os.path.dirname(Settings_Path()), 'inputs.yaml')
+
+
+def Last_Rack(kind, rack):
+    """The rack the last session of ``kind`` (simulated or hardware) ran on,
+    or None, kept beside the settings; ``rack`` is kept in its place for
+    the next. A file that cannot be read or written is passed over."""
+    path = os.path.join(os.path.dirname(Settings_Path()), 'rack.yaml')
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            kept = yaml.safe_load(fh)
+    except (OSError, yaml.YAMLError, UnicodeDecodeError):
+        kept = None
+    kept = kept if isinstance(kept, dict) else {}
+    last = kept.get(kind)
+    kept[kind] = rack
+    with contextlib.suppress(OSError):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as fh:
+            yaml.safe_dump(kept, fh, default_flow_style=False, sort_keys=False)
+    return last if isinstance(last, dict) else None
 
 
 def _Read():

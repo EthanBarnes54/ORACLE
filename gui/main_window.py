@@ -58,8 +58,7 @@ from cls_acquisition import (calibration, hardware_calibration, run_file, scan_p
 from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
-from cls_acquisition.hardware import Rack
-from cls_acquisition.hardware import mcc_dac
+from cls_acquisition.hardware import Changes, Rack, mcc_dac
 from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 from gui import plots, session_log, theme
 from gui.calibration_tab import Calibration_Tab
@@ -132,6 +131,12 @@ class Main_Window(QMainWindow):
             loop = None
         self._Identity = rack.Identity(loop, line_meter, cooler_meter)
         self._Commit = settings.Commit()
+        now = {**self._Identity, 'Dividers': rack.Dividers()}
+        changed = Changes(settings.Last_Rack(self._Identity['Kind'], now) or {}, now)
+        if changed:
+            warnings = [*warnings, f"The hardware changed since the last session: re-measure "
+                                   f"the settle model and the scan table. Changed: "
+                                   f"{'; '.join(changed)}."]
         # the bench table runs are fitted to, from the library; a missing one or one
         # measured on another rack is said for the whole session, never refused
         self._Table, self._Table_Path, missing = self._Active_Table(config['scan_table'])

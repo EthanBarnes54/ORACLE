@@ -523,6 +523,33 @@ def test_A_Bench_Table_Is_Made_From_A_Sweep_Kept_And_Named_By_Each_Run(qapp, win
     assert 'No bench table in force' in window.Calibration.Report_Label.text()
 
 
+def test_A_Change_Of_Hardware_Since_The_Last_Session_Is_Said_At_Start(qapp, monkeypatch,
+                                                                       tmp_path):
+    """A first session and one on the same rack say nothing; one on a rack
+    whose meter changed says what changed and what to measure again."""
+    def warning(window):
+        return [w.toolTip() for w in window.findChildren(QLabel)
+                if w.text().strip() == 'Rack warning']
+
+    for _ in range(2):
+        window = Open_Window(monkeypatch, tmp_path)
+        try:
+            assert warning(window) == []
+        finally:
+            Close_Window(qapp, window)
+    kept = yaml.safe_load((tmp_path / 'rack.yaml').read_text())
+    kept['simulated']['LineMeter'] = 'Keysight 34465A, an older one'
+    (tmp_path / 'rack.yaml').write_text(yaml.safe_dump(kept))
+    window = Open_Window(monkeypatch, tmp_path)
+    try:
+        [said] = warning(window)
+        assert said.startswith("The hardware changed since the last session: re-measure the "
+                               "settle model and the scan table.")
+        assert 'line meter: Keysight 34465A, an older one →' in said
+    finally:
+        Close_Window(qapp, window)
+
+
 def test_A_Table_From_Another_Rack_Or_Missing_Is_Said_At_Start(qapp, monkeypatch, tmp_path):
     from cls_acquisition import scan_table
     from tests.test_scan_table import _Points

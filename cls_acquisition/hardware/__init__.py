@@ -1,7 +1,7 @@
 """The rack: the instruments ORACLE drives, real or simulated.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The acquisition process owns the DAC, the PulseBlaster and the tagger
@@ -19,7 +19,8 @@ before anything opens.
 settings name the amplifier, which cannot; :meth:`Rack.Dividers` are
 the dividers as the settings give them, ratios and all. Both are
 recorded with every run and bench record: which runs a hardware change
-touched is often learned only later.
+touched is often learned only later. :func:`Changes` says what differs
+between two sessions' racks, so a change is said at start-up.
 
 Depends on: .keysight, .mcc_dac, .pulseblaster, .simulated, .timetagger,
 .visa_session.
@@ -27,6 +28,9 @@ Depends on: .keysight, .mcc_dac, .pulseblaster, .simulated, .timetagger,
 
 from cls_acquisition.hardware import keysight, mcc_dac, pulseblaster, simulated, timetagger
 from cls_acquisition.hardware.visa_session import Pyvisa_Connect, Visa_Session
+
+PARTS = {'LineMeter': 'line meter', 'CoolerMeter': 'cooler meter', 'Dac': 'DAC board',
+         'Tagger': 'tagger', 'Amplifier': 'amplifier', 'Dividers': 'dividers'}
 
 
 class Rack():
@@ -121,3 +125,17 @@ def Open_Loop_Devices(spec):
             timetagger.Time_Tagger(instruments['tagger_levels'],
                                    instruments['tagger_trigger_level'],
                                    instruments['tagger_driver']), gate)
+
+
+def Changes(last, now, where=()):
+    """What differs between two racks (:meth:`Rack.Identity` with the
+    :meth:`Rack.Dividers`), as 'part: before → now', leaving out whatever
+    either session could not read."""
+    found = []
+    for key in [k for k in now if k in last and k != 'Kind']:
+        before, after, name = last[key], now[key], (*where, PARTS.get(key, str(key)))
+        if isinstance(before, dict) and isinstance(after, dict):
+            found += Changes(before, after, name)
+        elif before is not None and after is not None and before != after:
+            found.append(f"{' '.join(name)}: {before} → {after}")
+    return found

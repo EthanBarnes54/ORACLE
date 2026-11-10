@@ -1,5 +1,6 @@
 """Settings and the facility services' offline behaviour."""
 
+import copy
 import logging
 import multiprocessing
 import os
@@ -24,6 +25,30 @@ def test_Update_Rewrites_Only_Its_Keys(monkeypatch, tmp_path):
     loaded = settings.Load()
     assert loaded['elog'] == dict(settings.DEFAULTS['elog'], author='someone')
     assert loaded['instruments'] == settings.DEFAULTS['instruments']
+
+
+def test_Each_Kind_Of_Rack_Is_Kept_For_The_Next_Session_And_Its_Changes_Named(
+        monkeypatch, tmp_path):
+    """The last rack of each kind is kept beside the settings; what differs
+    from it is named part by part, and what either session could not read
+    is no change."""
+    from cls_acquisition.hardware import Changes
+    monkeypatch.setenv('ORACLE_SETTINGS_PATH', str(tmp_path / 'settings.yaml'))
+    first = {'Kind': 'hardware', 'LineMeter': 'Keysight 34465A,MY1', 'Tagger': None,
+             'Dac': {'Board': 'USB-231', 'UniqueId': 'A1'},
+             'Dividers': {'Scan': {'ratio': 1000.0}}}
+    assert settings.Last_Rack('hardware', first) is None
+    assert settings.Last_Rack('simulated', {'Kind': 'simulated'}) is None
+    second = copy.deepcopy(first)
+    second['Dac']['UniqueId'], second['Tagger'] = 'B2', 'TT20 1234'
+    second['Dividers']['Scan']['ratio'] = 999.9
+    last = settings.Last_Rack('hardware', second)
+    assert last == first and settings.Last_Rack('hardware', second) == second
+    assert Changes(last, second) == ['DAC board UniqueId: A1 → B2',
+                                     'dividers Scan ratio: 1000.0 → 999.9']
+    assert Changes(second, second) == [] and Changes({}, second) == []
+    (tmp_path / 'rack.yaml').write_text('[not, a, mapping')
+    assert settings.Last_Rack('hardware', first) is None
 
 
 def test_A_Simulated_Rack_Never_Writes_Among_The_Real_Runs():
