@@ -1,20 +1,15 @@
-"""Shared GUI building blocks: spin boxes, form layouts, verdicts, reports,
-the scrolling control column and the worker thread.
+"""Shared GUI building blocks: inputs, layouts, reports and the worker thread.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-What more than one tab builds the same way. :func:`Report_Html` lays a
-measurement's results out for its report label: titled sections of
-labelled figures, right-aligned so they line up, small tables where a
-result comes per branch or per step, verdicts as coloured badges, and
-the files it saved as their names, each a link. :class:`Scroll_Column` holds
-a tab's controls, so the window fits a short screen. :class:`Job_Worker`
-keeps a long job off the GUI thread: the job is ``job(progress,
-stopped)``, it reports through ``progress`` and checks ``stopped()``
-between steps, and what it returns arrives in ``Done``; an exception
-arrives in ``Failed`` as its sentence, and is logged in full.
+What more than one tab builds alike. :func:`Report_Html` lays results
+out as titled sections of aligned figures, small tables, verdict badges
+and the saved files as links. :class:`Scroll_Column` lets the window fit
+a short screen. :class:`Job_Worker` runs ``job(progress, stopped)`` off
+the GUI thread: its result arrives in ``Done``, an exception in ``Failed``
+(and the log).
 
 Depends on: PySide6; gui.theme.
 """
@@ -103,10 +98,9 @@ def _Grid(table):
 
 
 def Report_Html(sections):
-    """A measurement's report, for a QLabel: ``sections`` of ``(heading,
-    rows)``, a heading a title or ``(verdict, title)``. A row is a
-    ``(label, value)`` pair, the value right-aligned so the figures line
-    up; a string, a sentence across the report; or a :class:`Report_Table`."""
+    """A report for a QLabel: ``sections`` of ``(heading, rows)``, a heading a
+    title or ``(verdict, title)``; a row a ``(label, value)`` pair (values
+    right-aligned), a sentence, or a :class:`Report_Table`."""
     muted, title = theme.TOKENS['text_muted'], theme.TOKENS['accent_title']
     out = []
     for heading, rows in sections:
@@ -156,11 +150,9 @@ def Report_Label(text):
 
 
 class Scroll_Column(QScrollArea):
-    """A tab's control column, laid out by ``layout``, that scrolls when the
-    window is too short for it (2026-10-30): the columns set every tab's
-    height, and the window was cut off at the bottom of a screen shorter
-    than they are. It never scrolls across: it asks for its controls' width
-    and the scroll bar's beside them, so the bar never covers a control."""
+    """A tab's control column (``layout``) that scrolls when the window is too
+    short for it, never across: it asks for its controls' width plus the
+    scroll bar's, so the bar covers nothing."""
 
     def __init__(self, layout, parent=None):
         super().__init__(parent)
@@ -226,10 +218,9 @@ class Job_Worker(QThread):
         return self._Stop.is_set()
 
     def Retire(self):
-        """Let a finished job's thread go now: wait out the moment between its
-        finished signal and its end, then leave it to its last reference,
-        rather than post a deferred delete that its parent's own deletion
-        could race."""
+        """Let a finished job's thread go: wait out the gap between its finished
+        signal and its end, then leave it to its last reference (a deferred
+        delete could race its parent's deletion)."""
         self.wait()
         self.setParent(None)
 

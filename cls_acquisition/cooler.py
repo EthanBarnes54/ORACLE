@@ -4,19 +4,12 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The cooler meter is read for 200-500 us every 50 ms, not with the bunch,
-so each reading catches the 50 Hz ripple (0.33 V amplitude) at a random
-phase, and correcting each hit by its own reading adds that scatter to
-the spectrum (A. Raggio, November 2026). The analysis takes a rolling mean
-of about 15 s instead, which follows the slow wander (33 mV rms in 1 s
-means); cls_tools is being changed to match. The window is in seconds,
-not readings, whose rate changes (10 Hz monitor now, per bunch later).
-
-The mean is a boxcar over the readings within the window: centred, for a
-run taken, or trailing, for a live display (lagging by half the window).
-It never reaches across a gap longer than the window, and is marked
-partial where it reaches past the readings of its stretch. Both forms
-and the window stay parameters until cls_tools' definition is agreed.
+The meter reads for 200-500 us every 50 ms, unsynchronised with the
+bunch, so each reading catches the 50 Hz ripple (0.33 V) at a random phase
+(A. Raggio, November 2026). The analysis takes a boxcar mean of the
+readings over about 15 s instead (seconds, not readings): centred for a
+finished run, trailing for a live display. It never spans a gap longer
+than the window, and is marked partial where it reaches past its stretch.
 
 Depends on: numpy.
 """

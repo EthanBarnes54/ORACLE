@@ -1,21 +1,15 @@
 """The PulseBlaster's trigger patterns, and the time slices that program them.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A pattern is a list of ``[channel, on_ns, off_ns]``, repeated every
-period; the channel numbers are the rack's wiring. Calibration has no
-pattern: step and confirm takes the PulseBlaster out of it altogether.
+A pattern is ``[channel, on_ns, off_ns]`` rows repeated every period, on
+the rack's wiring; calibration uses none. :func:`Pattern` refuses an edge
+outside its cycle, or a window past the next trigger, which the old DAQ
+took silently.
 
-Every edge must fall inside its cycle. The old DAQ took any timing: a
-release past the end of the cycle left the buncher never released, a
-tagger delay past it silently lengthened the cycle (the period is the
-latest edge), and a window running past the next trigger lost bunches.
-:func:`Pattern` refuses each with a sentence before anything is
-programmed.
-
-Depends on: nothing outside the standard library.
+Depends on: the standard library.
 """
 
 CH_CYCLE = 1                    # high through the whole cycle

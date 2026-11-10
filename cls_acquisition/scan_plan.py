@@ -1,19 +1,14 @@
 """The scan plan: which setpoints a scan visits, and in what order.
 
-Date:    2026-11-05
-Version: 0.4.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Each range's points are counted before they are laid down, so rounding
-in a floating-point step can never add one (an accumulated ``arange``
-made 464 points where 463 were planned). A range that is not a whole
-number of steps ends on its last whole step, never past its stop: a
-count rounded to the nearest put the old DAQ's spurious point back for
-some ranges and not others (-450 to 477 V at 2 V ended at 478 V, -450 to
-475 V at 474 V). Where a range starts on the last point of the one
-before, that point is laid down once. The plan is checked when it is
-built, so a plan that exists is a valid one, and the same plan drives
-both the calibration and the scan.
+Each range's points are counted before they are laid down, so a float
+step never adds one, and a range ends on its last whole step, never past
+its stop (the old DAQ put 478 V on -450 to 477 V at 2 V). A point shared
+by two ranges is laid down once. A plan is checked as it is built, and the
+same plan drives the calibration and the scan.
 
 Depends on: numpy.
 """

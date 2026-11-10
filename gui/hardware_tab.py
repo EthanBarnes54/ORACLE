@@ -1,31 +1,21 @@
-"""The Hardware Calibration tab: settle time, linearity, the cooler monitor and the bench table.
+"""The Hardware Calibration tab: settling, linearity, the cooler, the bench table and health.
 
 Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The bench calibration tool's measurements, each a page laid out as the
-Scan Calibration tab: parameters and buttons on the left with the result
-under them, plots on the right. The ramp between points and the limit
-every setpoint is held to apply to all pages.
-
-Each page reads its own widgets (``Params``, refusing what cannot run
-with a sentence), says the most it puts on the platform (``Max_Volts``,
-which the window asks the operator to arm), and names its records
-(``RECORDS``), the rows its result adds (``Rows``) and what closes them
-(``Results``); a measurement that fails part way is still analysed as far
-as it went (``Partial``). Results are reported in labelled sections
-(shared_widgets.Report_Html), ending with the files saved.
-
-The Scan table page measures, resumes and checks the bench table
-(cls_acquisition.scan_table), makes one from a record or takes it from
-the library, puts it in force and compares it with another; the Health
-check page runs cls_acquisition.health. The line meter can be read
-precisely (the bench tool's 'Read DMM') above the pages.
+The bench tool's measurements, a page each: parameters, buttons and
+result on the left, plots on the right; above them the ramp, the limit and
+a precise line-meter read. A page reads its widgets (``Params``), states
+its peak voltage (``Max_Volts``, which the operator arms) and names its
+records (``RECORDS``, ``Rows``, ``Results``); a failed measurement is
+analysed as far as it went (``Partial``). The Scan table page measures,
+resumes, checks, makes and compares bench tables; the Health check page
+runs cls_acquisition.health.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.calibration,
-cls_acquisition.hardware_calibration, cls_acquisition.hardware.mcc_dac,
-cls_acquisition.health, cls_acquisition.scan_table, gui.plots, gui.shared_widgets, gui.theme.
+.hardware_calibration, .hardware.mcc_dac, .health, .scan_table;
+gui.plots, gui.shared_widgets, gui.theme.
 """
 
 import html

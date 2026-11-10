@@ -1,0 +1,40 @@
+\section{Introduction}
+\label{sec:introduction}
+
+\oracle{} is the data acquisition for collinear laser spectroscopy (CLS) at IGISOL. It steps
+the platform voltage through a scan, records every ion the time tagger sees against the
+voltage it was taken at, and calibrates the voltage axis before every run. It keeps the
+collinear DAQ's layout, file format and functions, brings in the bench calibration tool
+cls-cal~\cite{clscal}, and is built so that the faults found in the old DAQ cannot happen
+rather than being caught afterwards (Appendix~\ref{sec:design}). Runs are read by
+cls\_tools~\cite{clstools} and fitted in \denis{}~\cite{denis}, both unchanged.
+
+The window has five tabs above the quick-tune controls and the experiment information:
+
+\begin{description}
+    \item[\app{Scan controls}.] Scan and buncher parameters, run control, the scan queue,
+        the ELOG panel and the live plots (Section~\ref{sec:scan}).
+    \item[\app{Scan Calibration}.] A stand-alone calibration and the gate's verdict on it;
+        every scan's own calibration is shown here too (Section~\ref{sec:calibration}).
+    \item[\app{Hardware Calibration}.] The bench tool's measurements of the rack itself:
+        settle time, linearity, the cooler, the bench table and the health check
+        (Section~\ref{sec:hardware}).
+    \item[\app{Scan Performance}.] How the rack's behaviour during a run shaped its
+        spectrum, check by check, with the run's systematic inputs
+        (Section~\ref{sec:performance}).
+    \item[\app{Time graphs}.] Counts against time, to watch the beam.
+\end{description}
+
+\paragraph{Principles.}
+Every calibration point is written, confirmed and only then read, so the voltage axis
+cannot slip. Nothing is cut: what deserves a look is flagged, and the operator decides in
+\denis{}. Every input survives a crash, and a run can be reopened exactly as it was taken.
+
+\paragraph{Status.}
+\oracle{} runs end to end on its simulated rack, which imitates the rack the bench tool
+measured in October 2026. It has not yet driven the beamline: its drivers follow code that
+has run on the rack but are tested against stand-ins for the vendor libraries.
+
+\paragraph{Scope.}
+This is a user manual. The code (\code{cls\_acquisition/}, \code{gui/}) documents itself
+for developers; the README describes the test suite.

@@ -4,32 +4,18 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Only the instruments are simulated; the loop, the DAC routing and
-rounding, the meter drivers and the calibration run unmodified on top.
-It imitates the rack the bench tool measured on 24 and 25 October 2026:
-
-* the platform's step response (0.4 ms rise, 0.18 % overshoot, inside
-  0.5 V of a 1 kV jump in 17 ms);
-* both converters' gain and non-linearity and the amplifier's -1 V
-  offset, as readback less setpoint on 50 V knots from the 1 V sweep;
-* the 0 V level warming up, 0.2 V low at power-on (the platform's
-  making) and settling over the first hour, then wandering by 10-20 mV
-  over tens of minutes (A. Raggio, November 2026);
-* the line meter's 0.069 V of noise at 200 us, falling as the root of
-  the integration, and 0.041 V of mains averaged over each reading's
-  integration, so whole power line cycles take it out;
-* the cooler at 29884.8 V with the recorded mains harmonics, a slow
-  drift and 0.17 V of noise.
-
-The meters answer the drivers' SCPI and sample timed captures on their
-own thread at the instants their timer sets. The PulseBlaster clocks a
-tagger with three resonances on a background, in 500 ps bins; its PMTs
-can afterpulse (AFTERPULSE) and the ions spread per bunch (ION_SPREAD),
-both off unless a test sets them. The platform's state is shared memory
-(:class:`Platform`), made by the GUI and handed to the loop.
+Only the instruments are simulated; all above them runs unmodified. They
+imitate the bench of 24-25 October 2026: the step response (0.4 ms rise,
+0.18 % overshoot, within 0.5 V of a 1 kV jump in 17 ms), the converters'
+gain, INL and the -1 V offset on 50 V knots, the 0 V level warming up
+(0.2 V over the first hour) and wandering by 10-20 mV (A. Raggio), the
+line meter's 0.069 V of noise and 0.041 V of mains, and the cooler
+(29884.8 V, mains harmonics, drift, 0.17 V of noise). The tagger gives
+three resonances on a background in 500 ps bins; afterpulsing and ion
+spread are off unless a test sets them. :class:`Platform` is shared memory.
 
 Depends on: numpy; cls_acquisition.calibration, .keysight, .mcc_dac,
-.timetagger and cls_acquisition.triggers.
+.timetagger, cls_acquisition.triggers.
 """
 
 import inspect
@@ -178,11 +164,9 @@ class Converters():
 
 
 class Keysight():
-    """A 3446xA as a VISA session sees it. ``source()`` is the voltage at its
-    input, or ``source(t)`` at CLOCK time ``t`` if it takes one, as a timed
-    capture reads it; ``noise_v`` its scatter per reading at a 200 us
-    aperture, and ``mains_v`` the amplitude of the mains it picks up, each
-    reading the mean of it over its integration."""
+    """A 3446xA as a VISA session sees it: ``source()`` (or ``source(t)`` at
+    CLOCK time ``t``) the voltage at its input, ``noise_v`` its scatter at a
+    200 us aperture and ``mains_v`` its mains, averaged over each integration."""
 
     DEFAULTS = {'TRIG:SOUR': 'IMM', 'TRIG:COUN': '1', 'SAMP:COUN': '1', 'SAMP:SOUR': 'IMM',
                 'SAMP:TIM': '0.001', 'VOLT:APER:ENAB': 'OFF', 'VOLT:DC:APER': '0.0002',
@@ -369,10 +353,9 @@ class Tagger():
         return dropped
 
     def Edge(self, period_s):
-        """One trigger: the ions and background of one period, the ions
-        timed in their bunch and the background spread over the window, each
-        in the card's bins as the driver hands real hits on. A gated window
-        never reaches the tagger, so it is not counted."""
+        """One trigger: the ions (timed in their bunch) and background (spread
+        over the window) of one period, in the card's bins; a gated window is not
+        counted."""
         if not self._Reading or self.Gated:
             return
         self._Bunch += 1

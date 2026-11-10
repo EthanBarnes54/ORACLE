@@ -4,40 +4,25 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The loop runs in its own process, so the tagger is read on time however
-busy the window is; :class:`Rack_Link` is the GUI's end. Every
-instruction ``(id, command, parameters)`` gets exactly one reply ``(id,
-ok, payload)``, so a late reply is never taken for a later answer; an
-unknown command or a failing handler is refused, never left unanswered.
-What both sides watch all the time (mode flags, the DAC's voltage, the
-round and the counts) is shared memory.
+It runs in its own process, so the tagger is read on time; :class:`Rack_Link`
+is the GUI's end. Each instruction ``(id, command, params)`` gets exactly
+one reply ``(id, ok, payload)``, and what both sides watch is shared
+memory. Instructions are taken between tagger reads, so a stop lands
+within a bunch. Calibrations are stepped from the GUI, one confirmed write
+at a time; a plan past the DAC's limit is refused whole.
 
-Instructions are taken between tagger reads, so a stop lands within a
-bunch. A calibration (or hardware calibration) is stepped from the GUI,
-one confirmed write at a time; any plan beyond the DAC's limit is refused
-whole. A queued scan ends itself after its rounds.
-
-A scan step is settle-aware: the PulseBlaster (and so the buncher and
-cooler) runs on untouched, while the tagger's window is shut, the bunches
-in flight dropped, the DAC written, and the window held shut for as long
-as the settle model says the jump takes. Each step then holds exactly
-``bunches_per_step`` bunches at a settled voltage, which is what DENIS
-assumes when it numbers scans.
-
-A bunch is a trigger counted by the tagger's own number (its MARK row),
-never by the loop's reads: the old DAQ counted reads, a second counter
-joined to the card's by position (the root of its Mode B), and counted a
-read that timed out as a bunch (its D5). A trigger the tagger numbered
-but never handed over is counted as skipped; one missing for longer than
-a few cycles is reported to the window, and the scan holds its setpoint.
-
-Data leave on their own queue as ``('scan' | 'stream', rows)``, a scan's
-end as ``('scan_end', None)`` after its last rows. If the loop dies, its
-last word is a reply with id 0 saying why.
+A scan step shuts the tagger's window, drops the bunches in flight,
+writes the DAC and holds the window shut for the settle model's time, so
+each step holds exactly ``bunches_per_step`` settled bunches, as DENIS
+assumes. A bunch is a trigger by the tagger's own number (its MARK row),
+never a read (the old DAQ's Mode B and D5); one numbered but never handed
+over is counted as skipped, and a silent tagger is reported while the
+scan holds. Data leave as ``('scan' | 'stream', rows)``, then
+``('scan_end', None)``; a dying loop's last word is a reply with id 0.
 
 Depends on: numpy; cls_acquisition.calibration, .triggers,
-.hardware.mcc_dac (Quantised), .hardware.timetagger (MARK), and
-cls_acquisition.hardware inside the process.
+.hardware.mcc_dac, .hardware.timetagger; cls_acquisition.hardware inside
+the process.
 """
 
 import logging
@@ -315,11 +300,9 @@ class Acquisition_Loop():
                 'Code': Quantised(dac_volts)[0], 'T_Command_Ns': t_command}
 
     def _Stop_Calibration(self, ramp_step_v=None, ramp_rate_v_s=None):
-        """Out of calibration; a hardware calibration first ramps the platform
-        down, since the idle loop would put 0 V on it in one move. With no
-        calibration running it does nothing: the GUI sends it after any
-        failed 'Calibrate', which may have been refused because a scan owns
-        the DAC."""
+        """Out of calibration; a hardware calibration ramps the platform down first
+        (the idle loop would drop it to 0 V in one move). Nothing when not
+        calibrating: the GUI sends it after any failed 'Calibrate'."""
         if not self._State.Calibrating.is_set():
             return {}
         if ramp_step_v and self._Volts:
@@ -397,11 +380,9 @@ class Acquisition_Loop():
         self._Data.put(('scan_end', None))
 
     def _Record(self, kind, room=None):
-        """Read the triggers the tagger has ready and send each one's hits as
-        one bunch, tagged with the voltage they were taken at and the cooler
-        voltage; returns how many bunches were taken. Those past ``room``
-        are past their step's quota and dropped. A read that times out holds
-        no trigger, and no bunch is counted."""
+        """Send each ready trigger's hits as one bunch, tagged with its voltage
+        and the cooler's; returns the bunches taken. Those past ``room`` (the
+        step's quota) are dropped; a read that times out counts no bunch."""
         rows = self._Tagger.Read(READ_WAIT_S)
         if rows is None:
             self._No_Trigger()
@@ -469,10 +450,9 @@ class Acquisition_Loop():
         return self._Last_Write
 
     def _Hold_Voltage(self):
-        """Quick tune's voltage while the output is on, 0 V otherwise. A scan
-        or a calibration that has just started in this pass owns the DAC, and
-        is left alone. A request the DAC refuses turns the output off rather
-        than stop the loop."""
+        """Quick tune's voltage while the output is on, else 0 V; a scan or
+        calibration started this pass owns the DAC. A request the DAC refuses
+        turns the output off rather than stop the loop."""
         state = self._State
         if state.Scanning.is_set() or state.Calibrating.is_set():
             return

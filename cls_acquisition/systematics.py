@@ -1,23 +1,16 @@
 """The systematics' inputs for a run: what each source of error amounts to, at the line.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A. Raggio's budget for Bi at 306 nm (November 2026) drew every source at
-random, recomputed every event's frequency and refitted, run by run. That
-needs the fit, so it is DENIS's; what ORACLE gives it is the inputs: each
-source's width in scan volts at the line, and in MHz at the ions through
-the Doppler shift where the run holds what converts it, each marked as
-measured on this run, declared (a number the settings give, from a
-campaign's reference runs or a datasheet), or not yet known (what a
-later work package measures). The beam's offset from the cooler's
-readback dominated the centroid there (8 V, 73 MHz) and is not the DAQ's
-to measure: reference runs are, so a run can be tagged as one.
-
-The table is shown on the Scan Performance tab, written beside the run
-(``run_NNNN_systematics.yaml``), and posted to the ELOG: a short block as
-each run is analysed, the whole table on request.
+A. Raggio's budget (Bi, 306 nm, November 2026) refits every run, which is
+DENIS's work; ORACLE gives its inputs: each source's width in scan volts
+and in MHz at the line, marked measured, declared (from the settings) or
+not yet known. The beam's offset from the cooler readback comes from
+reference runs, which a run can be tagged as. The table is shown on Scan
+Performance, written as ``run_NNNN_systematics.yaml`` and posted to the
+ELOG (a short block per run, the whole on request).
 
 Depends on: numpy, PyYAML.
 """
@@ -51,14 +44,10 @@ def _Calibration(cal_set, readback):
 
 def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, detectors,
           timing, declared):
-    """The run's systematics' inputs, a row per source: ``Source``, ``Kind``
-    (MEASURED, DECLARED or UNKNOWN), ``Volts`` (its width at the line in
-    scan volts, or None), ``Mhz`` (at the ions, or None) and ``Detail``.
-    ``dividers`` are the run's (scan, cooler) ratios, ``budget`` what Scan
-    Performance measured (scan volts by 'HV', 'Laser', 'Cooler'),
-    ``volts_per_hz`` scan volts per hertz of the laser's fundamental,
-    ``detectors`` each PMT's afterpulsing, ``timing`` the Timing checks'
-    verdicts, ``declared`` the settings' systematics."""
+    """A row per source: ``Source``, ``Kind`` (MEASURED, DECLARED, UNKNOWN),
+    ``Volts`` (at the line), ``Mhz`` (at the ions) and ``Detail``, from the
+    run's (scan, cooler) ``dividers``, Scan Performance's ``budget``,
+    ``volts_per_hz``, ``detectors``, ``timing`` verdicts and ``declared``."""
     rows = []
     region = record.get('InteractionRegion')
     offset = (declared.get('beam_offset_v') or {}).get(region)

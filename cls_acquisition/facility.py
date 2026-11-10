@@ -1,28 +1,17 @@
 """The facility's services: the ELOG, the EPICS process variables, and the cooler's PVs.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-All are remote and all are optional, so none may freeze the window or
-hold up a scan. ELOG posts queue on one worker thread and go out in
-order; a failed post is logged and reported, never raised into the DAQ.
-PVs are monitored, so reading one returns the last value EPICS pushed,
-or None, without waiting on the network.
+All remote and optional, so none may freeze the window or hold up a scan.
+ELOG posts go out in order from one worker thread, a failure logged; PVs
+are monitored, so a read returns the last value pushed, or None. With the
+ELOG disabled, posts go to the session log; a simulated rack never posts
+and reads fixed PVs. :class:`Cooler_Pv_Server` publishes the old DAQ's
+cooler PVs from ORACLE's own poll, so the meter keeps one owner (Mode A).
 
-With the ELOG disabled, each post goes to the session log instead; a
-simulated rack never posts, so practice runs cannot reach the real log.
-A simulated rack reads fixed PV values.
-
-The old DAQ carried a Channel Access server for the cooler's voltage
-(FURIOS:Cooler:Readback and InstantValue), which opened the cooler meter
-a second time and read it from the server's thread on every client's
-request: a second owner of the instrument, the hazard behind Mode A.
-:class:`Cooler_Pv_Server` publishes the same PVs from the readings
-ORACLE's own poll takes, so the meter keeps one owner.
-
-Depends on: py-elog, pyepics and pcaspy, each imported only when first
-used (pcaspy only with the cooler's PVs enabled).
+Depends on: py-elog, pyepics, pcaspy, each imported when first used.
 """
 
 import getpass
@@ -74,12 +63,8 @@ class Pv_Monitors():
 
 
 class Elog():
-    """The run log on the facility's ELOG.
-
-    Like the old DAQ, ORACLE keeps one entry open and appends to it: a scan
-    adds its parameters and calibration, a stop adds a line, a screenshot is
-    attached. New_Entry starts the next one.
-    """
+    """The run log on the facility's ELOG: one entry kept open and appended
+    to, as the old DAQ did; New_Entry starts the next."""
 
     def __init__(self, url, author, enabled):
         self.Enabled = enabled
@@ -138,10 +123,9 @@ class Elog():
 
 
 class Cooler_Pv_Server():
-    """The cooler's voltage as EPICS PVs, ``<prefix>Readback`` (the mean of the
-    last COOLER_MEAN_OF readings) and ``<prefix>InstantValue`` (the latest),
-    in volts at the cooler, from ``read_volts()``; a reading that is not a
-    number marks both PVs invalid rather than publish it."""
+    """The cooler as EPICS PVs, ``<prefix>Readback`` (the mean of the last
+    COOLER_MEAN_OF readings) and ``<prefix>InstantValue``, volts at the
+    cooler from ``read_volts()``; a non-number marks both invalid."""
 
     def __init__(self, prefix, read_volts):
         try:

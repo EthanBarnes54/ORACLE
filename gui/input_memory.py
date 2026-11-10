@@ -1,23 +1,13 @@
 """What the operator has entered in the window, kept however ORACLE ends.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Each tab names its inputs (``Inputs()``: names and widgets, in the order
-they are to be set), and the window hands them here under the tab's
-name. As ORACLE opens, each is set to what it held when ORACLE last
-stopped, whether it was closed or it crashed. From then on, SAVE_AFTER_MS
-after the last change, every input's value is written to ``inputs.yaml``
-beside the settings: whole, to a file of its own, then put in its place
-by a rename, so whatever stops ORACLE leaves the last complete set and
-never half of one.
-
-A missing or unreadable file costs only what it held: every input keeps
-its default, and the reason is logged. A value an input no longer takes
-(a choice since renamed, a number past its limits) is skipped or held to
-the limit, never refused. The settings file stays the operator's to
-edit; this one is ORACLE's own.
+Each tab names its inputs (``Inputs()``). Each is restored at start-up and
+written to ``inputs.yaml`` SAVE_AFTER_MS after a change, whole and by a
+rename, so a crash leaves the last complete set. A missing file, or a
+value an input no longer takes, costs only that value, and is logged.
 
 Depends on: PyYAML, PySide6; gui.plots.
 """
@@ -39,10 +29,9 @@ log = logging.getLogger('oracle.gui')
 
 
 def _Accessors(widget):
-    """``(read, set, the signals it changes by)`` for an input: a widget, a
-    Gate_Plot's gate, a tuple of radio buttons (one of them checked), or
-    anything with ``Value()``, ``Set_Value()`` and ``Value_Changed`` (the
-    scan queue)."""
+    """``(read, set, change signals)`` for an input: a widget, a Gate_Plot's
+    gate, a tuple of radio buttons, or anything with ``Value()``,
+    ``Set_Value()`` and ``Value_Changed``."""
     if isinstance(widget, tuple):
         return (lambda: next(i for i, button in enumerate(widget) if button.isChecked()),
                 lambda i: widget[int(i)].setChecked(True), [b.toggled for b in widget])

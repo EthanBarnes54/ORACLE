@@ -1,18 +1,13 @@
 """The Time graphs tab: counts against time, to watch the beam.
 
-Date:    2026-11-09
-Version: 0.5.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The gated hits of the chosen channels, binned by bunch number and drawn
-in seconds at the trigger rate in force (the old DAQ binned DC data in
-bunches of 1 ms while labelling the bins in seconds). Its channels and
-bin are part of a run's recorded view, held while the run is taken.
-
-Under the plot, each PMT's afterpulsing as the data come in: its pairs
-within the dead time on itself over those on the others, against
-chance (1), an early warning of a tube going bad. Scan Performance
-judges it properly once the run has ended.
+The chosen channels' gated hits, binned by bunch and drawn in seconds at
+the trigger rate in force (the old DAQ mislabelled DC bins); its channels
+and bin are part of a run's view. Under the plot, each PMT's afterpulse
+ratio as the data come in (1: chance); Scan Performance judges it.
 
 Depends on: PySide6; gui.plots, gui.theme.
 """

@@ -4,21 +4,14 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The header's keys are frozen, as cls_tools and DENIS read them; the
-events follow as raw float64 rows of :data:`DATA_COLS`, appended as
-ASDF's streamed block, under ``<data>/<year>/<month>/<day>/run_NNNN.asdf``.
-ORACLE's own record of the run sits under one more key, :data:`ORACLE_KEY`,
-which readers that look keys up by name pass over: what opening the run
-needs to show it as taken, and what the rack was and held (identity,
-dividers, DAC codes, the bench table and its fit). It is written with the
-header, from settings locked for the scan. A reader takes a run's own
-divider ratios (:func:`Recorded_Divider`), never today's settings.
-
-A run's number is one more than the highest in the data folder, so
-numbers survive a restart and a refused calibration leaves no gap; no
-file is ever overwritten. ``run_NNNN_monitor.csv`` beside it records the
-rack every 0.1 s (setpoint, readback, cooler, wavemeter, the loop's
-counts), separate so nothing that reads run files sees a change.
+The header's keys are frozen (cls_tools and DENIS read them); events
+follow as float64 rows of :data:`DATA_COLS` in ASDF's streamed block,
+under ``<data>/<year>/<month>/<day>/run_NNNN.asdf``. ORACLE's own record
+sits under :data:`ORACLE_KEY`, which readers pass over: the view, the rack,
+its dividers and DAC codes, the bench table and fit. Readers scale by the
+run's own dividers (:func:`Recorded_Divider`). Numbers count on from the
+highest in the folder; no file is overwritten. ``run_NNNN_monitor.csv``
+beside it records the rack every 0.1 s.
 
 Depends on: numpy, asdf.
 """
@@ -64,12 +57,9 @@ def Last_Run_Number(directory):
 
 
 def Create(directory, header, record=None):
-    """Write a new run's header, and ORACLE's ``record`` of it under
-    :data:`ORACLE_KEY` if given, and return the file's path.
-
-    ``header`` holds every key of :data:`HEADER_KEYS` but SortingUtilities;
-    any other set of keys is refused, so the format cannot drift.
-    """
+    """Write a new run's header (every key of :data:`HEADER_KEYS` but
+    SortingUtilities, no others, so the format cannot drift), with ``record``
+    under :data:`ORACLE_KEY` if given; returns the path."""
     expected = set(HEADER_KEYS[1:])
     if set(header) != expected:
         raise ValueError(f"A run header must hold exactly {sorted(expected)}; this one "
@@ -112,13 +102,10 @@ def Recorded_Divider(tree, which):
 
 
 def Earlier_Calibrations(path, directory, count=3):
-    """The start-of-run calibrations of the ``count`` runs before ``path`` in
-    ``directory`` calibrated as it was (same DAQ, same DacCorrection),
-    newest first, as ``(run, CalSet, CalReadback, scan divider or None)``;
-    only those keys are read, and an unreadable run is passed over. Across
-    DAQs or corrections two calibrations measure different things (the old
-    DAQ's Mode B; a correction moves every setpoint), so would differ with
-    nothing wrong in either."""
+    """``(run, CalSet, CalReadback, scan divider or None)`` of the ``count``
+    runs before ``path`` taken by the same DAQ with the same DacCorrection
+    (else they measure different things), newest first; only those keys are
+    read, and an unreadable run is passed over."""
     found = _RUN_NAME.search(path)
     if found is None or not os.path.isdir(directory):
         return []
@@ -146,10 +133,8 @@ def Earlier_Calibrations(path, directory, count=3):
 
 
 def Earlier_Table_Fits(directory, table_id, before=None, count=5):
-    """``(run, a, b)`` of the ``count`` runs in ``directory`` (numbered below
-    ``before``, if given) whose calibrations were fitted to the bench table
-    ``table_id``, newest first: how a run's 0 V level and gain have moved
-    against the same table. Only ORACLE's record is read, never the events."""
+    """``(run, a, b)`` of the ``count`` runs (below ``before``, if given) fitted
+    to bench table ``table_id``, newest first, from ORACLE's record alone."""
     if not table_id or not os.path.isdir(directory):
         return []
     fits = []
@@ -183,10 +168,8 @@ def Append_Monitor(path, rows):
 
 
 def Read(path):
-    """``(header, raw rows, monitor)``: the header as a dict, with ORACLE's
-    record under :data:`ORACLE_KEY` if the run has one, the rows as an
-    (n, 6) array, and the monitor record as a dict of columns, or None for
-    a run that has none (one written before it existed, or by the old DAQ)."""
+    """``(header, raw rows, monitor)``: the header (with :data:`ORACLE_KEY` if
+    recorded), an (n, 6) array, and the monitor's columns, or None without."""
     with asdf.open(path, memmap=False) as af:
         # without memmap the arrays are read into memory, so they outlive the
         # file; the header's are copied out, and the events, the run's whole

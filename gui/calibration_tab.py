@@ -4,16 +4,11 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The old DAQ's layout: parameters and start on the left, the readback
-against setpoint over its deviation and the measured step on the right,
-filling point by point; the gate's verdict and checks follow. The
-calibration runs on a worker thread, so the window stays live without
-pumping events (the old DAQ's processEvents let a click land
-mid-calibration), and the main window disables whatever could interfere.
-Readings are scaled by the scan divider: the settings' for one taken
-here, the run's own for one shown. With a bench table in force, the
-calibration is fitted to it (scan_table.Fit_Run), reported with the runs
-before it on the same table, and drawn over the readings' deviation.
+Parameters on the left; the readback against setpoint, its deviation and
+the measured step on the right, filled point by point; then the gate's
+verdict. It runs on a worker thread, never pumping events. Readings are
+scaled by the settings' divider, or a shown run's own. With a bench table
+in force, the calibration is fitted to it and set against earlier runs.
 
 Depends on: numpy, PySide6; cls_acquisition.calibration,
 cls_acquisition.scan_plan, gui.plots, gui.shared_widgets, gui.theme.
@@ -117,11 +112,9 @@ class Calibration_Tab(QWidget):
         self._Curves[2].setData(set_v[1:], np.diff(readback))
 
     def Show_Report(self, report, table=None, history=(), model=None):
-        """The gate's verdict, the figures it decided on, and each check's
-        verdict over what it found; then the fit to the bench table,
-        ``table`` (scan_table.Fit_Run's, or a sentence why there is none),
-        with the ``history`` of (run, a, b) on the same table, and the
-        fitted table ``model`` = (setpoints, volts) drawn."""
+        """The gate's verdict, its figures and each check; then the bench-table fit
+        ``table`` (scan_table.Fit_Run's, or why none), with the ``history`` of
+        (run, a, b) on that table and the fitted ``model`` (setpoints, volts) drawn."""
         figures = []
         if 'TrackingR' in report:
             figures = [('Tracking |r|', f"{report['TrackingR']:.5f}"),
@@ -182,13 +175,10 @@ class Calibration_Tab(QWidget):
 
     def Show_Run(self, name, commanded, readings, report=None, divider=calibration.DIVIDER,
                  table=None, history=(), model=None):
-        """A run file's own calibration: the voltages commanded and the meter's
-        readings, as written, scaled by the run's own ``divider``, with the
-        gate's ``report`` on them as it was given when the run was taken,
-        from ORACLE's record of it. A run with no record gets its line and
-        where its branches meet 0 V; the gate is not run again, since a file
-        keeps no stamps. ``table``, ``history`` and ``model`` are its fit to
-        the bench table, as :meth:`Show_Report` takes them."""
+        """A run file's own calibration, scaled by its ``divider``, with the gate's
+        ``report`` from its record; a run without one gets its line and branch
+        crossing, the gate not rerun (a file keeps no stamps). ``table``,
+        ``history`` and ``model`` as :meth:`Show_Report` takes them."""
         commanded = np.asarray(commanded, dtype=float)
         readback = np.asarray(readings, dtype=float) * divider
         if len(commanded) != len(readback) or len(commanded) < 2:

@@ -1,0 +1,92 @@
+\section{Data and records}
+\label{sec:data}
+
+\subsection{Run files}
+
+Runs are written as the collinear DAQ wrote them, so cls\_tools and \denis{} read them
+unchanged: \code{<data>/<year>/<month>/<day>/run\_NNNN.asdf}, ASDF standard
+1.5.0~\cite{asdf}. The header holds the archive's sixteen keys, checked as it is written
+(\code{CalSet} and \code{CalReadback} are the calibration), and the events follow as rows of
+
+\begin{center}
+\code{timestamp, voltage, bunch\_number, channel, time, cooler}
+\end{center}
+
+\noindent where \code{bunch\_number} counts the scan's bunches from 0, exactly
+\code{BunchesPerChannel} a step, and \code{cooler} is the meter's reading in force for the
+hit (times 10000 for the platform). A run's number is one more than the highest in the data
+folder, so numbers survive a restart and a refused calibration leaves no gap.
+
+One more header key, \code{ORACLE}, holds \oracle{}'s own record of the run; readers that
+look keys up by name pass over it, and \menu{File > Open run...} restores the window from
+it.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+Key & Contents \\
+\midrule
+\code{Version}, \code{Commit} & \oracle{}'s version and git commit (\code{Hash}, \code{Dirty}) \\
+\code{ScanType}, \code{Rounds}, \code{Queue} & the scan type, scans asked for, place in the queue \\
+\code{Timing}, \code{View} & the trigger timing sent to the rack; the plots' view \\
+\code{Calibration}, \code{CalibrationReadings} & the gate's verdicts and numbers; the
+    readings' NPLC and the calibration's duration \\
+\code{SettleModel}, \code{Laser}, \code{Channels} & the settle model, laser geometry and
+    wired inputs \\
+\code{CoolerRollingS}, \code{DeadTimeUs} & the cooler's rolling window; the PMTs' dead time \\
+\code{Rack}, \code{RackIdentity} & simulated or hardware; the meters', DAC board's, tagger
+    wrapper's and amplifier's identities \\
+\code{Dividers} & both dividers as set; readers scale by these, never by today's settings \\
+\code{DacCodes}, \code{DacCorrectionFull} & the converter and code each setpoint was
+    written as; the DAC correction in full \\
+\code{TaggerLevels} & each input's threshold \\
+\code{ScanTable}, \code{TableFit} & the bench table in force; the calibration's fit to it \\
+\code{InteractionRegion}, \code{ReferenceRun}, \code{PmtHv} & what the operator gave \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Files beside a run}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+File & Contents \\
+\midrule
+\code{run\_NNNN\_monitor.csv} & the rack every 0.1\,s, written once a second: \code{time},
+    \code{round}, \code{setpoint\_v}, \code{readback\_v}, \code{cooler\_v},
+    \code{wavenumber\_cm1}, and the loop's \code{bunches}, \code{dropped}, \code{skipped} \\
+\code{run\_NNNN\_performance.yaml} & the Scan Performance report: verdict, checks, flags,
+    suggested dead times \\
+\code{run\_NNNN\_systematics.yaml} & the systematic inputs \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Bench records and tables}
+
+Hardware calibrations write CSV records under \code{<data>/hardware\_calibration/}:
+\code{settle\_*}, \code{linearity\_*}, \code{cooler\_*} and their companions, each with its
+settings as \code{\#} lines above the columns, rows flushed as taken, and its status and
+results below; health checks as \code{health\_<time>.yaml}.
+
+Bench tables, proposed as the format for cls\_tools, are kept as
+
+\begin{center}
+\code{<data>/tables/table\_<YYYYMMDD>\_<id8>.csv}
+\end{center}
+
+\noindent one row per converter and code,
+\code{channel, code, setpoint\_v, volts, sigma\_v, readings}, where \code{channel} 0 drives
+the positive branch, \code{volts} is the platform voltage relative to the 0\,V level, and
+\code{\# key: value} lines (JSON values) above give its \code{id} (the SHA-256 of every
+number), when and on which rack it was measured, its source record, the dividers, the 0\,V
+drift and the recommended 0\,V check interval. A run's codes (\code{DacCodes}) and table
+(\code{ScanTable}) let its calibration be fitted as $V = a + b\,T(\text{code})$. It reads
+with
+
+\begin{lstlisting}[language=Python]
+pandas.read_csv(path, comment='#')
+\end{lstlisting}

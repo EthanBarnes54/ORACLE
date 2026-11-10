@@ -1,0 +1,55 @@
+\section{Installation}
+\label{sec:installation}
+
+\oracle{} runs on Windows and macOS (and Linux, simulated only). The installers use
+\code{uv}, which brings its own Python, so none need be installed.
+
+\begin{lstlisting}[language=bash]
+git clone https://github.com/EthanBarnes54/ORACLE.git
+cd ORACLE
+install.bat full       # Windows
+./install.sh full      # macOS / Linux
+\end{lstlisting}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+Option & Does \\
+\midrule
+\code{full}     & uv, the dependencies and a desktop shortcut (on macOS an \code{ORACLE.app}
+                  in \code{\textasciitilde/Applications}, linked from the Desktop) \\
+\code{rack}     & as \code{full}, plus the instrument libraries (pyvisa, pyepics, py-elog,
+                  spinapi, mcculw): for the beamline PC \\
+\code{uv}       & uv alone \\
+\code{shortcut} & the shortcut alone \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+With no option the installer offers a menu. Launch from the shortcut, or with
+\code{uv run python gui.py}. To update, \code{git pull} then \code{uv sync}.
+
+\paragraph{Simulated or hardware.}
+\oracle{} starts on the simulated rack: the status bar says \app{Simulated rack}, runs go
+to \code{data/simulated}, and nothing is posted to the ELOG. On the beamline PC, install
+with \code{rack} and set \code{rack: hardware} in \code{settings/settings.yaml}
+(Section~\ref{sec:settings}).
+
+\paragraph{The time tagger's wrapper.}
+The collinear DAQ's compiled TimeTagger4 wrapper has four faults (Appendix~\ref{sec:design}).
+Build the corrected one on the rack PC, with Visual Studio's C++ build tools and the
+cronologic driver installed:
+
+\begin{lstlisting}
+cd cls_acquisition\hardware\timetagger4_wrapper
+uv run --with pybind11 --with setuptools python build_wrapper.py
+\end{lstlisting}
+
+\noindent then set \code{instruments: tagger\_driver} to that folder. Until it is built,
+the status bar carries a rack warning naming the inputs affected.
+
+\paragraph{Where things are kept.}
+\code{settings/} holds \code{settings.yaml} (yours), \code{inputs.yaml} (the window's last
+inputs) and \code{rack.yaml} (the last rack of each kind); \code{data/} the runs and
+records (Section~\ref{sec:data}); \code{logs/} a session log per launch, the newest 20 kept.
+\menu{File > Open data folder} and \menu{Open log folder} open them.

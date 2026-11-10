@@ -1,7 +1,7 @@
 """Build the corrected TimeTagger4 wrapper, timetagger4, on the rack PC.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 From this folder, with ORACLE's environment:
@@ -9,15 +9,12 @@ From this folder, with ORACLE's environment:
     uv run --with pybind11 --with setuptools python build_wrapper.py
         [--driver "C:\\Program Files\\cronologic\\TimeTagger4\\driver"]
 
-Compiles timetagger4.cpp against the cronologic driver's headers and
-import library with the Visual C++ build tools, for the Python that runs
-it, and leaves timetagger4.<tag>.pyd here beside a copy of the driver's
-DLL. Set instruments: tagger_driver in the settings to this folder and
-ORACLE loads it, and stops warning that inputs 3 and 4 share input 2's
-edge.
+It compiles timetagger4.cpp against the cronologic driver with the Visual
+C++ build tools and leaves timetagger4.<tag>.pyd beside a copy of the
+driver's DLL. Point the settings' instruments: tagger_driver here.
 
 Depends on: setuptools, pybind11; Visual Studio's C++ build tools; the
-cronologic TimeTagger4 driver (its include and x64 folders).
+cronologic TimeTagger4 driver.
 """
 
 import argparse

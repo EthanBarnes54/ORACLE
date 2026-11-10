@@ -4,27 +4,16 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Two converters drive the amplifier's differential inputs, positive
-setpoints on one and negative on the other; with both at 0 V the platform
-sits at its offset, about -1 V (the bench, 24 and 25 October 2026). Each
-has its own gain and integral non-linearity (Mode C). The outgoing
-converter is released before the incoming one is driven, and 0 V goes to
-the positive one. A setpoint is written as the code the board rounds it
-to (0.305 V a code at the platform), so each write returns what the
-converter holds, and each run records those codes.
+Two converters drive the amplifier's differential inputs, one for
+positive setpoints and one for negative; at 0 V the platform sits near
+-1 V. The outgoing converter is released first, and each write returns the
+code the board holds (0.305 V a code), which runs record. The correction
+ships as identity, the bench table being applied after collection: a
+measured one in force is warned of, an expired one refused, and nothing
+is extrapolated. The board's digital line can gate the tagger. Every
+setpoint is held to one limit.
 
-The correction ships as identity: production runs write uncorrected and
-the bench table is applied after collection (Ethan, 9 November 2026), so
-a measured correction in force is warned of at every calibration, lest
-it be applied twice; one past its validity is refused, and a setpoint
-outside the range its non-linearity covers is refused, not extrapolated.
-:attr:`Dac.Identity` names the board (InstaCal name and unique ID).
-
-The same board's digital line can gate the tagger's window (an AND unit
-on PulseBlaster channel 18), so a step's settling bunches are never
-acquired. Every setpoint is held to one limit, whoever asks.
-
-Depends on: numpy; mcculw, imported only when a board is opened.
+Depends on: numpy; mcculw, imported as a board is opened.
 """
 
 import logging
@@ -81,10 +70,8 @@ class Dac():
         return None if table is None else np.asarray(table, dtype=float)
 
     def Check(self, setpoints):
-        """Raises ValueError if any of ``setpoints`` is beyond the limit, or
-        outside the range the correction's non-linearity was measured over.
-        0 V is always allowed: it is where the platform rests, and the idle
-        loop must always be able to put it there."""
+        """Raises ValueError for a setpoint beyond the limit or outside the
+        correction's measured range; 0 V, where the platform rests, always passes."""
         setpoints = np.asarray(setpoints, dtype=float)
         worst = float(np.max(np.abs(setpoints), initial=0.0))
         if worst > self.Limit_V:
@@ -143,11 +130,9 @@ class Dac():
         return 1, text
 
     def Calibration_Status(self, now=None):
-        """``(verdict, message)`` for the gate. Uncorrected writes pass: that is
-        how production runs are taken. A measured table past its validity is
-        worse than none and is refused; one in force is warned of, since the
-        bench table is applied after collection and must not be applied to
-        setpoints already corrected on the write."""
+        """``(verdict, message)`` for the gate: uncorrected writes (production)
+        pass, an expired measured table is refused, and one in force is warned
+        of, as the bench table must not meet setpoints corrected on the write."""
         c = self.Correction
         if c['measured'] is None:
             return 'PASS', "DAC correction unmeasured, both channels identity"

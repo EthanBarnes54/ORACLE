@@ -1,0 +1,78 @@
+% ─────────────────────────────────────────────────────────────
+%  ORACLE user-manual preamble: shared packages, styling, macros
+%  (DENIS's, carried over)
+% ─────────────────────────────────────────────────────────────
+
+% Encoding & fonts
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{textcomp}
+
+% Page layout
+\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm,
+            headheight=14pt]{geometry}
+\usepackage{microtype}
+\emergencystretch=3em                          % long paths break cleanly
+\raggedbottom
+
+% Headers / footers
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\fancyhead[LO]{\textit{\nouppercase{\rightmark}}}
+\fancyhead[RE]{\textit{ORACLE User Manual}}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% Math, units
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Lists
+\usepackage{enumitem}
+\setlist{itemsep=2pt, parsep=0pt}
+
+% Tables
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+% Graphics
+\usepackage{graphicx}
+\graphicspath{{figs/}}
+\usepackage{caption}
+\usepackage[section]{placeins}                 % figures stay in their section
+\captionsetup{font=small, labelfont=bf, margin=10pt}
+
+% Code listings
+\usepackage{xcolor}
+\definecolor{codebg}{HTML}{F5F5F5}
+\usepackage{listings}
+\lstset{
+    basicstyle=\ttfamily\small,
+    backgroundcolor=\color{codebg},
+    frame=single,
+    framesep=4pt,
+    rulecolor=\color{black!20},
+    breaklines=true,
+    columns=fullflexible,
+    showstringspaces=false,
+    aboveskip=8pt,
+    belowskip=8pt,
+}
+
+% Hyperlinks
+\usepackage[colorlinks=true,
+            urlcolor=blue!60!black,
+            linkcolor=black,
+            citecolor=blue!60!black]{hyperref}
+
+% ─── ORACLE-specific macros ──────────────────────────────────
+\newcommand{\oracle}{\textsc{ORACLE}}
+\newcommand{\denis}{\textsc{DENIS}}
+\newcommand{\app}[1]{\textsf{\textbf{#1}}}     % UI element / button name
+\newcommand{\menu}[1]{\textsf{#1}}             % menu path, e.g. \menu{File > Open run...}
+\newcommand{\code}[1]{\texttt{\small #1}}      % inline code / paths / keys
+\newcommand{\us}{\,$\mu$s}                     % microseconds

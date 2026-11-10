@@ -4,26 +4,16 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Each meter is polled on its owner thread for the display, and is a small
-state machine ('continuous', 'capturing', 'idle', and for the line meter
-'stepping'), so an illegal move is refused rather than half done; the
-way back is :meth:`_Meter.Release`, through idle, safe to repeat.
-
-Every reading is taken on command, never on the bunch trigger: the line
-meter's trigger input is wired to PulseBlaster channel 17 (the buncher's
-release), on which the old DAQ's meter sampled while the software stepped
-the DAC on its own clock (Mode B). Each mode reads TRIG:SOUR back and
-refuses anything but IMM. Calibration readings integrate whole power line
-cycles (NPLC), read back too, which takes out the 50 Hz the divider picks
-up (0.041 V on the bench); the poll keeps its 200 us aperture.
-
-A meter is reset as it opens and as it closes, must answer *IDN? as a
-3446x or 3447x, and every reading is checked for the overload (+-9.9E37)
-and invalid (9.91E37) markers. A capture is armed (INIT) and fetched
-(FETC?) in two transactions, so the voltage can change meanwhile; on the
-meter's timer it uses the interval the meter set, read back; streamed
-(R?) it can outlast the meter's memory. A failing poll logs once and
-shows NaN until the meter answers again.
+Each meter is polled on its owner thread and is a small state machine
+('continuous', 'capturing', 'idle', 'stepping'); :meth:`_Meter.Release`
+returns it to idle. Every reading is taken on command: each mode reads
+TRIG:SOUR back and refuses anything but IMM (the old DAQ's line meter
+sampled on the buncher's channel 17: Mode B). Calibration readings
+integrate whole NPLC; the poll keeps a 200 us aperture. A meter is reset
+as it opens and closes and must answer as a 3446x or 3447x; overload and
+invalid markers are refused. A capture is armed (INIT) and fetched
+(FETC?) apart; streamed (R?), it can outlast the meter's memory. A
+failing poll logs once and shows NaN.
 
 Depends on: numpy; .visa_session; cls_acquisition.calibration.
 """
@@ -184,13 +174,11 @@ class _Meter():
 
     def Capture(self, count, interval_s=None, aperture_s=None, nplc=None, autozero=False,
                 stream=False):
-        """Set up a capture of ``count`` readings, one every ``interval_s``
-        on the meter's timer (back to back if None), each integrating
-        ``aperture_s`` or ``nplc`` power line cycles. A streamed capture may
-        be longer than the meter's memory, as long as :meth:`Read_Available`
-        keeps up. Every setting is read back before the first reading;
-        returns the interval the meter set, also kept as
-        Capture_Interval_S."""
+        """Set up ``count`` readings, one every ``interval_s`` on the meter's timer
+        (back to back if None), each over ``aperture_s`` or ``nplc`` cycles; a
+        streamed capture may outlast the memory while :meth:`Read_Available`
+        keeps up. Every setting is read back first; returns the interval the
+        meter set, kept as Capture_Interval_S."""
         if count < 1 or (not stream and count > self.Memory):
             raise ValueError(f"A capture of {count} readings does not fit the meter's "
                              f"memory of {self.Memory}.")
@@ -353,10 +341,9 @@ class Line_Meter(_Meter):
         self._Integration_S = 0.0       # the stepping readings' integration, past the wait
 
     def Step_Config(self, nplc=None):
-        """Single readings on command: immediate trigger, one sample, no
-        delay, so a reading's stamp is when it was taken, each integrating
-        ``nplc`` power line cycles (None: the poll's aperture). Every setting
-        is read back and the error queue drained before the first reading."""
+        """Single readings on command (immediate trigger, one sample, no delay, so
+        a stamp is when it was taken), each over ``nplc`` cycles (None: the
+        poll's aperture); settings read back and errors drained first."""
         self._Move('stepping')
 
         def config(inst):
@@ -387,13 +374,9 @@ class Line_Meter(_Meter):
         self._Integration_S = self._Session.Transaction(config)
 
     def Read_Settled(self, wait_s):
-        """Wait ``wait_s``, then take one reading: ``(stamp_ns, volts)``, the
-        stamp from perf_counter_ns just before READ? goes out, the reading
-        integrating after it.
-
-        READ? is a synchronous query, so a reading the caller discards leaves
-        nothing behind in the instrument.
-        """
+        """Wait ``wait_s``, then take one reading: ``(stamp_ns, volts)``, stamped
+        by perf_counter_ns just before READ? goes out. READ? is synchronous, so a
+        discarded reading leaves nothing behind."""
 
         def read(inst):
             if self.Mode != 'stepping':

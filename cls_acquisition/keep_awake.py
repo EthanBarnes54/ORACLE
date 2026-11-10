@@ -1,24 +1,16 @@
 """Keeping the PC awake while ORACLE acquires, on Windows and on macOS.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A PC that goes to sleep during a scan stops it where it stands (Scan
-Performance's pauses), and one that sleeps with the platform at high
-voltage leaves it there, since the DAC holds its last code. While
-anything runs (a scan, the triggers, the voltage output, a calibration)
-:class:`Keep_Awake` holds the operating system's own request that the
-machine is in use: SetThreadExecutionState on Windows, and on macOS an
-NSProcessInfo activity, which also keeps App Nap from slowing the
-window's timers while it is hidden. The display may still sleep.
+A sleeping PC stops a scan and leaves the platform at high voltage. While
+anything runs, :class:`Keep_Awake` holds the system's in-use request
+(SetThreadExecutionState on Windows; on macOS an NSProcessInfo activity,
+which also stops App Nap); the display may sleep. A failure is logged
+once, never a refusal. The request is held and let go on the GUI thread.
 
-Staying awake helps a run, but is never a reason to refuse one: on any
-other system, or if the request fails, it logs once and carries on.
-The request belongs to the thread that made it on Windows, so it is
-held and let go from the GUI thread only.
-
-Depends on: ctypes and the operating system's own libraries.
+Depends on: ctypes and the operating system's libraries.
 """
 
 import ctypes

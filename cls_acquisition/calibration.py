@@ -4,28 +4,18 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Each commanded voltage is paired with the line meter's reading through
-the divider on one clock: the acquisition process writes and confirms,
-the meter waits the point's settling and takes exactly one reading on
-command, and only then does the next setpoint go out. Reading i cannot be
-requested before write i is confirmed, so the lag is zero by
-construction (the old DAQ's Mode B, a setpoint paired with reading i + k,
-cannot happen). Readings integrate whole power line cycles (``nplc``),
-which takes out the mains a 200 us reading caught (76 mV a point, A.
-Raggio, November 2026); every setpoint is read until cls_tools applies
-the bench table.
+Each setpoint is written and confirmed; the line meter then waits its
+settling and takes one reading on command before the next goes out, so
+reading i cannot pair with write i + k (the old DAQ's Mode B). Readings
+integrate whole power line cycles (``nplc``), taking out the 76 mV of
+mains a 200 us reading caught (A. Raggio, November 2026). Every setpoint
+is read until cls_tools applies the bench table.
 
-The gate (:func:`Quality_Report`) tests properties every healthy
-calibration has: it tracks the command, spans it, was read settled,
-matches the plan, and its last reading is what the platform reads held
-there afterwards, with no stepping to pair wrongly. A lag shifts the
-ramp, which tracking and span cannot see, but sets the last reading k
-steps from the held ones. A REJECT writes no file and starts no scan.
-
-SETTLE is the only definition of settled; where the Settle time page has
-measured the amplifier, a jump waits as long as its model says
-(:func:`Settle_For`), and the wait and the stamp test use the same
-number.
+The gate (:func:`Quality_Report`) checks that a calibration tracks and
+spans the command, was read settled, matches the plan, and ends where
+readings held there afterwards say (a lag of k moves the last reading k
+steps). A REJECT writes no file and starts no scan. SETTLE, or the Settle
+page's model (:func:`Settle_For`), is the one definition of settled.
 
 Depends on: numpy.
 """
@@ -89,15 +79,11 @@ class Calibration_Error(RuntimeError):
 
 
 class Calibration():
-    """One reading per planned setpoint, in plan order: the step records the
-    acquisition process confirmed, with the converter and code each was
-    written as (-1 where a step does not say), the meter's readings (volts
-    at the meter) and the divider that scales them to the platform, how
-    long after its write each reading was taken and how long its jump
-    needed to settle, how many setpoints had to be read again, the last
-    setpoint's readings held, the DAC correction in force, the power line
-    cycles each reading integrated (None: the meter's poll aperture), and
-    how long the calibration took."""
+    """One reading per planned setpoint, in plan order: the confirmed step
+    records (converter and code, -1 if unknown), the meter's readings and the
+    divider to the platform, each reading's delay after its write and its
+    jump's settling, re-reads, the held readings, the DAC correction, the
+    NPLC (None: the poll aperture) and the duration."""
 
     def __init__(self, steps, readings, stamps_ns, settle_ns, retried, dac, held,
                  divider=DIVIDER, nplc=None, duration_s=None):
@@ -119,10 +105,9 @@ class Calibration():
 
 
 def Settle_For(model, jump_v):
-    """How long a jump of ``jump_v`` takes to settle: the model's settling at
-    that size times SETTLE_MARGIN, interpolated, held at its first value
-    below the smallest jump measured and extended along its last segment
-    above the largest. With no model, SETTLE, the only number there is."""
+    """The settling a jump of ``jump_v`` needs: the model's, interpolated, times
+    SETTLE_MARGIN (held below the smallest jump measured, extended past the
+    largest); SETTLE with no model."""
     if not model or not model.get('points'):
         return THRESHOLDS['SettleS']
     jumps, settles = np.array(model['points'], dtype=float).T
@@ -145,13 +130,11 @@ def _Quietly(cleanup):
 @contextlib.contextmanager
 def Calibrating(link, meter, setup, setpoints, stop=None):
     """The DAC and ``meter`` held for a calibration of ``setpoints``: ``setup()``
-    readies the meter, the acquisition process enters calibration, and the
-    'Calibrate' reply is yielded. However the body ends, the acquisition
-    process leaves calibration (by ``stop()`` if given) and the meter goes
-    back to its live poll; a cleanup that fails after another failure is
-    logged, never raised over it. A 'Calibrate' that fails is stopped too:
-    one that timed out may still be carried out, and a stop changes
-    nothing in a process that is not calibrating."""
+    readies the meter, the process enters calibration and the 'Calibrate'
+    reply is yielded. However the body ends, the process leaves calibration
+    (by ``stop()`` if given) and the meter returns to its poll; a cleanup
+    failing after a failure is logged, never raised over it. A failed
+    'Calibrate' is stopped too, as it may still be carried out."""
     stop = stop or (lambda: link.Send('Stop_Calibration'))
     try:
         setup()
@@ -171,20 +154,14 @@ def Run_Calibration(link, meter, plan, progress=None, settle_model=None, divider
                     nplc=None):
     """Calibrate ``plan`` by step and confirm; returns a :class:`Calibration`.
 
-    ``link`` is the acquisition process (it alone drives the DAC), ``meter``
-    the line meter on a ``divider``, each reading integrating ``nplc`` power
-    line cycles (None: its poll aperture); ``progress(index, volts,
-    reading)`` follows each kept point. A point waits SETTLE, or longer if
-    ``settle_model`` says its jump needs it. Every exit leaves the meter on
-    its poll and the acquisition process out of calibration.
-
-    A reading stamped before its point had settled is discarded and the
-    reading (not the write, which would restart the settling) requested
-    again after the shortfall plus a margin; the two stamps come from two
-    processes, so this covers what the wait cannot see. A stamp before its
-    write means the clocks disagree, and aborts. Retries are bounded per
-    point (MaxAttemptsPerPoint) and per calibration
-    (MaxRetriesPerCalibration), so the path terminates."""
+    ``link`` is the acquisition process, ``meter`` the line meter on a
+    ``divider``, each reading over ``nplc`` cycles (None: the poll aperture);
+    ``progress(index, volts, reading)`` follows each point, which waits
+    SETTLE or what ``settle_model`` says. A reading stamped before its point
+    settled is requested again (not the write) after the shortfall; a stamp
+    before its write aborts. Retries are bounded per point and per
+    calibration. Every exit leaves the meter on its poll and the process out
+    of calibration."""
     jumps = np.abs(np.diff(plan.Setpoints, prepend=link.State.Voltage.value))
     needs_s = [max(THRESHOLDS['SettleS'], Settle_For(settle_model, jump)) for jump in jumps]
     steps, readings, stamps, needs_ns = [], [], [], []
@@ -254,12 +231,10 @@ def Line_Fit(x, y):
 
 def Step_At_Zero(commanded, readback):
     """Where a line through the positive branch meets 0 V less where the
-    negative branch's does, or None if the scan does not put three points
-    either side of zero. 0 V itself is on neither side: both converters sit
-    at mid-code there. The platform runs on through 0 V (the bench, 24 and
-    25 October 2026), so this is not a step in it but how differently each
-    converter's gain and non-linearity bend its branch: what one straight
-    line through the whole calibration cannot describe (Mode C)."""
+    negative's does, or None without three points either side (0 V is on
+    neither). The platform runs on through 0 V, so this is how differently
+    the converters bend their branches, which one line cannot describe
+    (Mode C)."""
     offsets = []
     for side in (commanded > 0, commanded < 0):
         if side.sum() < 3 or np.ptp(readback[side]) == 0:

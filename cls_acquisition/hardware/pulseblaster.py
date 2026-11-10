@@ -1,12 +1,11 @@
 """The SpinCore PulseBlaster that clocks the buncher and the time tagger.
 
-Date:    2026-10-27
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Programs a pattern from cls_acquisition.triggers as a loop of time
-slices: each slice is one instruction, and the last branches back to the
-first. Stopping runs an all-low program, so no output is left high.
+Programs a pattern (cls_acquisition.triggers) as a loop of time slices;
+stopping runs an all-low program.
 
 Depends on: spinapi; cls_acquisition.triggers.
 """

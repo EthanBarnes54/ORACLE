@@ -4,15 +4,12 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-pyqtgraph, as in the old DAQ, since the plots redraw several times a
-second. Every plot handles alike: drag to pan, right-drag to stretch,
-wheel to zoom (over an axis, that axis alone), Shift-drag to zoom to a
-box; handled by hand, a plot stops following its data until autoscaled.
-On a gate plot Ctrl-drag (Cmd on macOS) sets the gate. Every plot says,
-over its title, what it shows and how it is calculated, and its axes
-carry each quantity's symbol (:func:`Sym`), so a figure explains itself
-in the ELOG or at a meeting. A curve of far more points than pixels is a
-:class:`Dense_Curve`, painted from what is in view.
+pyqtgraph, for redraws several times a second. Drag pans, right-drag
+stretches, the wheel zooms (one axis, over an axis) and Shift-drag zooms
+to a box; a handled plot stops following its data until autoscaled. On a
+gate plot, Ctrl-drag (Cmd on macOS) sets the gate. Every title says what
+the plot shows and how, its axes carry symbols (:func:`Sym`), and a
+:class:`Dense_Curve` paints only what is in view.
 
 Depends on: numpy, pyqtgraph, PySide6; gui.theme.
 """
@@ -39,10 +36,9 @@ GESTURES = ("Drag to pan, right-drag to stretch or squash, wheel to zoom (over a
 
 
 def Plot(title, x_axis, y_axis, about):
-    """A plot in DENIS's dark-plot style. Each axis is ``(label, units)``; an
-    axis with units gets pyqtgraph's SI prefix (mV, kV), one without is
-    left unscaled. ``about`` is ``(what it shows, how it is calculated)``,
-    shown when the cursor rests on the title."""
+    """A plot in DENIS's dark style. Each axis is ``(label, units)`` (units get
+    SI prefixes); ``about`` is ``(what it shows, how it is calculated)``,
+    shown over the title."""
     plot = Plot_Widget()
     _Style(plot, title, x_axis, y_axis, about)
     return plot
@@ -145,10 +141,9 @@ def Faint_Pen(colour=theme.TRACE, alpha=70):
 
 
 def Collapse(x, y, device_x):
-    """``x, y`` with each run of vertices that fall in one half device pixel
-    (each at ``device_x``) replaced by four at the run's first: where it
-    comes in, its lowest, its highest and where it goes out. None if that
-    would not make the curve at least four times shorter."""
+    """``x, y`` with each run of vertices within one half device pixel
+    (``device_x``) replaced by four: in, lowest, highest, out. None unless
+    that shortens the curve fourfold."""
     slot = np.floor(2 * device_x + HALF_PIXEL_OFFSET).astype(np.int64)
     starts = np.flatnonzero(np.r_[True, slot[1:] != slot[:-1]])
     if 4 * len(starts) > len(x) / 4:
@@ -160,15 +155,12 @@ def Collapse(x, y, device_x):
 
 
 class Dense_Curve(pg.PlotCurveItem):
-    """A curve of far more vertices than its plot has pixels (a 50,000-bin
-    TOF, a long cooler record), painted pixel for pixel as every vertex
-    would be, from far fewer: only what is in view is drawn, and a step
-    curve, whose segments run straight across or up, is collapsed to one
-    upright segment per half device pixel (:func:`Collapse`), which Qt's
-    plain 2 px pen paints identically. A line is only cut to the view.
-    Anything else (an export, a fill, another pen, non-finite values, a
-    transform that is not a plain scale) is painted as PlotCurveItem
-    paints it."""
+    """A curve of far more vertices than pixels (a 50,000-bin TOF, a long cooler
+    record), painted exactly as every vertex would be, from far fewer: only
+    the view is drawn, and a step curve is collapsed to one upright segment
+    per half device pixel (:func:`Collapse`), identical under Qt's 2 px pen.
+    Anything else (export, fill, other pens, non-finite values, a non-scale
+    transform) is painted as PlotCurveItem paints it."""
 
     CLIP_MARGIN_PX = 4                  # beyond the plot, wider than the pen reaches
 

@@ -4,16 +4,11 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A VISA query is two bus transactions, and in the old DAQ a second thread
-could land between them: Mode A left the line meter ungated. Here a
-caller hands a function to :meth:`Visa_Session.Transaction`, which runs
-it whole on the instrument's own thread, so command sequences cannot
-interleave. There is one session per resource however many open it (the
-old DAQ had two classes on the cooler meter); the last to close it
-closes the instrument. Between programs, :func:`Pyvisa_Connect` takes
-VISA's exclusive lock. An instrument is anything with ``write``,
-``query``, ``clear``, ``close`` and a ``timeout`` in ms; its I/O failures
-are Instrument_IO_Error, naming it.
+:meth:`Visa_Session.Transaction` runs a caller's function whole on the
+instrument's thread, so command sequences never interleave (the old DAQ's
+Mode A). There is one session per resource, closed by its last user;
+:func:`Pyvisa_Connect` takes VISA's exclusive lock. I/O failures raise
+Instrument_IO_Error, naming the instrument.
 
 Depends on: pyvisa, imported by :func:`Pyvisa_Connect` alone.
 """

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """ORACLE launcher.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Starts the ORACLE desktop application. The import sits under the main
-guard because the acquisition process is spawned: it re-runs this file
-as it starts, and must not load Qt.
+The import sits under the main guard: the spawned acquisition process
+re-runs this file and must not load Qt.
 
 Depends on: gui
 """

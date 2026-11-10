@@ -4,26 +4,16 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-After a count, a PMT often counts again within a few us, far above
-chance, while after a count on another PMT nothing special happens (A.
-Raggio, November 2026, run 8244): the tube afterpulses or rings, and the
-spectrum is noisier than Poisson (variance/mean 2, 1.03 once counts within
-10 us of one on the same PMT are dropped). ORACLE measures it; the dead
-time is the operator's to apply, in DENIS.
+A PMT often counts again within a few us of its own count, not of
+another's (A. Raggio, November 2026, run 8244), so spectra are noisier
+than Poisson. ORACLE measures it; applying a dead time is DENIS's. Each
+count is paired with the earlier counts of its bunch on its own PMT and on
+the others; chance is the same pairing against later bunches, and the
+other PMTs are the control. Every pair within the dead time is judged
+against the scatter of the bunches' own contributions. Counts are keyed
+by bunch and tagger bin as one integer, so every search is exact.
 
-Each count is set against the counts before it in its bunch (or DC
-window) on its own PMT and on the others. Chance is the same pairing
-against the next bunches' counts at the same times, which keeps the
-time-of-flight profile; light and the spread of ions per bunch raise both
-PMTs' pairs alike, so the other PMTs are the control. The plotted curves
-use the time to the previous count, as the slide does; the judgement
-counts every pair within the dead time (an afterpulse in a dense bunch
-seldom changes which count is nearest, but always adds a pair), against
-the scatter of the bunches' own contributions, since pairs in a bunch are
-not independent. Counts are keyed by bunch and tagger bin as one
-integer, so every search is exact.
-
-Depends on: numpy; cls_acquisition.hardware.timetagger (BIN_US, TIMESTAMP_BITS).
+Depends on: numpy; cls_acquisition.hardware.timetagger.
 """
 
 import numpy as np
@@ -70,11 +60,9 @@ def Counted(targets, sources, low_us, high_us, shift=0, after=True):
 
 
 class Pairs():
-    """One PMT's counts against the counts before them on itself and on the
-    others: the time back to the previous of each (``Same``, ``Other``, NaN
-    where none), and chance, as the same against the next MIXED_BUNCHES
-    bunches' counts at the same times, each weighed as if every count had
-    its next bunches."""
+    """One PMT's counts against the previous counts on itself and the others
+    (``Same``, ``Other``; NaN where none), and chance: the same against the
+    next MIXED_BUNCHES bunches' counts, weighted as if every count had them."""
 
     def __init__(self, own, others, last_bunch):
         self.Count = len(own)
@@ -105,11 +93,9 @@ class Pairs():
         return seen, chance
 
     def Excess(self, low_us, high_us):
-        """``(excess, standard errors, own ratio, others' ratio)``: the pairs
-        on this PMT with a time in [low, high] us beyond chance scaled as the
-        other PMTs' pairs stand above theirs, how far that stands out against
-        the scatter of the bunches' own contributions to it, and each side's
-        pairs over chance."""
+        """``(excess, standard errors, own ratio, others' ratio)``: this PMT's
+        pairs in [low, high] us beyond chance as the other PMTs' scale it, its
+        significance against the bunches' own scatter, and each side over chance."""
         same, same_chance = self._By_Bunch(self._Own, low_us, high_us, True)
         other, other_chance = self._By_Bunch(self._Others, low_us, high_us, False)
         totals = [float(a.sum()) for a in (same, same_chance, other, other_chance)]
@@ -163,12 +149,10 @@ def By_Channel(channels, keys, wanted):
 
 
 def Dispersion(cells, shape, channels, wanted, dropped=None):
-    """Variance/mean of each of ``wanted`` channels' counts in the cells of
-    ``shape`` (scans, setpoints), across scans at each setpoint, pooled:
-    1 for Poisson counts. ``cells`` is each count's cell (-1: none),
-    ``dropped`` the counts left out (a dead time). Returns ``({channel:
-    variance/mean}, the excess common to every pair of channels, degrees
-    of freedom)``: what every PMT shares is the beam's, not a tube's."""
+    """Variance/mean (1: Poisson) of ``wanted`` channels' counts in the cells
+    of ``shape`` (scans, setpoints), across scans, pooled; ``cells`` maps each
+    count (-1: none), ``dropped`` marks those left out. Returns ``({channel:
+    ratio}, the excess every pair shares, which is the beam's, dof)``."""
     scans, setpoints = shape
     kept = cells >= 0 if dropped is None else (cells >= 0) & ~dropped
     counts = {c: np.bincount(cells[kept & (channels == c)], minlength=scans * setpoints)

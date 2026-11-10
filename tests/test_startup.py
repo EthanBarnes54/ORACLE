@@ -163,6 +163,7 @@ def test_One_Version_Everywhere():
     assert main_window.__version__ == version
     assert _Version_In('README.md', r'^\*\*Version:\*\* (\S+)') == version
     assert _Version_In('CITATION.cff', r'^version: (\S+)') == version
+    assert _Version_In('docs/manual/manual.tex', r'Version (\S+)\}') == version
     for package in ('cls_acquisition/__init__.py', 'gui/__init__.py'):
         assert _Version_In(package, r'^Version: +(\S+)') == version
 

@@ -4,25 +4,13 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-``settings/settings.yaml`` holds what has been set; :data:`DEFAULTS`
-supplies the rest, so a key added in a later version appears without
-anyone editing their file. :func:`Update` rewrites only the keys it is
-given, on a fresh read of the file, so it never writes back a stale
-copy over an edit made while ORACLE was running.
-
-``ORACLE_SETTINGS_PATH`` overrides the file (the tests point it at a
-private copy). What was last entered in the window is kept beside it, in
-``inputs.yaml`` (gui.input_memory), so this file stays the operator's.
-
-A file that is not valid YAML, or not a mapping of keys, raises
-Settings_Error naming it and the line, rather than starting ORACLE on
-defaults the operator did not choose. The likeliest on Windows is a
-folder in double quotes, where YAML reads each backslash as an escape.
-
-What the rack cannot say of itself (its dividers and its amplifier) is
-set here, under ``hardware``, and recorded with every run; the dividers'
-ratios are what the readbacks are scaled by. :func:`Commit` says which
-of ORACLE's commits is running, for the same record.
+``settings/settings.yaml`` (or ``ORACLE_SETTINGS_PATH``) holds what was
+set, :data:`DEFAULTS` the rest; the window's inputs live beside it in
+``inputs.yaml``. :func:`Update` rewrites only its keys, on a fresh read. A
+file that is not a YAML mapping raises Settings_Error with its line (on
+Windows, often a quoted folder's backslashes). ``hardware`` holds what the
+rack cannot say (dividers, amplifier), recorded with every run, as is
+:func:`Commit`.
 
 Depends on: PyYAML; git, if ORACLE runs from a checkout.
 """
@@ -145,9 +133,8 @@ def Inputs_Path():
 
 
 def Last_Rack(kind, rack):
-    """The rack the last session of ``kind`` (simulated or hardware) ran on,
-    or None, kept beside the settings; ``rack`` is kept in its place for
-    the next. A file that cannot be read or written is passed over."""
+    """The last ``kind`` session's rack, or None; ``rack`` takes its place
+    beside the settings. A file that cannot be used is passed over."""
     path = os.path.join(os.path.dirname(Settings_Path()), 'rack.yaml')
     try:
         with open(path, 'r', encoding='utf-8') as fh:
@@ -210,9 +197,8 @@ def Update(**values):
 
 
 def Commit():
-    """``{'Hash', 'Dirty'}`` of the git commit ORACLE runs from, Dirty true
-    if its files differ from it; None where it does not run from a
-    checkout or git is not installed (the rack PC may have neither)."""
+    """``{'Hash', 'Dirty'}`` of ORACLE's git commit (Dirty: files differ), or
+    None without a checkout or git (the rack PC may have neither)."""
     # no console flashes up on Windows for a git run from a window
     hidden = {'creationflags': subprocess.CREATE_NO_WINDOW} if sys.platform == 'win32' else {}
 

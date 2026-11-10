@@ -1,24 +1,15 @@
 """Session logging: every launch leaves a trace, however it ends.
 
-Date:    2026-10-25
-Version: 0.1.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-DENIS's session log, carried over. :func:`Install`, at the top of
-``main()``, sets up under ``<app>/logs``:
-
-* a dated session log, pruned to the newest few;
-* stdout and stderr tee'd into it, so a double-click launch with no
-  console still leaves the banner and any print;
-* the "oracle" logger writing the same file, with times and levels; the
-  acquisition process's records arrive through it too (see
-  cls_acquisition.acquisition.Rack_Link);
-* Python warnings, and uncaught exceptions on any thread, into the log;
-* faulthandler on the file, so a native crash in Qt or a vendor DLL
-  leaves its C stack behind.
-
-:func:`Install_Qt_Handler` routes Qt's own messages into the log; call it
-before the QApplication is made.
+DENIS's session log. :func:`Install`, first in ``main()``, writes a dated
+log under ``<app>/logs`` (the newest few kept), tees stdout and stderr into
+it, sends the "oracle" logger (the acquisition process's records too),
+warnings and uncaught exceptions on any thread there, and points
+faulthandler at it for native crashes. :func:`Install_Qt_Handler` routes
+Qt's messages; call it before the QApplication is made.
 
 Depends on: the standard library (PySide6 inside Install_Qt_Handler).
 """

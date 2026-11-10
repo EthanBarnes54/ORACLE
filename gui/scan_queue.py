@@ -4,20 +4,13 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A page of the Scan tab's parameters box, laid out as DENIS's optimiser
-pages: options, an editable table, a readout. Each row is one scan and
-one run file: its ranges (``20:55, 60:80``), step, bunches per step
-(seconds in DC mode), order (Sawtooth, or Triangle up and back) and
-number of scans; the buncher timing, experiment and view are the
-parameters page's, held for the whole queue.
-
-Every row is checked as it is typed, as a scan is when it starts: a bad
-cell turns red, and the readout gives each row's fault, or its setpoints
-and duration, and when the queue ends. As in DENIS, the table grows a
-row as the last fills, takes rows pasted from a spreadsheet, and Delete
-clears cells. The main window takes the scans (Automatic, or Manual,
-asking before each after the first); the State column records each row,
-and rows and states survive a crash, so a restarted queue takes up at the
+A page of the Scan tab's parameters box, as DENIS's optimiser pages. A
+row is one scan and run file: ranges (``20:55, 60:80``), step, bunches per
+step (seconds in DC), order (Sawtooth or Triangle) and scans; timing, view
+and experiment are the parameters page's. Rows are checked as typed (a
+bad cell turns red; the readout gives faults, durations and the end); the
+table grows, takes pastes from a spreadsheet, and Delete clears. Automatic
+or Manual; rows and states survive a crash, and a restart takes up at the
 first scan not done.
 
 Depends on: numpy, PySide6; cls_acquisition.calibration,

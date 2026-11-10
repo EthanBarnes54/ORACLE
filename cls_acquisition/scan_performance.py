@@ -4,35 +4,22 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Reads a finished run (its file, and its monitor record if it has one)
-and asks of each part of the pipeline (the DAC and amplifier, the loop's
-timing, the cooler, the laser, the beam, the detectors) whether it
-stayed within tolerance. Each check returns PASS, WARN or FAIL with the
-number it decided on, or N/A when the run lacks what it needs; the
-verdict is the worst. Nothing is cut: what deserves a look is flagged,
-and the operator decides in DENIS.
+It asks of each part of the pipeline (DAC and amplifier, loop timing,
+cooler, laser, beam, detectors) whether it stayed within tolerance: PASS,
+WARN or FAIL with its number, or N/A, the verdict the worst. Nothing is
+cut; what deserves a look is flagged, for the operator to decide in DENIS.
 
-The spectrum is built as the analysis builds it: each hit at its voltage
-tag less the cooler's departure at its time, by the rolling mean of the
-cooler's readings (cls_acquisition.cooler), on one grid from the lowest
-setpoint to the highest. Sizes are set against the width of the run's
-strongest line, in MHz where the run holds the mass, cooler and laser;
-with no line, against the step.
-
-Statistics hold at any count rate: the run is cut into periods holding
-enough counts to say something, and a deviation is flagged only when it
-is both improbable under counting statistics and large enough to matter.
-The line's position is fitted period by period against the run's own
-summed spectrum (no lineshape needed), and set against what the HV and
-laser monitors predict. The calibration is judged as DENIS fits it and
-against earlier runs. An old-DAQ run's scan type and bunch origin are
-inferred, its unsettled bunches estimated, and a parted bunch count
-(its D5) reported. Each PMT is judged for afterpulsing
-(cls_acquisition.detectors), with a dead time suggested, never applied;
-the run's systematics' inputs come last (cls_acquisition.systematics).
+The spectrum is built as the analysis builds it (voltage tag less the
+cooler's rolling-mean departure), and sizes are set against the run's
+line width, in MHz where it can be. A deviation is flagged only when it is
+improbable under counting statistics and large enough to matter. The line
+is fitted per period against the run's own spectrum and set against the
+HV and laser monitors; the calibration is judged as DENIS fits it and
+against earlier runs; old-DAQ runs are inferred and their D5 reported;
+afterpulsing and the systematics' inputs come last.
 
 Depends on: numpy, PyYAML; cls_acquisition.calibration, .cooler,
-.detectors, .run_file, .scan_plan, .systematics and .hardware.keysight.
+.detectors, .run_file, .scan_plan, .systematics, .hardware.keysight.
 """
 
 import math
@@ -184,10 +171,8 @@ def _Hits_Per_Sample(sample_t, hit_t):
 
 
 def _Distinct(x, y):
-    """A plotted series less every point that repeats the one before it. A
-    bunch's hits share its time and the readings taken with it, so one point
-    per hit draws each bunch over and over: millions of points, and a
-    gigabyte in the plot, for the picture its distinct points make."""
+    """A plotted series less every point repeating the one before: a bunch's
+    hits share its time and readings, so one point per hit redraws it."""
     moved = np.ones(len(x), dtype=bool)
     moved[1:] = (x[1:] != x[:-1]) | (y[1:] != y[:-1])
     return x[moved], y[moved]
@@ -206,9 +191,8 @@ def Ion_Frequency(beam_v, nu_laser_hz, mass_amu, laser):
 
 
 def Volts_Per_Hz(beam_v, nu_laser_hz, mass_amu, laser):
-    """How far one hertz more at the laser moves the resonance, in scan volts:
-    positive when to a higher scan voltage (a laser the ions meet head on),
-    negative for a collinear one."""
+    """Scan volts per hertz more at the laser: positive for a laser the ions
+    meet head on, negative for a collinear one."""
     # the ion's frequency is in proportion to the laser's, so one hertz at the
     # laser moves it by its value at 1 Hz; one volt more beam energy moves it
     # by its slope, and the scan voltage takes energy from the beam
@@ -263,8 +247,7 @@ def _Volts_Per_Fundamental_Hz(header, laser, wavenumber_cm1, axis):
 
 class _Scale():
     """What a voltage means for this run: its share of the strongest line's
-    width (of the step, where no line stands out), and its size in MHz at
-    the ions where the run holds what converts it."""
+    width (else the step's), and in MHz at the ions where the run converts."""
 
     def __init__(self, step, width_v=None, mhz_per_v=None):
         self.Step, self.Width, self.Mhz_Per_V = step, width_v, mhz_per_v
@@ -329,15 +312,11 @@ class _Report():
 def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
             rolling_s=cooler.ROLLING_S, dead_time_us=detectors.DEAD_TIME_US, declared=None):
     """The report on one run: ``Verdict``, ``Summary``, ``Budget`` (the line's
-    width and what moved it, in one sentence), ``Sections`` (name to
-    checks), ``Series`` for the plots, ``Flagged`` (nothing is cut),
-    ``Detectors`` (each PMT's afterpulsing and suggested dead time) and
-    ``Systematics`` (the inputs, cls_acquisition.systematics). ``laser``,
-    ``rolling_s`` and ``dead_time_us`` stand in where the run does not
-    record its own; ``settle_model`` estimates an old DAQ run's settling;
-    ``history`` holds earlier runs' calibrations (run_file.Earlier_Calibrations);
-    ``declared`` is the settings' systematics. Readbacks are scaled by each
-    run's own dividers (:func:`Dividers`)."""
+    width and what moved it), ``Sections``, ``Series``, ``Flagged``,
+    ``Detectors`` and ``Systematics``. ``laser``, ``rolling_s`` and
+    ``dead_time_us`` stand in where the run records none; ``settle_model``
+    serves old-DAQ runs; ``history`` is earlier calibrations; ``declared`` the
+    settings' systematics. Readbacks use the run's own dividers."""
     if not len(raw):
         raise Performance_Error("The run holds no events, so there is nothing to analyse.")
     record = header.get(ORACLE_KEY) or {}
@@ -442,11 +421,9 @@ def _Ladder(low, high, step):
 
 
 def _Plan(header):
-    """``(sequence, axis, note)``: the setpoints one scan commands, in order,
-    and the grid from the lowest to the highest the spectrum is binned on.
-    Ranges the old DAQ took and ORACLE would refuse (overlapping ones, or
-    one of a single point) are taken as it commanded them, each range's
-    ladder in turn, and binned as one range."""
+    """``(sequence, axis, note)``: one scan's setpoints in order, and the grid
+    the spectrum is binned on. Old-DAQ ranges ORACLE would refuse are taken as
+    commanded, each ladder in turn, and binned as one range."""
     try:
         ranges = [sorted((float(a), float(b))) for a, b in header['ScanningRanges']]
         step = float(header['StepSize'])
@@ -467,10 +444,9 @@ def _Plan(header):
 
 
 def _Cooler_Readings(raw, monitor, cooler_divider):
-    """``(times, platform volts, where they come from)``: the run's cooler
-    readings in time order, those not taken (0) or not numbers left out.
-    The monitor's, every 0.1 s, if it has them; else the reading each
-    bunch's hits were stamped with, once a bunch."""
+    """``(times, platform volts, source)``: the cooler readings in time order,
+    untaken (0) or non-numbers left out; the monitor's every 0.1 s, else each
+    bunch's stamped reading."""
     known = lambda v: np.isfinite(v) & (v != 0)
     if monitor is not None and np.count_nonzero(known(monitor.get('cooler_v', []))) >= 3:
         t, volts = monitor['time'], monitor['cooler_v']
@@ -486,12 +462,10 @@ def _Cooler_Readings(raw, monitor, cooler_divider):
 
 
 def _Bins(raw, axis, step, rolling, reference, cooler_divider):
-    """``(bins, departures)``: each hit's bin on ``axis`` as the analysis
-    places it, its voltage tag less the cooler's departure from
-    ``reference`` at its time by the ``rolling`` mean of its readings (None:
-    there are none), -1 off the grid; and how far the hit's own reading sat
-    from that mean (NaN where either is missing). A hit with no reading
-    within the window stays at its tag. Placed a chunk at a time."""
+    """``(bins, departures)``: each hit's bin on ``axis`` (its tag less the
+    ``rolling`` mean's departure from ``reference``; at its tag with no
+    reading in the window; -1 off the grid), and its own reading's departure
+    from that mean (NaN where missing). Placed a chunk at a time."""
     work = np.zeros(len(raw))
     departures = np.full(len(raw), np.nan, dtype=np.float32)
     if rolling is not None:
@@ -522,11 +496,9 @@ def _Step_Index(steps, n, kind):
 
 
 def _Tags(report, sequence, per_step, volts, bunch, record, monitor):
-    """Whether each hit's voltage is the setpoint its bunch was due at: for
-    ORACLE's runs, whose loop writes both from one count, a test of the
-    file; for the old DAQ's, whose bunch number was the tagger's count, of
-    whether that count stayed with the steps. Its scan type and the count's
-    origin are what the run records, or what fits it best."""
+    """Whether each hit's voltage is its bunch's due setpoint: for ORACLE's runs
+    a test of the file; for the old DAQ's, whether the tagger's count kept
+    with the steps, on the scan type and count origin recorded or best fitted."""
     n = len(sequence)
     planned = np.round(sequence, VOLTS_DECIMALS)
     rounded = np.round(volts, VOLTS_DECIMALS)
@@ -629,10 +601,9 @@ def _Tracking(cal_set, readback):
 
 
 def _Calibration(report, header, scale, history):
-    """The start-of-run calibration as DENIS fits and checks it: what its
-    straight line leaves, where that puts the peaks, whether points stand
-    out under DENIS's robust rule and how far leaving them out would move
-    the axis; then against the runs before it."""
+    """The start-of-run calibration as DENIS fits and checks it: its residual,
+    where it puts the peaks, robust-rule outliers and their pull on the axis;
+    then against the runs before it."""
     cal_set, readback = _Calibration_Points(header)
     if len(cal_set) < 3:
         report.Add(VOLTAGE, 'Calibration', NA, None, "The run holds no calibration.")
@@ -675,10 +646,8 @@ def _Calibration(report, header, scale, history):
 
 
 def _Calibration_History(report, line, cal_set, history, scale):
-    """This run's calibration against the runs' before it, across this scan:
-    how much an isotope shift measured between them depends on which is
-    right. Agreeing with any one of them is enough, so one bad neighbour
-    cannot raise it."""
+    """This run's calibration against earlier runs' across this scan: how much a
+    shift between them depends on which is right. Agreeing with one is enough."""
     found = []
     for run, set_b, read_b, divider in history:
         set_b = np.asarray(set_b, dtype=float)
@@ -712,10 +681,9 @@ def _Calibration_History(report, line, cal_set, history, scale):
 
 def _Timing(report, bunch, times, header, record, monitor, per_step, sequence, tags,
             settle_model, t0):
-    """Whether the loop kept up with the triggers, whether it ever stood idle,
-    and whether any bunch was taken before its step had settled, from the
-    hits in bunch order: ``(the trigger period, whether bunched; None if the
-    run does not say)``."""
+    """Whether the loop kept up, ever stood idle, or took a bunch before its
+    step settled, from the hits in bunch order: ``(trigger period, bunched)``,
+    None where the run does not say."""
     timing = record.get('Timing') or {}
     if timing.get('rep_rate_hz'):
         period, bunched = 1.0 / float(timing['rep_rate_hz']), bool(timing.get('bunched', True))
@@ -800,10 +768,9 @@ def _Timing(report, bunch, times, header, record, monitor, per_step, sequence, t
 
 
 def _Old_Settling(report, sequence, per_step, period, tags, settle_model):
-    """The old DAQ wrote each step as it read the step before's last bunch,
-    without waiting: a bunch triggered after that write but before the jump
-    had settled was taken on a moving voltage. The file holds no trigger
-    times, so read delays are taken as nothing, which counts the fewest."""
+    """Bunches the old DAQ took on a moving voltage: it wrote each step as it
+    read the last bunch, without waiting. With no trigger times in the file,
+    read delays count as none, the fewest."""
     measured = bool(settle_model and settle_model.get('points'))
     into = np.abs(np.diff(sequence))
     # a sawtooth flies back to its start; a triangle turns on its last setpoint
@@ -843,10 +810,8 @@ def _Rates(report, bunch, tags, n, per_step):
 # ── Beam and spectrum ───────────────────────────────────────────
 
 def _Expectation(sequence, kind, per_step, axis, seen, last_bunch):
-    """The hits the run's own spectrum leads one to expect, summed step by
-    step from its start: each step's setpoint at the rate the whole run saw
-    there. ``(bunches taken, hits expected by then)``, so a period expects
-    what its own setpoints give, whatever part of a scan it holds."""
+    """``(bunches taken, hits expected by then)`` from the run's own spectrum,
+    step by step, so a period expects what its own setpoints give."""
     step = axis[1] - axis[0]
     steps = np.arange(int(last_bunch // per_step) + 1)
     at = np.rint((sequence - axis[0]) / step).astype(np.intp)[
@@ -857,14 +822,11 @@ def _Expectation(sequence, kind, per_step, axis, seen, last_bunch):
 
 
 def _Beam(report, times, bunch, monitor, tags, expectation, scan_s, per_scan, t0):
-    """The beam over the run, from the hits in time order, in periods long
-    enough to expect BeamCounts hits each. A period expects what its own
-    setpoints give at the run's rates there (``expectation``), so a stretch
-    of background is no loss; where scans cannot be told apart, a period
-    holds two scans at least, so its setpoints weigh alike. One below half
-    its expectation, beyond what counting explains, is a loss; how much more
-    the beam varies than counting allows is its stability. Bunches come from
-    the loop's count, so a slow trigger is no loss either."""
+    """The beam in periods expecting BeamCounts hits each, from their own
+    setpoints at the run's rates (``expectation``), so background is no loss;
+    where scans cannot be told apart, a period holds two at least. A period
+    below half its expectation beyond counting is a loss; the excess variance
+    is the stability. Bunches are the loop's count: a slow trigger is no loss."""
     counted = monitor is not None and len(monitor.get('bunches', ())) > 1
     if counted and np.ptp(monitor['bunches']) > 0:
         clock_t, clock_b = monitor['time'], monitor['bunches']
@@ -946,12 +908,9 @@ def _Beam(report, times, bunch, monitor, tags, expectation, scan_s, per_scan, t0
 
 
 def _Line(axis, spectrum, scanned):
-    """``(centre, width)`` in volts of the strongest line in ``spectrum``,
-    between its half-height crossings, or None if no line stands
-    LineSigmas standard errors out of the background or one runs off the
-    scan. Smoothed over three bins first, so no single noisy bin is taken
-    for the line; that widens a line a few bins wide a little, which a
-    scale can bear."""
+    """``(centre, width)`` in volts of the strongest line between its half-height
+    crossings (after a three-bin smoothing), or None if none stands LineSigmas
+    out of the background or one runs off the scan."""
     if len(axis) < 3:
         return None
     smooth = np.convolve(spectrum, np.ones(3) / 3.0, mode='same')
@@ -982,12 +941,10 @@ def _Smoothed(spectrum, sigma_bins):
 
 
 def _Shift(counts, template, axis, reach, resolution):
-    """``(shift, its standard error from the likelihood's curvature)`` that
-    best lays ``template`` over ``counts``, a Poisson likelihood with the
-    scale profiled out, searched coarsely over ``reach`` either way and then
-    finely to ``resolution``; None if the best lies at the edge of the reach
-    or the likelihood is too flat to say. ``template`` must be smooth: a
-    jagged one has false minima as sharp as its noise."""
+    """``(shift, standard error)`` best laying ``template`` over ``counts`` by a
+    Poisson likelihood (scale profiled out), coarse over ``reach`` then fine
+    to ``resolution``; None at the reach's edge or too flat. ``template`` must
+    be smooth, or its noise makes false minima."""
     floor = 1e-6 * template.max() + 1e-12
     hit = counts > 0
     total = counts.sum()
@@ -1019,12 +976,10 @@ def _Shift(counts, template, axis, reach, resolution):
 
 
 def _Null_Spread(total, sizes, axis, reach, resolution, sigma_bins, draws=16):
-    """How far the fitted shift of a period of the mean size scatters when
-    time does not matter: the run's own counts dealt at random into periods
-    of the same sizes (time's order taken away), each fitted as the real
-    ones are. At a low count rate the likelihood's curvature understates
-    the error, and this is the error the real periods are judged by. Dealt
-    from a fixed seed, so a run always gets the same answer."""
+    """The scatter of a mean-sized period's fitted shift when time does not
+    matter: the run's counts dealt at random (fixed seed) into periods of the
+    same sizes, each fitted alike. Real periods are judged by it, since the
+    curvature understates the error at low rates."""
     rng = np.random.default_rng(0)
     mean = float(np.mean(sizes))
     whole = total.astype(np.int64)
@@ -1043,12 +998,10 @@ def _Null_Spread(total, sizes, axis, reach, resolution, sigma_bins, draws=16):
 
 def _Spectrum(report, bins, bunch, times, axis, scanned, scale, line, prediction, tags,
               per_scan):
-    """The spectrum over the run in periods of whole scans (of scan pairs
-    for a triangle, whose scans run opposite ways), so every setpoint
-    weighs alike in each, each holding LineCounts over the background
-    (ShapeCounts hits where no line stands out): where the line sat in
-    each, fitted against the rest of the run and set against the monitors'
-    prediction; and whether the spectrum's shape held."""
+    """The spectrum in periods of whole scans (scan pairs for a triangle), each
+    holding LineCounts over background (else ShapeCounts hits): the line's
+    place in each, against the rest of the run and the monitors' prediction,
+    and whether the shape held."""
     unit = 2 if tags['Kind'] == 'Triangle' else 1
     units = tags['Complete'] // unit
     why = None
@@ -1149,10 +1102,9 @@ def _Position(report, counts, ranges, axis, total, scale, prediction):
 
 
 def _Prediction(hv, light, times):
-    """Where the monitors say the line went, in scan volts, on the monitor's
-    samples, with the hits each sample stands for: the HV's error against its
-    calibration and the laser's against DENIS's setpoint, summed, each filled
-    across its own gaps. None if neither was recorded."""
+    """Where the monitors put the line, in scan volts per monitor sample with
+    the hits it stands for: the HV against its calibration plus the laser
+    against DENIS's setpoint, gaps filled; None if neither was recorded."""
     sources = [s for s in (hv, light) if s is not None]
     if not sources:
         return None
@@ -1282,11 +1234,10 @@ def _Scan_Cells(bunch, tags, n, per_step):
 
 
 def _Detectors(report, raw, bunch, tags, n, per_step, wired, dead_time_us):
-    """Each wired PMT's afterpulsing: its counts within ``dead_time_us`` of
-    one of its own beyond what the other PMTs show, flagged when both
-    improbable and large enough to matter; how far its counts scatter
-    across scans beyond Poisson, with dead times from 0 to 20 us; and the
-    shortest dead time past which no excess is left, suggested for DENIS."""
+    """Each wired PMT's afterpulsing: its own-PMT pairs within ``dead_time_us``
+    beyond the others', flagged when improbable and large enough to matter;
+    its scatter across scans for dead times of 0-20 us; and the shortest dead
+    time leaving no excess, suggested for DENIS."""
     wired = [int(c) for c in wired]
     keys = detectors.Keys(raw[:, 2], raw[:, 4])
     order = np.argsort(keys, kind='stable')
@@ -1435,11 +1386,10 @@ def _Tof(report, tof, times, record, bunched):
 # ── The sources ─────────────────────────────────────────────────
 
 def _Readback(report, monitor, header, scale, times, t0):
-    """The HV during the scan against the calibration's own reading at each
-    setpoint, so the converter's non-linearity and code rounding, which the
-    calibration holds, are not taken for drift. Weighted by the hits taken
-    meanwhile, and the meter's own scatter taken out. Returns ``(sample
-    times, where it moved the line in scan volts)``, or None."""
+    """The HV during the scan against the calibration's reading at each setpoint
+    (so non-linearity and code rounding are not drift), hit-weighted, the
+    meter's scatter taken out: ``(sample times, line shift in scan volts)``,
+    or None."""
     cal_set, cal_read = _Calibration_Points(header)
     if monitor is None or len(cal_set) < 3:
         report.Add(SOURCES, 'HV against its calibration', NA, None,
@@ -1477,10 +1427,8 @@ def _Readback(report, monitor, header, scale, times, t0):
 
 
 def _Laser(report, monitor, header, laser, recorded, scale, times, axis, t0):
-    """The wavemeter during the run against the setpoint DENIS takes for the
-    whole of it, weighted by the hits taken meanwhile and put in scan volts
-    through the Doppler shift. Returns ``(sample times, where it moved the
-    line in scan volts)``, or None."""
+    """The wavemeter against DENIS's setpoint for the run, hit-weighted, in scan
+    volts through the Doppler shift: ``(sample times, line shift)``, or None."""
     if monitor is None or not np.isfinite(monitor.get('wavenumber_cm1', [np.nan])).any():
         report.Add(SOURCES, 'Laser', NA, None,
                    "The wavemeter was not recorded during this run, so only its value at the "
@@ -1514,11 +1462,9 @@ def _Laser(report, monitor, header, laser, recorded, scale, times, axis, t0):
 
 
 def _Cooler(report, raw, readings, rolling, reference, scale, t0):
-    """The cooler as the analysis takes it, the rolling mean of its readings:
-    what the mean follows, the analysis takes out; what the readings
-    scatter about it, the mains ripple and the meter's own noise, no mean
-    can. A hit with no reading of its own is still warned of: cls_tools
-    takes each hit's own reading until it takes the mean."""
+    """The cooler as the analysis takes it: the rolling mean's wander is taken
+    out; the scatter about it (mains ripple, meter noise) no mean can. A hit
+    without its own reading is warned of while cls_tools takes each hit's."""
     cooler_v = raw[:, 5]
     missing = int(np.count_nonzero(~np.isfinite(cooler_v) | (cooler_v == 0)))
     t, volts, source = readings
@@ -1548,16 +1494,13 @@ def _Cooler(report, raw, readings, rolling, reference, scale, t0):
 
 
 def _Readings_Against_The_Line(report, bins, departures, readings, axis, scale):
-    """Whether each hit's own cooler reading is what its ions saw (WP2c): the
-    readings, sorted by departure from the rolling mean, cut into quarters of
-    the hits, and each quarter's line shift fitted against its departure.
-    1: the readings are what the ions saw; 0: the rolling mean loses nothing.
-    Calibrated on the run's own hits, the departures shuffled among the
-    readings from a fixed seed: as they are, for the error; moving the hits
-    (rounded to the grid at random), for what a true 1 gives, a little
-    below 1. Flagged only above the significance, beyond every shuffle (thin
-    runs' tails are heavier than Gaussian) and where the narrowing matters;
-    N/A where a true 1 cannot be told from 0."""
+    """Whether each hit's own cooler reading is what its ions saw (WP2c): readings
+    by departure from the rolling mean, in quarters of the hits, each quarter's
+    line shift fitted against its departure (1: what the ions saw; 0: the mean
+    loses nothing). Calibrated from a fixed seed by shuffling departures among
+    readings: as they are, for the error; moving the hits (rounded at random),
+    for what a true 1 gives. Flagged only above the significance, beyond every
+    shuffle and where the narrowing matters; N/A where 1 and 0 cannot be told."""
     name, ok = 'Cooler readings against the line', (bins >= 0) & np.isfinite(departures)
     if not scale.Width or ok.sum() < QUARTERS * TOLERANCES['LineCounts']:
         report.Add(SOURCES, name, NA, None,
@@ -1641,9 +1584,8 @@ def _Readings_Against_The_Line(report, bins, departures, readings, axis, scale):
 
 
 def Export(path, result):
-    """The report beside the run as ``run_NNNN_performance.yaml``: the
-    verdict, the summary, every check and what was flagged. Nothing in it
-    cuts data; the operator decides that in DENIS. Returns the path written."""
+    """The report as ``run_NNNN_performance.yaml`` beside the run: verdict,
+    summary, checks and flags; it cuts nothing. Returns the path."""
     out = path[:-len('.asdf')] + '_performance.yaml'
     record = {
         'run': os.path.basename(path), 'analysed': f"{datetime.now():%Y-%m-%d %H:%M:%S}",

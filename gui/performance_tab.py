@@ -4,16 +4,11 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Down the left: the run (the latest, any in the data folder, or one from
-disk), the verdict with the line's width and what moved it, every check
-grouped by the part of the pipeline it judges (its sentence under the
-list and in its tooltip), what was flagged for review, and the run's
-systematics' inputs, which can be posted to the ELOG whole. Nothing is
-cut; the report exports beside the run. On the right, a plot per
-systematic: the HV against its calibration, the beam over time and scan
-by scan, read delays, the cooler (readings, and the rolling mean the
-analysis takes), the laser, and each PMT's afterpulsing as A. Raggio's
-slide 9 shows it. It shows the run every other tab shows.
+On the left, the run, its verdict and line width, every check by part
+(its sentence in the tooltip), what was flagged and the systematics'
+inputs, postable to the ELOG; nothing is cut, and the report exports
+beside the run. On the right, a plot per systematic: HV against
+calibration, beam, read delays, cooler, laser and each PMT's afterpulsing.
 
 Depends on: numpy, pyqtgraph, PySide6; cls_acquisition.scan_performance,
 cls_acquisition.systematics, gui.plots, gui.shared_widgets, gui.theme.

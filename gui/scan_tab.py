@@ -4,26 +4,17 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The old DAQ's layout: parameters, buncher, scan controls and the ELOG
-panel down the left; the HFS spectrum over the TOF spectrum and the
-TOF-HFS map on the right. The tab reads its widgets into what the
-acquisition process needs (plan, timing, bunches per step); starting and
-stopping are the main window's. Voltages are bounded by the platform's
-limit, the gate by the tagger's timestamp range and the cycle; DC hits
-come through the tagger too, so its gate stays settable in DC mode. A TOF
-bin finer than MAX_TOF_BINS across the gate is widened to it.
-
-The parameters box's second page is the scan queue (gui.scan_queue). A
-run is drawn with its own recorded timing; its view is held for the whole
-scan. What the rack cannot say, the operator records: the interaction
-region (the cooler offset differs between CEC and LCR), the PMTs' high
-voltage, and whether the run is a reference run for that offset
-(``Setup``). ``Show_Settings`` sets every control as a run was taken;
-``Inputs`` names every input for the window's memory.
+The old DAQ's layout: parameters, buncher, controls and ELOG on the left;
+the HFS spectrum, TOF spectrum and TOF-HFS map on the right. The tab reads
+its widgets into a plan, timing and bunches per step; voltages are held to
+the platform's limit, the gate to the tagger's range and the cycle, and a
+TOF bin finer than MAX_TOF_BINS across the gate is widened. Its second
+page is the scan queue. The operator records what the rack cannot
+(``Setup``: interaction region, PMT HV, reference run). ``Show_Settings``
+restores a run's controls; ``Inputs`` names every input.
 
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
-cls_acquisition.hardware.timetagger, cls_acquisition.run_file,
-cls_acquisition.scan_plan, cls_acquisition.triggers, gui.plots,
+.hardware.timetagger, .run_file, .scan_plan, .triggers; gui.plots,
 gui.scan_queue, gui.shared_widgets, gui.theme.
 """
 
@@ -316,9 +307,8 @@ class Scan_Tab(QWidget):
         return [c for c, check in zip(CHANNELS, self.Channel_Checks) if check.isChecked()]
 
     def Setup(self):
-        """What the operator says of the run's setup, for its record: the
-        interaction region and the PMTs' high voltage as entered, each None
-        if not given."""
+        """The interaction region and the PMTs' HV as the operator entered them
+        (None where not), for the run's record."""
         region = self.Region_Combo.currentText()
         return {'InteractionRegion': None if region == REGIONS[0] else region,
                 'PmtHv': self.Pmt_Hv_Edit.text().strip() or None,
@@ -338,10 +328,9 @@ class Scan_Tab(QWidget):
         self.Tof_Plot.Lock_Gate(locked)
 
     def Show_Settings(self, header):
-        """Every control as the run in ``header`` (run_file.Read's) was taken:
-        its ranges, step, bunches, dwell and experiment from the header, and
-        its scan type, mode, timing and view from ORACLE's record. Returns
-        what of the run they could not show, as sentences."""
+        """Every control as the run in ``header`` was taken (ranges, step, bunches,
+        dwell and experiment from the header; type, mode, timing and view from
+        ORACLE's record). Returns what could not be shown, as sentences."""
         record = header.get(ORACLE_KEY) or {}
         timing, view, unshown = record.get('Timing'), record.get('View'), []
         if record.get('ScanType') in SCAN_TYPES:
@@ -410,9 +399,8 @@ class Scan_Tab(QWidget):
                 ('queue', self.Queue)]
 
     def Draw(self, live):
-        """The plots from ``live``, redrawn only if it or the map's box has
-        changed since they last were: a 50,000-bin TOF and a full map cost
-        tens of milliseconds a tick to draw again unchanged."""
+        """The plots from ``live``, redrawn only when it or the map's box has
+        changed: a full redraw costs tens of milliseconds a tick."""
         drawn = (live, live.Version, self.Map_Check.isChecked())
         if drawn == self._Drawn:
             return

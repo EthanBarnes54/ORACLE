@@ -1,19 +1,14 @@
 """One place for the app's look: palette, stylesheet, plot colours and input guards.
 
-Date:    2026-10-29
-Version: 0.2.0
+Date:    2026-11-10
+Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-DENIS's dark theme (gui/theme.py there), carried over so the two apps
-look and behave as one family: the Fusion dark palette, the group-box
-card language with blue titles, the rolodex main tabs, the wheel guard,
-and the box of pages titled with each (Title_Tabs), as DENIS's optimiser
-tools are. Plots follow DENIS's dark plots: black canvas, white chrome,
-neon traces.
-
-The wheel guard matters more here than in DENIS. Every spin box, combo
-and slider must be clicked into focus before the wheel changes it, so
-scrolling past the quick-tune slider can never move the platform voltage.
+DENIS's dark theme, carried over so the two apps look as one: the Fusion
+dark palette, group-box cards, rolodex tabs, Title_Tabs and dark plots.
+The wheel guard matters more here: spin boxes, combos and sliders take the
+wheel only once clicked, so scrolling past quick tune never moves the
+platform.
 
 Depends on: PySide6.
 """
@@ -319,14 +314,11 @@ def Apply_Theme(app):
 
 
 class Title_Tabs(QGroupBox):
-    """Pages in one group box whose title row names each page
-    (2026-10-25). The box and every title are drawn by the style, as for
-    any group box: the first title where a group title goes, the others
-    after it, each cutting its gap in the border as a title does. The
-    current title is as a group title is; the others are darkened and
-    lighten under the cursor; a click on one shows its page. Answers the
-    QTabWidget calls its pages are driven by. Carried over from DENIS's
-    theme, where it holds the optimiser tools."""
+    """Pages in one group box whose title row names each page, carried over
+    from DENIS (its optimiser tools). The style draws the box and titles as
+    for any group box; the current title is a group title, the others are
+    darkened and lighten under the cursor; a click shows its page. Answers
+    the QTabWidget calls its pages are driven by."""
 
     # The sheets' QGroupBox::title left, and the 4 px the style cuts in
     # the border beyond a title's padding (measured, both themes).
@@ -418,12 +410,10 @@ class Title_Tabs(QGroupBox):
         return hint
 
     def paintEvent(self, event):
-        """The box titled with the first title, as the style draws it, and
-        each other title's gap copied in from the box the style draws
-        titled with that one (the style sets its own clip as it draws, so
-        a shifted draw cannot be clipped). A title not shown is darkened:
-        each row of its glyphs blended toward the colour behind it there,
-        sampled from that drawing at the title's padding."""
+        """The box titled with the first title as the style draws it, each other
+        title's gap copied in from the box drawn with that title (the style
+        clips as it draws). A title not shown is darkened, each glyph row blended
+        toward the colour behind it."""
         layout, cur = self._Layout(), self.currentIndex()
         opt = QStyleOptionGroupBox()
         self.initStyleOption(opt)

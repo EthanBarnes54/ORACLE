@@ -1,0 +1,91 @@
+\section{Scan controls}
+\label{sec:scan}
+
+\subsection{Scan parameters}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+Field & Meaning \\
+\midrule
+\app{Scan type}          & Sawtooth (repeats up), Triangle (up and back) or Single scan \\
+\app{Bunches per channel} & bunches taken at each setpoint; \app{Seconds per channel} in DC mode \\
+\app{Stepsize (V)}       & the step between setpoints \\
+\app{From (V)}, \app{To (V)} & up to seven ranges, each ticked to be scanned; a point
+                           shared by two ranges is visited once \\
+\app{Experiment name}    & recorded with every run and in the ELOG \\
+\app{Interaction region} & CEC or LCR: the cooler offset differs between them \\
+\app{PMT HV}             & the PMTs' high voltage, recorded where EPICS does not give it \\
+\app{Reference run}      & marks a run taken to measure the beam's offset from the cooler \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Every voltage is held to the platform's limit (by default the Trek 609E-6's $\pm$4\,kV). A
+range that is not a whole number of steps ends on its last whole step, never past its stop.
+
+\subsection{Buncher controls}
+
+\app{Bunched mode} takes one bunch per \app{Dwell time}: the buncher is released for
+\app{Bunch release length}, and the tagger's window opens \app{DAQ TOF trigger delay} after
+the release and stays open from \app{DAQ gate starts} to \app{DAQ gate stops}, inside the
+tagger's 8.39\,ms range. \app{DC mode} opens a window every millisecond; its gate stays
+settable, since DC hits come through the tagger too. A timing that does not fit its cycle
+(a release or delay past its end, a window still open at the next trigger) is refused with
+a sentence before anything starts.
+
+\subsection{Starting and stopping}
+
+\app{Start scan} calibrates the scan's own setpoints (Section~\ref{sec:calibration}); only
+if the gate passes are the run file written and the scan started. A refused calibration
+writes nothing, and its run number is given to the next attempt. \app{Stop after scan}
+finishes the scan in progress; \app{Stop now!} ends within a bunch.
+
+At each step the tagger's window is shut, the DAC written, and the window held shut for as
+long as the settle model says the jump takes; every step then takes its full count of
+bunches at a settled voltage, while the buncher and cooler run on untouched. A tagger that
+sees no trigger for three cycles (two seconds at least) is reported on the status bar, and
+the scan holds its setpoint until triggers return.
+
+\subsection{Scan queue}
+
+The second page of the parameters box lays scans out ahead, one row and one run file each:
+ranges (\code{20:55, 60:80}), step, bunches (seconds in DC), order (Sawtooth or Triangle)
+and number of scans; timing, experiment and view are the parameters page's. Each row is
+checked as it is typed (a bad cell turns red) and the readout gives each row's setpoints and
+time, or its fault, and when the queue ends. \app{Add current} adds the parameters as they
+stand, \app{Show} puts a row back on them, rows paste from a spreadsheet, Delete clears
+cells.
+
+\app{Automatic} starts each scan as the last ends, so a queue can run overnight;
+\app{Manual} asks before each scan after the first. Anything but a clean end (a calibration
+refused, a file not written, a scan stopped by hand) stops the queue with the platform at
+rest, its row saying why. \app{Stop queue after this scan} lets the running scan finish.
+Rows and states survive a crash; a restarted queue takes up at the first scan not done.
+
+\subsection{Plots}
+
+The hyperfine-structure spectrum, the time-of-flight (TOF) spectrum and, with \app{Show
+time-of-flight map}, the TOF against scan voltage. Ctrl-drag (Cmd-drag on macOS) on the TOF
+spectrum sets the gate, a double-click removes it; the spectrum and map count only hits
+inside it. \app{Bin size} and the \app{Channel} boxes choose the TOF binning and the PMTs.
+The view is held from Start to the scan's last event and recorded with the run.
+
+Every plot handles alike: drag to pan, right-drag to stretch, the wheel to zoom (over an
+axis, that axis alone), Shift-drag to zoom to a box. A plot handled by hand stops following
+the data until its \raisebox{-0.1ex}{$\circlearrowleft$} button, a double-click or
+\menu{View > Autoscale all plots} (Ctrl+0) returns it. Resting the cursor on a title says
+what the plot shows and how it is calculated.
+
+\subsection{ELOG, quick tune and the experiment information}
+
+\app{Send additional text} appends to the open ELOG entry, \app{Start new entry} begins the
+next, \app{Send HFS screen} attaches the spectrum. Each scan posts its parameters and
+calibration; a simulated rack posts nothing.
+
+\app{Enable triggers} runs the triggers without a scan; \app{Enable voltage} puts
+\app{Set voltage} on the platform, set by value or by the slider across its range, starting
+from the voltage already there. Spin boxes and the slider take the mouse wheel only once
+clicked, so scrolling past them never moves the platform. Below, the cooler and readback
+voltages, the wavenumber, run and scan numbers, the buncher mode, and \app{Shown}: the run
+every tab is showing, live, saved or opened.

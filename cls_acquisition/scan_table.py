@@ -4,28 +4,17 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The DAC is no straight line: codes are 0.305 V apart and its integral
-non-linearity a few hundred mV off any line, each converter its own way.
-A. Raggio's bench table (November 2026) measures it slowly, with 0 V
-checks between, and each run is fitted to it, V = a + b*T
-(:func:`Fit_Run`): 262 mV rms for a linear calibration became about 10 mV.
-
-A table is measured as a linearity sweep (TABLE: 1 V steps over +-1 kV,
-quick, or +-3 kV, full; 5 readings at NPLC 10; 0 V every 10 points),
-resumable from its record, and checked in minutes against a few hundred
-points (CHECK). It is built from the sweep's records: each reading less
-the 0 V level interpolated between the checks (it warms up by 0.2 V in
-the first hour), averaged by converter and code (the codes the converters
-held, as runs record them in DacCodes). A code not visited is
-interpolated and said to be; nothing is extrapolated.
-
-The library under ``<data>/tables`` keeps one CSV per table, its details
-as ``#`` lines above the rows (the format proposed for cls_tools), named
-by date and the first eight characters of its ID, the SHA-256 of every
-number in it: never overwritten, so a run that names its table names
-exactly what it was fitted to. The table in force is named in the
-settings (``scan_table``); one from another rack is warned of, never
-refused, since it is only applied after collection.
+The DAC's codes are 0.305 V apart and its INL a few hundred mV off any
+line, so each run is fitted to a table, V = a + b*T (:func:`Fit_Run`):
+262 mV rms became about 10 mV (A. Raggio, November 2026). A table is
+measured as a linearity sweep (TABLE), resumable, and checked in minutes
+(CHECK); it is built per converter and code with the 0 V level
+interpolated out between the checks, and a code not visited is
+interpolated and said to be, never extrapolated. The library
+``<data>/tables`` keeps one CSV per table, its details as ``#`` lines,
+named by its ID (the SHA-256 of every number) and never overwritten. The
+table in force is named in the settings; one from another rack is warned
+of, not refused.
 
 Depends on: numpy; cls_acquisition.hardware.mcc_dac.
 """
@@ -57,10 +46,9 @@ class Table_Error(ValueError):
 
 
 class Table():
-    """One table: ``Meta`` (its measurement's details, its ``id``), and for
-    each converter its codes in order with their platform volts relative
-    to the 0 V level, standard errors, readings and the setpoint that first
-    wrote them."""
+    """One table: ``Meta`` (details and ``id``) and, per converter, its codes
+    in order with volts relative to 0 V, standard errors, readings and the
+    setpoint that first wrote each."""
 
     def __init__(self, channels, meta):
         self.Channels = channels        # channel: dict of equal-length arrays, by code
@@ -69,10 +57,8 @@ class Table():
         self.Id = self.Meta['id']
 
     def Volts(self, channels, codes):
-        """``(volts, exact)`` at each converter and code: the table's own
-        where it measured that code, else interpolated between the nearest
-        it measured either side on that converter (``exact`` False), NaN
-        outside what it measured."""
+        """``(volts, exact)`` per converter and code: measured, else interpolated
+        between the nearest measured codes (``exact`` False); NaN outside."""
         channels, codes = np.asarray(channels, dtype=int), np.asarray(codes, dtype=int)
         volts = np.full(len(codes), np.nan)
         exact = np.zeros(len(codes), dtype=bool)
@@ -122,11 +108,9 @@ def Zero_Level(points):
 
 
 def Build(points, meta=None):
-    """The table from a linearity sweep's ``points`` (hardware_calibration's):
-    each sweep point less the 0 V level at its time, from the checks among
-    them, averaged by converter and code. ``meta`` adds the measurement's
-    details (its rack, dividers, settings); refuses a sweep with fewer
-    than two 0 V checks, since its readings cannot be set against 0 V."""
+    """The table from a linearity sweep's ``points``: each less the 0 V level
+    at its time, averaged by converter and code, with ``meta``'s details.
+    Refuses a sweep with fewer than two 0 V checks."""
     zero_t, zero_v = Zero_Level(points)
     if len(zero_t) < 2:
         raise Table_Error(f"The sweep took {len(zero_t)} checks of 0 V; a table needs two at "
@@ -171,11 +155,9 @@ def Build(points, meta=None):
 
 
 def Analysis(table, zero=None):
-    """What a table says of the converters: per branch its gain and the
-    residual about its straight line (rms, and peak to peak: the
-    non-linearity, and the residual itself, against setpoint), and how
-    often 0 V should be checked during a run (:func:`Check_Interval`, from
-    its 0 V checks ``zero`` = (times, volts) if given, else as it kept)."""
+    """What a table says of the converters: each branch's gain and residual
+    about its line (rms, peak to peak, against setpoint), and how often to
+    check 0 V in a run (:func:`Check_Interval`, from ``zero`` if given)."""
     result = {'Branches': {}, 'Residuals': {}}
     for channel, name in BRANCHES:
         t = table.Channels.get(channel)
@@ -231,20 +213,17 @@ def Allan(times, volts):
 
 
 def Check_Interval(times, volts):
-    """The longest time between 0 V checks during a run over which the 0 V
-    level moves by less than DRIFT_TOLERANCE_V (its Allan deviation), or
-    None if the checks never stay within it."""
+    """The longest 0 V check interval over which the level moves less than
+    DRIFT_TOLERANCE_V (by its Allan deviation), or None."""
     taus, deviations = Allan(times, volts)
     within = taus[deviations <= DRIFT_TOLERANCE_V]
     return float(within.max()) if len(within) else None
 
 
 def Fit(table, channels, codes, readback, sigma=None):
-    """V = a + b*T: the run's calibration ``readback`` (platform volts) at
-    each converter and code, fitted to the table, weighted by ``sigma`` if
-    given. Returns ``A_V``, ``A_Err_V``, ``B``, ``B_Err``, ``Rms_V``,
-    ``Chi2`` (per degree of freedom, with ``sigma``), ``Points`` and
-    ``Interpolated`` (points at codes the table did not visit); raises
+    """V = a + b*T: the run's ``readback`` per converter and code fitted to the
+    table (weighted by ``sigma`` if given): ``A_V``, ``A_Err_V``, ``B``,
+    ``B_Err``, ``Rms_V``, ``Chi2``, ``Points``, ``Interpolated``. Raises
     Table_Error if too few points fall inside the table."""
     t, exact = table.Volts(channels, codes)
     readback = np.asarray(readback, dtype=float)
@@ -268,13 +247,10 @@ def Fit(table, channels, codes, readback, sigma=None):
 
 
 def Fit_Run(table, channels, codes, readback, noise_v):
-    """A run's calibration fitted to the table, V = a + b*T (WP5), each point
-    weighted by the meter's noise ``noise_v`` (platform volts) and the
-    table's own repeatability: the fit (:func:`Fit`) with ``Expected_V``,
-    the residual those two account for, and ``Verdict``, WARN when the
-    residual is STALE_FACTOR times that, as the table no longer describes
-    the converters (stale, or the hardware changed). Never a refusal: the
-    table is applied after collection."""
+    """A run's calibration fitted to the table (WP5), each point weighted by the
+    meter's ``noise_v`` and the table's repeatability: :func:`Fit` with
+    ``Expected_V`` and ``Verdict``, WARN at STALE_FACTOR times the expected
+    residual (a stale table, or changed hardware). Never a refusal."""
     expected = float(np.hypot(noise_v, REPEATABILITY_V))
     fit = Fit(table, channels, codes, readback, np.full(len(readback), expected))
     stale = fit['Points'] >= 10 and fit['Rms_V'] > STALE_FACTOR * expected
@@ -290,9 +266,8 @@ def Summary(fit):
 
 
 def Check(table, channels, codes, readback):
-    """``(verdict, fit)`` of a table check: PASS if a few hundred readings
-    across the span sit within CHECK_RMS_V of the table once fitted, else
-    WARN, since the table no longer describes the converters."""
+    """``(verdict, fit)`` of a table check: PASS within CHECK_RMS_V of the table
+    once fitted, else WARN (the table no longer describes the converters)."""
     fit = Fit(table, channels, codes, readback)
     return ('PASS' if fit['Rms_V'] <= CHECK_RMS_V else 'WARN'), fit
 
@@ -343,9 +318,8 @@ def Matches(table, identity):
 
 
 def Save(table, directory):
-    """The table into the library under ``directory``; returns its path. A
-    table already there is never written over: the same table is found
-    where it is."""
+    """The table into the library under ``directory``, never over one already
+    there; returns its path."""
     folder = os.path.join(directory, FOLDER)
     os.makedirs(folder, exist_ok=True)
     stamp = (table.Meta.get('measured') or f"{datetime.now():%Y-%m-%d}")[:10].replace('-', '')

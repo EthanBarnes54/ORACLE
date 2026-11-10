@@ -1,0 +1,47 @@
+\section{Troubleshooting and known limits}
+\label{sec:troubleshooting}
+
+Every refusal is a sentence naming the fault and its numbers; the session log
+(\menu{File > Open log folder}) keeps it with everything else.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.34\textwidth}L@{}}
+\toprule
+Seen & What to do \\
+\midrule
+\app{Rack warning} on the status bar & Read its tooltip: a fault \oracle{} cannot mend (the
+    old tagger wrapper) or hardware changed since the last session (measure the settle
+    model and the bench table again) \\
+\app{Run rejected} after Start scan & The gate's failing check is named
+    (Section~\ref{sec:calibration}); nothing was written. A \emph{held} or \emph{settle}
+    refusal points at the meter or the settling; repeat, and measure the settle time \\
+A timing refused before starting & Shorten the gate, release or delay, or lengthen the
+    dwell, as the sentence says \\
+No triggers reach the time tagger & Check the PulseBlaster, its cable to the tagger and the
+    trigger level; the scan holds until triggers return \\
+A meter shows NaN & It stopped answering its poll: check its USB and that no other program
+    holds it \\
+The settings are refused at start-up & Fix the named line (on Windows, use single quotes
+    around a folder, or forward slashes) \\
+The acquisition process stopped & The run is closed on what it recorded; restart \oracle{} \\
+A queue stopped & Its row says why; fix it and start the queue again, which takes up at the
+    first scan not done \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Known limits.}
+\begin{itemize}
+    \item Nothing has yet run on the beamline; treat each hardware path as unverified until
+        bench-tested on the rack PC.
+    \item SETTLE comes from bench steps up to 2\,kV; the beamline's settle model should be
+        measured across the jumps scans make, including the largest range join.
+    \item The settle gate (an AND unit on PulseBlaster channel 18) is not wired: settling
+        bunches are dropped in software, to within the USB latency.
+    \item The DAC's codes are 0.305\,V apart, so a 1\,V step carries up to $\pm$0.15\,V of
+        rounding that no correction removes; a step of a whole number of codes has none.
+    \item The DAC correction drifts (offsets by up to 0.1\,V a day): keep its validity short.
+    \item The live view keeps every hit of the run in memory, 11 bytes a hit: about 40\,MB
+        an hour at 1000 hits a second.
+\end{itemize}

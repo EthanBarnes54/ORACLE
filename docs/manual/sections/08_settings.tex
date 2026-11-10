@@ -1,0 +1,47 @@
+\section{Settings}
+\label{sec:settings}
+
+\code{settings/settings.yaml} holds what differs from the defaults in
+\code{cls\_acquisition/settings.py}; it is written as settings are saved, and can be edited
+while \oracle{} is closed. A file \oracle{} cannot read (a Windows folder in double quotes,
+say) is refused at start-up with its line, never replaced by defaults.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}lL@{}}
+\toprule
+Key & Meaning (default) \\
+\midrule
+\code{rack} & \code{simulated} or \code{hardware} \\
+\code{data\_directory} & where runs go on the rack (\code{<app>/data}); a simulated rack writes to
+    \code{<app>/data/simulated} \\
+\code{experiment} & the experiment name, saved as it is edited \\
+\code{elog} & \code{enabled}, \code{url}, \code{author} (disabled; never from a simulated rack) \\
+\code{pvs} & EPICS names of the wavenumber, mass, mass setpoint and each input's PMT HV
+    (\code{pmt\_hv\_1}--\code{4}) \\
+\code{hardware} & what the rack cannot say: \code{scan\_divider} and \code{cooler\_divider}
+    (\code{model}, \code{serial}, \code{ratio}, \code{ppm}; ratios 1000 and 10000) and the
+    \code{amplifier}; recorded with every run \\
+\code{instruments} & VISA resources of both meters, the MCC board (\code{dac\_board}), the
+    tagger driver's folder and thresholds, \code{hv\_limit\_v} (4000, the most allowed) and
+    \code{settle\_gate\_bit} (the MCC line gating the tagger; empty: not wired) \\
+\code{dac\_correction} & a measured DAC correction (identity), written by \app{Use as DAC
+    correction} \\
+\code{scan\_table} & the ID of the bench table in force (none) \\
+\code{settle\_model} & the scan's settling against jump size (none: SETTLE), written by
+    \app{Use as scan settle model} \\
+\code{calibration} & \code{nplc}: power line cycles a calibration reading integrates (1) \\
+\code{cooler} & \code{rolling\_s}: the window of the cooler's rolling mean (15\,s) \\
+\code{detectors} & \code{dead\_time\_us}: the dead time the PMTs are judged at (10\,\us) \\
+\code{systematics} & \code{beam\_offset\_v} by region as \code{[offset, error]},
+    \code{zero\_drift\_v} (0.030), \code{wavemeter\_mhz} (10) \\
+\code{laser} & harmonic (4), geometry (anti-collinear) and charge (1) \\
+\code{cooler\_pv} & publish the cooler as EPICS PVs (\code{FURIOS:Cooler:}; needs pcaspy) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Beside it, \code{inputs.yaml} keeps every input in the window, written half a second after
+a change and whole, so a crash leaves the last complete set; delete it to start from the
+defaults. \code{rack.yaml} keeps the last rack of each kind, so a change of hardware is
+named at start-up.

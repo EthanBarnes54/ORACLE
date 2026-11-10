@@ -4,25 +4,14 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The old DAQ's window (Scan, Scan Calibration, Time graphs) with the
-bench tool's Hardware Calibration and the Scan Performance analysis,
-above quick tune and the experiment information. The window owns the
-run: Start scan calibrates the scan's own plan, puts it through the gate,
-and only then writes the header and starts; a REJECT writes nothing and
-says why. Data are appended as they arrive, and the file closes when the
-loop marks the scan's end. Hardware calibrations share the calibration's
-worker slot, so they lock the same controls.
-
-Every tab shows one run, named on the Shown line, drawn with its own
-timing; opened, a run comes back as it was taken, controls and view
-included, from its ORACLE record. The scan queue is driven from here:
-anything but a clean end stops it. Every input survives a crash
-(gui.input_memory). If the acquisition process dies, the window clears
-its flags and closes a run it was taking on what it recorded.
-
-``main()`` sets up the session log, one instance per user, the theme and
-the rack (acquisition process, meters, facility services), all closed
-again if any fails to open.
+The old DAQ's window (Scan, Scan Calibration, Time graphs) with Hardware
+Calibration and Scan Performance, above quick tune. Start scan calibrates
+the plan and passes it through the gate before the header is written; a
+REJECT writes nothing. Data are appended as they arrive, and the file
+closes at the scan's end. Every tab shows one run, which opens as it was
+taken; the queue and every input survive a crash; a dead acquisition
+process closes the run on what it recorded. ``main()`` sets up the log,
+one instance per user, the theme and the rack, closing all if any fails.
 
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
@@ -96,10 +85,9 @@ def _Volts(value):
 
 
 class _Window_Grid(QGridLayout):
-    """The window's grid, said to have no height-for-width (its wrapped
-    Shown line has one): a scroll area holds a widget so laid out at its
-    preferred height for the width, not its minimum, and the window would
-    scroll on a screen with room for it all."""
+    """The window's grid, said to have no height-for-width (its wrapped Shown
+    line has one), or the scroll area would size it at its preferred height
+    and scroll on a screen with room."""
 
     def hasHeightForWidth(self):
         return False
@@ -357,9 +345,8 @@ class Main_Window(QMainWindow):
         self.menuBar().addMenu('&Help').addAction('About ORACLE', self._About)
 
     def _Open_Run(self, path=None):
-        """The run at ``path``, or one chosen from the data folder or anywhere,
-        shown on every tab; only while nothing runs, since the live plots are
-        the same plots."""
+        """The run at ``path`` (or one chosen) on every tab; only while nothing
+        runs, as the live plots are the same plots."""
         state = self._State
         if state.Scanning.is_set() or state.Triggering.is_set() or self._Worker is not None:
             QMessageBox.warning(self, 'Run not opened', "A scan, the triggers or a calibration "
@@ -373,12 +360,11 @@ class Main_Window(QMainWindow):
             self.Show_Run(path)
 
     def Show_Run(self, path, quiet=False, settings=True):
-        """The run at ``path`` on every tab, as it was just taken: its hits,
-        drawn with its own timing; its calibration, gate and table fit; its
-        run and scan numbers; its analysis; and with ``settings``, the
-        controls too. A run older than ORACLE's record keeps today's controls
-        for what it lacks, and the Shown line says so. ``quiet``: a run that
-        cannot be read is said in the log and the Shown line only."""
+        """The run at ``path`` on every tab as it was taken: hits with its own
+        timing, calibration, gate and table fit, run and scan numbers, analysis,
+        and with ``settings`` the controls (today's where an older run lacks
+        them, as the Shown line says). ``quiet``: a failed read goes to the log
+        and the Shown line only."""
         name = os.path.basename(path)
         try:
             run = run_file.Read(path)
@@ -517,10 +503,9 @@ class Main_Window(QMainWindow):
             QMessageBox.warning(self, 'Scan not started', refused)
 
     def _Start_Scan(self, rounds=None, queued=None):
-        """Calibrate the Scan tab's plan, then take it: ``rounds`` scans of
-        it (until stopped if None, as its scan type says), ``queued`` its
-        ``(place, length)`` in the queue. Returns why it could not start,
-        or None once its calibration has."""
+        """Calibrate the Scan tab's plan, then take ``rounds`` scans of it (None:
+        until stopped), ``queued`` its ``(place, length)`` in the queue. Returns
+        why it could not start, or None."""
         try:
             plan = self.Scan.Plan()
             timing = self.Scan.Timing()
@@ -880,11 +865,10 @@ class Main_Window(QMainWindow):
     # ── Hardware calibration ─────────────────────────────────────
 
     def _Run_Bench(self, panel, measure, params=None, note=None, then=None):
-        """Run ``panel``'s measurement, ``measure(progress=, stopped=, records=,
-        **params)`` (its page's own, unless given), on the worker, its records
-        written as it goes with ``note`` in their settings; on the rack, only
-        once the operator has armed the high voltage. ``then(paths,
-        completed)`` follows a measurement that ends without a fault."""
+        """Run ``panel``'s ``measure(progress=, stopped=, records=, **params)`` (its
+        page's params unless given) on the worker, records written as it goes
+        with ``note`` in their settings, once the operator arms the HV on the
+        rack; ``then(paths, completed)`` follows an end without a fault."""
         if self._Worker is not None:
             return
         try:
@@ -1306,11 +1290,9 @@ class Main_Window(QMainWindow):
         self.Performance.Set_Runs(runs, keep)
 
     def _Analyse(self, path, run=None):
-        """Analyse ``path`` for Scan Performance, off the GUI thread, from
-        ``run`` (run_file.Read's) if it has just been read, so a large run is
-        not read twice. One asked for while another runs waits for it, and is
-        read then; only the last asked for is shown, so the tab never shows
-        another run than the rest."""
+        """Analyse ``path`` for Scan Performance off the GUI thread, reusing
+        ``run`` if just read. A request during another waits for it; only the
+        last is shown, so the tab never shows another run than the rest."""
         self._Wanted = path
         self.Performance.Begin(path)
         if self._Analysis is not None:
@@ -1332,9 +1314,8 @@ class Main_Window(QMainWindow):
         self._Analysis.start()
 
     def _Analysed(self, path, result, failure=None):
-        """``path``'s analysis on the tab if it is still the one wanted, and,
-        for a run that has just ended, its short systematics block to the
-        ELOG."""
+        """``path``'s analysis on the tab if still wanted; for a run just ended, its
+        short systematics block to the ELOG."""
         if path == self._Wanted:
             if result is None:
                 self.Performance.Show_Failure(failure)
@@ -1416,9 +1397,8 @@ class Main_Window(QMainWindow):
             self._Acquisition_Died()
 
     def _Acquisition_Died(self):
-        """The acquisition process is gone. Its flags live on in shared memory,
-        so they are cleared here, and a run it was taking is closed on the rows
-        it sent, rather than left open with the window in its scanning state."""
+        """The acquisition process is gone: its flags in shared memory are cleared,
+        and a run it was taking is closed on the rows it sent."""
         state = self._State
         for flag in (state.Scanning, state.Triggering, state.Outputting, state.Calibrating):
             flag.clear()
@@ -1609,9 +1589,8 @@ def _Splash():
 
 
 def _Windows_App_Id():
-    """Give the process ORACLE's own identity on Windows, so its taskbar
-    button carries ORACLE's icon rather than pythonw.exe's and is pinned as
-    ORACLE; elsewhere, nothing."""
+    """On Windows, ORACLE's own process identity, so its taskbar button carries
+    ORACLE's icon and pins as ORACLE; elsewhere, nothing."""
     if sys.platform != 'win32':
         return
     try:

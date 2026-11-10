@@ -1,0 +1,49 @@
+\documentclass[11pt,twoside,a4paper]{article}
+
+\input{preamble}
+
+\title{%
+    {\Huge\bfseries ORACLE}\\[2pt]
+    {\large User Manual}\\[6pt]
+    {\normalsize\itshape Online Readout \& Acquisition for Collinear Laser spectroscopy
+     Experiments}\\[10pt]
+    {\normalsize Version 0.6.0}
+}
+\author{Ethan Barnes \\ \texttt{ethan.barnes@postgrad.manchester.ac.uk}}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+\clearpage
+
+\tableofcontents
+\clearpage
+
+\input{sections/01_introduction}
+\input{sections/02_installation}
+\input{sections/03_quickstart}
+\input{sections/04_scan}
+\input{sections/05_calibration}
+\input{sections/06_hardware}
+\input{sections/07_performance}
+\input{sections/08_settings}
+\input{sections/09_data}
+
+\appendix
+\input{sections/A_design}
+\input{sections/B_troubleshooting}
+
+\begin{thebibliography}{9}
+\addcontentsline{toc}{section}{References}
+\bibitem{clscal} A.~Raggio, \emph{cls-cal}: bench calibration tool for the IGISOL CLS rack
+    (settle time, linearity, cooler monitor), 2026.
+\bibitem{clstools} A.~Raggio, \emph{cls\_tools}: readers and sorting utilities for IGISOL
+    CLS run files, \url{https://github.com/andry3vi/cls_tools}.
+\bibitem{denis} A.~Kayaalp, \emph{DENIS}: Doppler Estimation and Numerical Inference for
+    Spectroscopy, \url{https://github.com/ardakayaalp/DENIS}.
+\bibitem{asdf} The ASDF standard, version 1.5.0, \url{https://asdf-standard.readthedocs.io}.
+\end{thebibliography}
+
+\end{document}

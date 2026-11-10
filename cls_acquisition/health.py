@@ -4,15 +4,13 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-It judges (WP11) the bench table (the table check, which the window runs
-first), the cooler's 50 Hz ripple over 10 s, each wired PMT's counts with
-the triggers running (with the beam off, its dark counts), the triggers
-the tagger numbered and the loop received against the PulseBlaster's
-period, and both meters' trigger sources (IMM). Each check is kept as
-YAML beside the hardware calibration records, and the last in the data
-folder is what the next is set against. It changes nothing.
+It judges (WP11) the bench table's check, the cooler's 50 Hz ripple, each
+PMT's dark counts, the triggers numbered and received against the
+PulseBlaster's period, and both meters' trigger sources. Each check is
+kept as YAML beside the hardware records and set against the last. It
+changes nothing.
 
-Depends on: numpy, yaml; cls_acquisition.hardware_calibration.
+Depends on: numpy, PyYAML; cls_acquisition.hardware_calibration.
 """
 
 import glob

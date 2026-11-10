@@ -4,35 +4,19 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-The bench calibration tool (cls-cal, A. Raggio) in ORACLE: its
-measurements and analyses, driven as ORACLE drives the DAC.
+The bench tool (cls-cal, A. Raggio) in ORACLE. The settle test steps the
+platform while the line meter samples on its own timer: the settle model,
+and a sweep's wait (:func:`Recommended_Wait`). The linearity sweep reads
+each converter on a count-based ladder (up, down, both or random), finer
+across 0 V, with 0 V checks, and fits the line, each branch, their seam
+(Mode C), curvature, hysteresis, 0 V drift and the INL on 25 V knots; a
+proposed correction expires. The cooler monitor gives level, drift, noise
+by band, mains harmonics and spectrum. Every move is ramped and confirmed
+through the acquisition process, and each record written as it goes
+(:class:`Record`).
 
-The settle test steps the platform while the line meter samples on its
-own timer; times are from the step's 10 % crossing on the meter's clock,
-the lag from the command approximate (it assumes the first sample as
-INIT goes out). It gives the settle model, and the wait a linearity sweep
-should take (:func:`Recommended_Wait`). An optional drift tail shows a
-platform still creeping after it settled.
-
-The linearity sweep reads each converter branch on a count-based ladder
-(up, down, both or random, which separates drift from shape), finer
-across 0 V, with 0 V read every few points. It fits the line, each branch
-and where they meet 0 V (Mode C's seam), the curvature, hysteresis and
-0 V drift, and from a dense sweep the integral non-linearity on 25 V
-knots; the correction it proposes is dated and expires, as the branches'
-offsets drift by up to 0.1 V a day. Code rounding (0.305 V a code) is
-reported apart, since no correction removes it.
-
-The cooler monitor streams the cooler off the meter's timer and gives
-its level, drift, noise by band, oscillations (mains harmonics named) and
-spectrum. :func:`Precise_Reading` is the bench tool's 'Read DMM'.
-
-The DAC is stepped and confirmed through the acquisition process, every
-move between points ramped, every exit back to 0 V with the meter on its
-poll; each measurement writes its record as it goes (:class:`Record`).
-
-Depends on: numpy; cls_acquisition.acquisition, .calibration, .scan_plan
-and .hardware.mcc_dac.
+Depends on: numpy; cls_acquisition.acquisition, .calibration, .scan_plan,
+.hardware.mcc_dac.
 """
 
 import os
@@ -107,10 +91,9 @@ def Settle_Plan(steps, reps, ramp_step_v):
 
 
 def Linearity_Rungs(start, stop, step_v, direction, fine_span_v=0.0, fine_step_v=0.0, seed=0):
-    """The rungs of :func:`Linearity_Plan` as ``(volts, way)``, in the order
-    visited, without the ramps between them: cheap enough to lay out again
-    as each parameter is typed. Raises Scan_Plan_Error for a ladder that
-    cannot be laid out."""
+    """The rungs of :func:`Linearity_Plan` as ``(volts, way)``, in visiting
+    order, without the ramps: cheap to redo as parameters are typed. Raises
+    Scan_Plan_Error for a ladder that cannot be laid out."""
     rungs = Scan_Plan([start], [stop], step_v).Setpoints
     if fine_span_v > 0 and fine_step_v > 0:
         fine = Scan_Plan([-fine_span_v], [fine_span_v], fine_step_v).Setpoints
@@ -135,11 +118,10 @@ def Linearity_Marks(rungs, zero_every):
 
 def Linearity_Plan(start, stop, step_v, direction, ramp_step_v, fine_span_v=0.0,
                    fine_step_v=0.0, zero_every=0, seed=0, skip=0):
-    """A ladder laid out by count (no float accumulation), with a finer grid
-    across ``+-fine_span_v``, visited in ``direction`` and measured at every
-    rung after the first ``skip`` (taken by a sweep this one resumes), 0 V
-    read again before every ``zero_every`` rungs and at the end. Each rung
-    is labelled ``('sweep', way, volts)`` and each check ``('zero', '', 0.0)``."""
+    """A ladder laid out by count, finer across ``+-fine_span_v``, visited in
+    ``direction`` and measured at each rung after the first ``skip`` (taken by
+    the sweep this one resumes), with 0 V every ``zero_every`` rungs and at
+    the end: ``('sweep', way, volts)`` and ``('zero', '', 0.0)`` marks."""
     sequence = Linearity_Rungs(start, stop, step_v, direction, fine_span_v, fine_step_v,
                                seed)[skip:]
     plan = Bench_Plan(ramp_step_v)
@@ -153,12 +135,11 @@ def Linearity_Plan(start, stop, step_v, direction, ramp_step_v, fine_span_v=0.0,
 
 
 def Run_Bench(link, meter, setup, plan, ramp, measure, stopped):
-    """Write ``plan`` by step and confirm. ``setup()`` readies the meter;
-    ``ramp`` is ``(step V, rate V/s)``, the pace of every unmeasured move;
-    ``measure(write, label)`` is called at each mark and must call
-    ``write()`` itself, which writes the point and returns its
-    confirmation. ``stopped()`` true ends the plan early. Every exit ramps
-    the platform back to 0 V. Returns the 'Calibrate' reply."""
+    """Write ``plan`` by step and confirm, ``setup()`` readying the meter and
+    every unmeasured move at ``ramp`` ``(step V, rate V/s)``. At each mark
+    ``measure(write, label)`` calls ``write()``, which returns its
+    confirmation; ``stopped()`` ends the plan early. Every exit ramps back to
+    0 V. Returns the 'Calibrate' reply."""
     step_v, rate = ramp
     last = 0.0
 
@@ -202,10 +183,9 @@ def _Crossing(times, progress, level):
 
 
 def Step_Response(times_s, volts, tolerance_v):
-    """The response to one step captured from before it: times from its 10 %
-    crossing, the deviation from the final value, and the figures.
-    Settled means inside ``tolerance_v`` of the final value for good, or
-    inside SETTLE_BAND_SIGMAS of the noise if that is wider."""
+    """One step's response captured from before it: times from its 10 %
+    crossing, deviation from the final value, and the figures. Settled: within
+    ``tolerance_v`` (or SETTLE_BAND_SIGMAS of noise, if wider) for good."""
     times_s, volts = np.asarray(times_s, dtype=float), np.asarray(volts, dtype=float)
     count = len(volts)
     initial = float(np.median(volts[:max(int(count * PRE_STEP_FRACTION / 2), 2)]))
@@ -236,11 +216,10 @@ def Step_Response(times_s, volts, tolerance_v):
 def Settle_Test(link, meter, divider, steps, reps, window_s, interval_s, aperture_s,
                 hold_s, tolerance_v, ramp, progress, stopped, tail_s=0.0, tail_nplc=1.0,
                 tail_interval_s=0.1, records=None):
-    """Each step of :func:`Settle_Plan` captured from ``PRE_STEP_FRACTION`` of
-    ``window_s`` before it, and with ``tail_s`` the platform read for that
-    long more at ``tail_nplc``; ``progress(result)`` after each, and each
-    added to ``records['settle']`` and ``records['settle_traces']``.
-    Returns the results in order."""
+    """Each step of :func:`Settle_Plan`, captured from PRE_STEP_FRACTION of
+    ``window_s`` before it, then read ``tail_s`` more at ``tail_nplc``;
+    ``progress(result)`` after each, added to ``records['settle']`` and
+    ``['settle_traces']``. Returns the results in order."""
     results = []
     fast = {'count': int(round(window_s / interval_s)), 'interval_s': interval_s,
             'aperture_s': aperture_s}
@@ -302,9 +281,8 @@ SETTLE_TRACE_COLUMNS = ('step', 'mode', 'rep', 'time_from_10pct_s', 'deviation_v
 
 
 def _From_Command(result):
-    """How long after its command a step had settled. A lag below zero is
-    the meter's first sample taken after INIT went out, not a platform that
-    answered before it was asked, so it counts as none."""
+    """How long after its command a step had settled; a lag below zero (the
+    meter's first sample after INIT) counts as none."""
     return max(result['Lag_S'], 0.0) + result['Settle_S']
 
 
@@ -338,16 +316,14 @@ def Settle_Summary(results):
 
 
 def Recommended_Wait(results):
-    """The wait after each step a linearity sweep should take, as the bench
-    tool recommends it: WAIT_FACTOR times the slowest step from its command,
-    and at least MIN_WAIT_S."""
+    """A linearity sweep's wait per step, as the bench tool recommends:
+    WAIT_FACTOR times the slowest step from its command, at least MIN_WAIT_S."""
     return max(MIN_WAIT_S, WAIT_FACTOR * max(_From_Command(r) for r in results))
 
 
 def Settle_Model(results, today=None):
-    """The scan's settle model from a settle test: for each jump size, the
-    slowest step's lag plus settling, made non-decreasing in the jump (a
-    larger jump never settles faster), dated."""
+    """The scan's settle model from a settle test: per jump size, the slowest
+    step's lag plus settling, non-decreasing in the jump, dated."""
     slowest = {}
     for r in results:
         jump = round(abs(r['To_V'] - r['From_V']), 6)
@@ -367,12 +343,11 @@ LINEARITY_COLUMNS = ('kind', 'direction', 'set_v', 'read_v', 'sigma_v', 'channel
 def Linearity_Sweep(link, meter, divider, start, stop, step_v, direction, settle_s, readings,
                     nplc, ramp, progress, stopped, fine_span_v=0.0, fine_step_v=0.0,
                     zero_every=0, seed=0, autocal=False, records=None, skip=0):
-    """Read every mark of :func:`Linearity_Plan` ``readings`` times at
-    ``nplc`` with autozero, ``settle_s`` after its write, the meter first
-    autocalibrated if ``autocal``; ``progress(point)`` after each, and each
-    added to ``records['linearity']``. Returns :func:`Linearity_Analysis`
-    of what was read (all of it, or as far as a stop let it go), with the
-    'Calibrate' reply as 'Dac'."""
+    """Read every mark of :func:`Linearity_Plan` ``readings`` times at ``nplc``
+    with autozero, ``settle_s`` after its write (autocalibrated first if
+    ``autocal``); ``progress(point)`` after each, added to
+    ``records['linearity']``. Returns :func:`Linearity_Analysis` of what was
+    read, with the 'Calibrate' reply as 'Dac'."""
     points = []
     started = time.monotonic()
 
@@ -409,10 +384,9 @@ POINT_KEYS = ('Kind', 'Direction', 'Set_V', 'Read_V', 'Sigma_V', 'Channel', 'Dac
 
 
 def Linearity_Analysis(points):
-    """The line through the sweep's rungs, with its uncertainties, residual,
-    curvature and integral non-linearity; each branch's line, where their
-    lines meet 0 V and the gain mismatch between them; the hysteresis; the drift of the 0 V
-    checks; and the non-linearity table where the sweep was dense enough."""
+    """The line through the rungs (uncertainties, residual, curvature, INL);
+    each branch's line, their 0 V crossings and gain mismatch; hysteresis;
+    the 0 V checks' drift; and the INL table where the sweep was dense enough."""
     sweep = [p for p in points if p['Kind'] == 'sweep']
     if len({p['Set_V'] for p in sweep}) < 3:
         raise Calibration_Error(f"The sweep read {len(sweep)} rungs, too few to fit a line "
@@ -464,10 +438,9 @@ def Branch_Fits(commanded, readback):
 
 
 def Hysteresis(commanded, readback):
-    """Over the setpoints read twice (on the way up, then down), the mean
-    and the largest of (second reading - first), or None if none was:
-    noise averages out of the mean, hysteresis does not. 0 V is left out,
-    since it is on neither converter."""
+    """Mean and largest (second - first) over setpoints read up then down, or
+    None: noise averages out of the mean, hysteresis does not. 0 V, on
+    neither converter, is left out."""
     values, inverse, counts = np.unique(np.round(commanded, 6), return_inverse=True,
                                         return_counts=True)
     twice = [readback[inverse == i] for i in np.nonzero((counts == 2) & (values != 0))[0]]
@@ -479,10 +452,9 @@ def Hysteresis(commanded, readback):
 
 
 def Inl_Table(commanded, readback, fits):
-    """Each fitted branch's integral non-linearity, as the residual from its
-    line averaged over knots INL_KNOT_V apart, where every knot holds
-    INL_MIN_POINTS readings; with the shape's rms and what is left about
-    it (the code rounding and the noise). None for a sweep too sparse."""
+    """Each branch's INL: its residual averaged over knots INL_KNOT_V apart
+    (each with INL_MIN_POINTS readings), the shape's rms and what is left
+    about it (code rounding and noise). None for a sweep too sparse."""
     tables = {}
     for channel, side in ((CH_POS, commanded > 0), (CH_NEG, commanded < 0)):
         if channel not in fits:
@@ -544,9 +516,8 @@ def Corrected(correction, fits, valid_days, method, inl=None, today=None):
 
 def Precise_Reading(meter, divider, readings=PRECISE_READINGS, nplc=PRECISE_NPLC):
     """``(mean, sigma)`` of ``readings`` readings at ``nplc`` with autozero,
-    times ``divider``, the first SETTLE after the call, since quick tune may
-    have moved the platform just before it; the meter is back on its live
-    poll however it ends."""
+    times ``divider``, the first SETTLE after the call (quick tune may just
+    have moved the platform); the meter returns to its poll however it ends."""
     try:
         meter.Capture(readings, nplc=nplc, autozero=True)
         time.sleep(THRESHOLDS['SettleS'])
@@ -569,11 +540,10 @@ SPECTRUM_COLUMNS = ('frequency_hz', 'asd_v_rt_hz')
 
 def Cooler_Monitor(meter, divider, duration_s, interval_s, aperture_s, nplc, progress, stopped,
                    line_hz=POWER_LINE_HZ, records=None):
-    """The cooler streamed every ``interval_s`` for ``duration_s``, each
-    reading integrating ``nplc`` power line cycles if given, else
-    ``aperture_s``; ``progress((times, volts))`` after each chunk read out,
-    and each added to ``records['cooler']``. Returns :func:`Noise_Analysis`
-    of the record, as far as a stop let it go, with its times and volts."""
+    """The cooler streamed every ``interval_s`` for ``duration_s``, each reading
+    over ``nplc`` cycles, else ``aperture_s``; ``progress((times, volts))``
+    after each chunk, added to ``records['cooler']``. Returns
+    :func:`Noise_Analysis` of what was read, with its times and volts."""
     count = max(int(np.ceil(duration_s / interval_s)), 1)
     integration = {'aperture_s': None if nplc else aperture_s, 'nplc': nplc}
     chunks = []
@@ -630,9 +600,8 @@ def _Welch(x, interval_s, length):
 
 
 def _Spectral_Floor(amplitude):
-    """The running median of an amplitude spectrum over windows +-30 % wide
-    in frequency (at least +-10 bins), so a 1/f background is not taken for
-    peaks."""
+    """The running median of an amplitude spectrum over +-30 % in frequency
+    (at least +-10 bins), so a 1/f background is not taken for peaks."""
     count = len(amplitude)
     centres = np.unique(np.round(np.geomspace(2, count - 1, 200)).astype(int))
     medians = []
@@ -645,14 +614,12 @@ def _Spectral_Floor(amplitude):
 
 def Noise_Analysis(volts, interval_s, integration_s=0.0, line_hz=POWER_LINE_HZ, peaks=PEAKS,
                    snr=PEAK_SNR):
-    """An evenly spaced record of a nominally steady voltage: its level and
-    drift, its noise before and after the drift is taken out, by decade of
-    frequency, its oscillations and its spectrum. An oscillation stands
-    ``snr`` times above the Hann-windowed spectrum's local median; its
-    amplitude is its main lobe's power (wherever it falls between bins),
-    mains harmonics are named, and ``integration_s`` gives the meter's own
-    attenuation of each, sinc(f T). The Welch spectrum gives the white-noise
-    floor."""
+    """A steady voltage's evenly spaced record: level, drift, noise before and
+    after detrending by decade, oscillations and spectrum. An oscillation
+    stands ``snr`` times above the Hann spectrum's local median; its
+    amplitude is its main lobe's power, mains harmonics are named, and
+    ``integration_s`` gives the meter's attenuation, sinc(f T). The Welch
+    spectrum gives the white-noise floor."""
     volts = np.asarray(volts, dtype=float)
     count = len(volts)
     if count < MIN_SPECTRUM_READINGS:
@@ -726,11 +693,9 @@ def Noise_Analysis(volts, interval_s, integration_s=0.0, line_hz=POWER_LINE_HZ, 
 # ── Records ─────────────────────────────────────────────────────
 
 class Record():
-    """One measurement's CSV under ``<directory>/hardware_calibration``: its
-    settings as ``#`` lines above the columns, its rows as they are taken
-    (each flushed, so nothing taken is lost however the measurement ends),
-    and its status and results as ``#`` lines once it ends. Never
-    overwrites."""
+    """One measurement's CSV under ``<directory>/hardware_calibration``:
+    settings as ``#`` lines, rows flushed as taken, status and results as
+    ``#`` lines once it ends. Never overwrites."""
 
     def __init__(self, directory, kind, header, columns):
         folder = os.path.join(directory, 'hardware_calibration')
@@ -762,9 +727,8 @@ class Record():
 # ── Reading records back ────────────────────────────────────────
 
 def Read_Record(path):
-    """``(header, columns, footer)`` of a record: the settings above its
-    columns and the status and results below its rows, each as {key: text},
-    and its rows as {column: [text, ...]}."""
+    """``(header, columns, footer)`` of a record: settings and results as
+    {key: text}, rows as {column: [text, ...]}."""
     header, footer, names, rows = {}, {}, None, []
     with open(path, encoding='utf-8', newline='') as fh:
         for line in fh:
@@ -814,9 +778,8 @@ def _Beside(path, kind):
 
 
 def Read_Settle(path):
-    """The results a settle record holds, as Settle_Test returned them, with
-    each step's trace from the settle_traces record written beside it (empty
-    where there is none)."""
+    """A settle record's results as Settle_Test returned them, each step's
+    trace from the settle_traces record beside it (empty where none)."""
     _, columns, _ = Read_Record(path)
     _Need(columns, [column for _, column in SETTLE_COLUMNS[:-1]], path)
     results = []
@@ -853,10 +816,9 @@ def Read_Linearity(path):
 
 
 def Read_Table_Sweep(path):
-    """``(points, rungs)`` of the linearity sweep at ``path`` and the stopped
-    ones it ``Resumes`` (in the same folder), on the first one's clock, each
-    cut after its last 0 V check (a point past it has none beyond it);
-    ``rungs`` is how many of the plan's rungs they hold."""
+    """``(points, rungs)`` of the sweep at ``path`` and those it ``Resumes``,
+    on the first one's clock, each cut after its last 0 V check; ``rungs`` is
+    how many of the plan's rungs they hold."""
     chain, seen = [], set()
     while path and path not in seen:
         seen.add(path)

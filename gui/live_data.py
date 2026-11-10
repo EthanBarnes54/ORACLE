@@ -4,24 +4,16 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-Each update histograms only the rows since the last, so a long scan
-costs no more per update than a short one; a change of binning, gate or
-channels histograms everything again, once. The spectrum and the TOF-HFS
-map count hits inside the TOF gate; the TOF spectrum counts every hit, so
-the gate can be placed on it. The map is held only while shown, at most
-MAX_MAP_BINS a side.
-
-Only the four plotted columns are kept, in blocks of BLOCK_ROWS, each as
-the narrowest whole-number codes that give every value back exactly (11
-bytes a hit against the run file's 48); a value the codes cannot hold
-turns its column to float64, and nothing is rounded. ``Version`` moves
-whenever anything drawn changes, so a tab redraws only then. As rows
-arrive, each PMT's pairs within the dead time are counted on itself and
-on the others (cls_acquisition.detectors), an early warning of a tube
-that afterpulses.
+Each update histograms only the new rows; a change of binning, gate or
+channels redoes them once. The spectrum and map count gated hits, the TOF
+spectrum every hit; the map is held only while shown (MAX_MAP_BINS a
+side). Four columns are kept as exact integer codes in blocks of
+BLOCK_ROWS (11 bytes a hit; float64 for a value they cannot hold).
+``Version`` moves when anything drawn changes. Each PMT's afterpulse
+pairs are counted as rows arrive (cls_acquisition.detectors).
 
 Depends on: numpy; cls_acquisition.detectors, cls_acquisition.hardware.timetagger
-(no Qt, so it is tested headless).
+(no Qt, so it tests headless).
 """
 
 import numpy as np
@@ -164,10 +156,9 @@ class Live_Data():
                                               after=False).sum())
 
     def Afterpulse_Ratios(self, least=20):
-        """``{channel: ratio}``: each PMT's pairs within the dead time on
-        itself over those on the others, scaled by the others' counts over its
-        own, so that chance gives 1 and afterpulsing more; None where either
-        side has fewer than ``least`` pairs."""
+        """``{channel: ratio}``: each PMT's pairs within the dead time on itself
+        over those on the others, scaled by counts so chance gives 1; None with
+        fewer than ``least`` pairs either side."""
         total = sum(tally[0] for tally in self._Pairs.values())
         ratios = {}
         for channel, (counts, same, other) in sorted(self._Pairs.items()):

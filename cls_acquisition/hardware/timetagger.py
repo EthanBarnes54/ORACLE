@@ -4,22 +4,15 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-A read hands over every trigger the card has ready as rows of [trigger,
-channel, time]: the card's own number, inputs from 1, times turned from
-500 ps bins into microseconds, and a MARK row per trigger, so the loop
-counts triggers by the card's numbers, never by its reads. No trigger
-within the timeout is None.
+A read gives every ready trigger as rows of [trigger, channel, time]: the
+card's number, inputs from 1, times in us, and a MARK row per trigger;
+None if none came in time. The old DAQ's wrapper has four faults (inputs 3
+and 4 take input 2's edge, hit flags go unread, a failed open is only
+printed, no trigger is marked, which this module rebuilds); the corrected
+wrapper (timetagger4_wrapper, ORACLE_WRAPPER 2) mends all four. Each run
+records its wrapper (:attr:`Time_Tagger.Identity`).
 
-The old DAQ's wrapper has four faults Python cannot mend: inputs 3 and 4
-take input 2's edge, hit flags are never read (rollover marks become
-hits), a failed open is only printed, and no trigger is marked (this
-module rebuilds marks from its packet numbers). ORACLE keeps every window
-inside the timestamp range and warns of the old wrapper at start-up; the
-corrected one (timetagger4_wrapper) mends all four and marks itself
-ORACLE_WRAPPER 2. Which wrapper took a run is in its record
-(:attr:`Time_Tagger.Identity`); the wrapper gives no card serial.
-
-Depends on: numpy; timetagger4, from the folder settings name
+Depends on: numpy; timetagger4, from the settings' folder
 (instruments: tagger_driver) or the import path.
 """
 
@@ -71,10 +64,9 @@ def Unmarked():
 
 
 def Mark(rows, last):
-    """The old wrapper's ``rows`` with each trigger marked. Its packet numbers
-    count every trigger from 0 as the card opens, empty ones too, so every
-    number after ``last`` (the last trigger read) up to the highest here is a
-    trigger; with no rows, the next one. Returns ``(rows, last)``."""
+    """The old wrapper's ``rows`` with each trigger marked: its packet numbers
+    count every trigger from 0, so every number after ``last`` up to the
+    highest here is one (with no rows, the next). Returns ``(rows, last)``."""
     top = max(int(rows[:, 0].max()) if len(rows) else last + 1, last + 1)
     numbers = np.arange(last + 1, top + 1, dtype=float)
     marks = np.column_stack([numbers, np.full(len(numbers), MARK), np.zeros(len(numbers))])

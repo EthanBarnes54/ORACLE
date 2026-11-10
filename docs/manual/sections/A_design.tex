@@ -1,0 +1,41 @@
+\section{What ORACLE closes in the old DAQ}
+\label{sec:design}
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.38\textwidth}L@{}}
+\toprule
+Fault in the collinear DAQ & In \oracle{} \\
+\midrule
+D1, Mode A: two threads on one meter could leave a burst ungated & One owner thread per
+    instrument, and VISA's exclusive lock between programs; every reading is taken on
+    command, never on the meter's trigger input (PulseBlaster channel 17), which each mode
+    reads back \\
+D2, Mode B: setpoint $i$ read as reading $i + k$ & Step and confirm: no lag by construction,
+    and the held check refuses one from any route \\
+D3, Mode C: a fixed shape read as a seam at 0\,V & The platform runs on through 0\,V; the
+    shape is each converter's gain and non-linearity, measured and fitted by the bench table \\
+D4: the DC path recorded nothing & DC hits come through the tagger \\
+D5: a read that timed out moved the scan on & A timed-out read is no bunch; a silent tagger
+    is reported and the scan holds \\
+Mode B's root: one bunch per tagger read & Each trigger is a bunch by the card's own number;
+    a skipped number is a lost trigger, reported \\
+D6: plans gained a point & Plans are counted, then laid down; never past the stop \\
+D7: nothing inspected a calibration & The gate, before anything is written \\
+D8, D9: two sessions on one instrument; dead code & One session per resource; not carried
+    over \\
+A dead acquisition process hung the window; a crashed window left the rack held & One reply
+    per instruction, a dead process reported; the process watches its parent and leaves the
+    platform at 0\,V \\
+The tagger wrapper: inputs 3--4 on input 2's edge, rollover marks as hits, failed opens
+    printed, empty triggers unmarked & The corrected wrapper (Section~\ref{sec:installation});
+    a rack warning until it is built \\
+Overload marks passed for voltages; meters left streaming by another program & Every
+    reading checked; meters reset and identified on opening \\
+The cooler's PV server opened the meter a second time & The PVs come from \oracle{}'s own
+    readings \\
+The bench tool lost an aborted sweep; its cooler blocks left gaps & Records written as they
+    go; one stream \\
+\bottomrule
+\end{tabularx}
+\end{center}
