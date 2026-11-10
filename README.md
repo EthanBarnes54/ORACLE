@@ -198,7 +198,6 @@ One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look 
 | `Calibration` | the gate's verdict, each check's verdict and message, and the numbers it decided on |
 | `SettleModel`, `Laser`, `Channels` | the settle model in force; the laser's harmonic, geometry and charge; the wired tagger inputs |
 | `CoolerRollingS` | the window, in seconds, of the cooler's rolling mean the run is analysed with |
-| `CoolerLog` | for a bunched run, the cooler log beside it and its columns (`trigger`, `bunch`, `time`, `cooler`, `age_s`) |
 | `DeadTimeUs` | the dead time, in µs, the run's PMTs are judged at for afterpulsing |
 | `CalibrationReadings` | the power line cycles each calibration reading integrated (`Nplc`) and how long the calibration took (`DurationS`) |
 
@@ -225,7 +224,7 @@ One key more, `ORACLE`, holds ORACLE's own record of the run; readers that look 
 
 `bunch_number` is the loop's count of bunches taken in the scan, from 0, exactly `BunchesPerChannel` a step: what DENIS assumes when it numbers scans (`bunch // bunches per scan`), now true by construction even when steps pause to settle. The tagger's own count is checked against it live, and a missed trigger is counted.
 
-Beside each run, `run_NNNN_monitor.csv` records what the rack did while it was taken, ten times a second and written once a second: the setpoint, the line meter's live readback, the cooler, the wavemeter, and the loop's counts of bunches taken, dropped while settling, and missed. It is a separate file, so nothing that reads run files sees a change. Beside a bunched run, `run_NNNN_cooler.npy` logs every trigger the loop read, including bunches with no hits and those dropped while a step settled: the tagger's number for it, the `bunch_number` it became (−1: dropped), when it was read, the cooler meter's reading then in force (the one its hits carry as `cooler`) and that reading's age. The meter reads continuously on its own clock, with no tie to the trigger, so the age bounds how far each reading is from its bunch; the log is the map from accepted bunch to trigger number, and samples the cooler at every bunch however few hits there are. It is written as the run is taken (as `_cooler.part`, readable if ORACLE stops) and closed as a NumPy file that names its columns; a DC run, whose tagger windows come at 1 kHz, keeps none.
+Beside each run, `run_NNNN_monitor.csv` records what the rack did while it was taken, ten times a second and written once a second: the setpoint, the line meter's live readback, the cooler, the wavemeter, and the loop's counts of bunches taken, dropped while settling, and missed. It is a separate file, so nothing that reads run files sees a change.
 
 A run's number is one more than the highest in the data folder, counted when it starts: numbers survive a restart, and a refused calibration leaves no gap. On the rack an unreachable data folder stops the run rather than restart the numbering.
 

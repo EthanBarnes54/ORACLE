@@ -91,23 +91,15 @@ def test_Single_Scan_Tags_Each_Hit_With_Its_Setpoint_And_Ends_Marked(loop):
     assert loop.Send('Ping')[0]
     time.sleep(0.2)                                 # the idle loop's 0 V is written by now
     start = len(loop.Writes)
-    loop.State.Cooler.value, loop.State.Cooler_At.value = 2.99, time.perf_counter()
     assert _Scan(loop, plan, bunches=3)[0]
     packets = loop.Packets(until_end=True)
     assert packets[-1] == ('scan_end', None)
     # each setpoint commanded once, in order, and nothing put 0 V back mid-scan
     live = [volts * mcc_dac.AMPLIFIER_GAIN for _, volts in loop.Writes[start:][1::2]]
     assert live[:len(plan)] == pytest.approx(plan, abs=HALF_CODE_V)
-    rows = np.vstack([p[1] for p in packets if p[0] == 'scan'] or [np.empty((0, 6))])
+    rows = np.vstack([p[1] for p in packets[:-1]] or [np.empty((0, 6))])
     assert set(rows[:, 1]) <= set(plan)
     assert loop.State.Bunches.value == 3 * len(plan)
-    # every trigger read logged, in the tagger's order, with the bunch it became (each
-    # once; a dropped one -1) and the cooler reading in force, with its age
-    logged = np.vstack([p[1] for p in packets if p[0] == 'triggers'])
-    assert np.all(np.diff(logged[:, 0]) > 0)
-    assert sorted(logged[logged[:, 1] >= 0, 1]) == list(range(3 * len(plan)))
-    assert set(rows[:, 2]) <= set(logged[:, 1]) and np.all(logged[:, 3] == 2.99)
-    assert np.all((logged[:, 4] >= 0) & (logged[:, 4] < 30.0))
     assert not loop.State.Scanning.is_set()
     loop.Packets()
     assert loop.State.Voltage.value == 0.0          # the platform back at rest

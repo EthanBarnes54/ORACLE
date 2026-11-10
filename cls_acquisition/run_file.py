@@ -43,12 +43,6 @@ HEADER_KEYS = ('SortingUtilities', 'Run', 'Experiment', 'Date', 'BunchesPerChann
                'DacCorrectionApplied', 'DacCorrection')
 SORTING_UTILITIES = 'https://github.com/andry3vi/cls_tools.git'
 ORACLE_KEY = 'ORACLE'
-# every trigger of a bunched scan beside the run (run_NNNN_cooler.npy): the tagger's
-# number, the bunch_number it became (-1: dropped while its step settled), when it was
-# read (s, as timestamp), the cooler meter's volts then in force (as cooler, Vrfq) and
-# how long before the read the meter had taken them (s)
-COOLER_LOG = np.dtype([('trigger', '<i8'), ('bunch', '<i8'), ('time', '<f8'),
-                       ('cooler', '<f8'), ('age_s', '<f4')])
 
 # the ASDF standard the archive was written to, which its readers know
 ASDF_STANDARD = '1.5.0'
@@ -186,39 +180,6 @@ def Append_Monitor(path, rows):
         if fh.tell() == 0:
             fh.write(','.join(MONITOR_COLS) + '\n')
         np.savetxt(fh, np.asarray(rows, dtype=float), delimiter=',', fmt='%.13g')
-
-
-def Cooler_Log_Path(path, part=False):
-    return path[:-len('.asdf')] + ('_cooler.part' if part else '_cooler.npy')
-
-
-def Append_Cooler_Log(path, rows):
-    """Add rows of (trigger, bunch, time, cooler, age) to the run's cooler log,
-    kept as taken in its ``.part`` until :func:`Close_Cooler_Log`."""
-    rows = np.asarray(rows, dtype=float)
-    log = np.empty(len(rows), COOLER_LOG)
-    for i, name in enumerate(COOLER_LOG.names):
-        log[name] = rows[:, i]
-    with open(Cooler_Log_Path(path, part=True), 'ab') as fh:
-        log.tofile(fh)
-
-
-def Close_Cooler_Log(path):
-    """The run's cooler log made a .npy, which keeps its own columns."""
-    part = Cooler_Log_Path(path, part=True)
-    if os.path.exists(part):
-        np.save(Cooler_Log_Path(path), np.fromfile(part, COOLER_LOG))
-        os.remove(part)
-
-
-def Read_Cooler_Log(path):
-    """The run's cooler log (:data:`COOLER_LOG`'s columns), as closed or as
-    far as it was taken, or None for a run that has none."""
-    if os.path.exists(Cooler_Log_Path(path)):
-        return np.load(Cooler_Log_Path(path))
-    if os.path.exists(Cooler_Log_Path(path, part=True)):
-        return np.fromfile(Cooler_Log_Path(path, part=True), COOLER_LOG)
-    return None
 
 
 def Read(path):

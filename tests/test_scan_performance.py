@@ -603,7 +603,7 @@ def test_A_Large_Jump_Holds_The_Window_Shut_For_Longer(loop):
                      bunches_per_step=1, timing=timing, settle=model)[0]
     packets = loop.Packets(until_end=True)
     assert time.monotonic() - start > 0.4 * 1.25           # the 2 kV step waited its settling
-    rows = np.vstack([p[1] for p in packets if p[0] == 'scan'] or [np.empty((0, 6))])
+    rows = np.vstack([p[1] for p in packets[:-1]] or [np.empty((0, 6))])
     # the loop's own count: exactly one bunch a step, from 0
     assert set(rows[:, 2]) <= {0.0, 1.0}
     assert all(rows[rows[:, 2] == 1, 1] == 2000.0)
