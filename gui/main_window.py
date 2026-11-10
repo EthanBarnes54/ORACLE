@@ -626,7 +626,11 @@ class Main_Window(QMainWindow):
                   'CoolerRollingS': self._Rolling_S,
                   'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
                   # the dead time the PMTs are judged at; never applied to the data
-                  'DeadTimeUs': self._Dead_Time_Us}
+                  'DeadTimeUs': self._Dead_Time_Us,
+                  # every trigger of a bunched scan and the cooler reading then in force,
+                  # beside the run (run_file.COOLER_LOG)
+                  'CoolerLog': ({'File': '_cooler.npy', 'Columns': list(
+                      run_file.COOLER_LOG.names)} if pending['timing']['bunched'] else None)}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
@@ -664,6 +668,10 @@ class Main_Window(QMainWindow):
         if finished is not None:
             self._Sample_Monitor()      # the loop's final counts, now it has stopped
             self._Flush_Monitor()
+            try:
+                run_file.Close_Cooler_Log(finished)
+            except OSError:
+                log.exception("Closing the cooler log failed")
             log.info("Run file closed: %s", finished)
         self._Run = None
         self._Monitor = []
@@ -1433,20 +1441,35 @@ class Main_Window(QMainWindow):
                              "Restart ORACLE.")
 
     def _Take_Data(self):
-        scan_rows, taken = [], []
+        scan_rows, taken, triggers = [], [], []
         for kind, rows in self._Link.Drain():
+            if kind == 'triggers':
+                triggers.append(rows)
+                continue
             if kind == 'scan_end':
                 self._Write(scan_rows)
-                scan_rows = []
+                self._Log_Triggers(triggers)
+                scan_rows, triggers = [], []
                 self._End_Run()
                 continue
             taken.append(rows)
             if kind == 'scan':
                 scan_rows.append(rows)
         self._Write(scan_rows)
+        self._Log_Triggers(triggers)
         if taken:
             # kept in one go: a packet is one bunch, and each is coded as it is kept
             self._Live.Add(np.vstack(taken))
+
+    def _Log_Triggers(self, triggers):
+        """Each trigger's cooler reading into the run's cooler log; a log
+        that cannot be written is said once in the log, never stops a run."""
+        if not triggers or self._Run is None:
+            return
+        try:
+            run_file.Append_Cooler_Log(self._Run, np.vstack(triggers))
+        except OSError:
+            log.exception("Writing the cooler log failed")
 
     def _Sample_Monitor(self):
         """One row of what the rack is doing, for the run's monitor record."""
@@ -1487,7 +1510,9 @@ class Main_Window(QMainWindow):
         state = self._State
         scanning, triggering = state.Scanning.is_set(), state.Triggering.is_set()
         outputting, calibrating = state.Outputting.is_set(), self._Worker is not None
-        self._State.Cooler.value = self._Cooler.Voltage
+        with self._State.Cooler.get_lock():
+            self._State.Cooler.value = self._Cooler.Voltage
+            self._State.Cooler_At.value = self._Cooler.Voltage_At
 
         self.Cooler_Label.setText(f"{self._Cooler.Voltage * self._Cooler_Divider:.2f} V")
         self.Readback_Label.setText(f"{self._Line.Voltage * self._Scan_Divider:.1f} V")

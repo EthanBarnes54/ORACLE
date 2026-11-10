@@ -133,6 +133,30 @@ def test_A_Scan_Tells_The_Elog_And_The_Header_What_The_Old_Daq_Did(qapp, window)
     assert set(np.unique(raw[:, 1])) <= set(np.arange(20.0, 41.0, 2.0))
 
 
+def test_Every_Trigger_Of_A_Bunched_Scan_Is_Logged_With_Its_Cooler_Beside_The_Run(qapp,
+                                                                                window):
+    """The cooler meter reads on its own clock; each trigger is logged with
+    the bunch it became and the reading then in force, the one its hits
+    carry as Vrfq, and that reading's age. The run's six columns are as
+    ever."""
+    _Scan(qapp, window)
+    _Finished(qapp, window)
+    [path] = Run_Files(window)
+    header, raw, _ = run_file.Read(path)
+    logged = run_file.Read_Cooler_Log(path)
+    assert not os.path.exists(run_file.Cooler_Log_Path(path, part=True))
+    assert raw.shape[1] == len(run_file.DATA_COLS) == 6
+    assert header['ORACLE']['CoolerLog']['Columns'] == list(run_file.COOLER_LOG.names)
+    assert np.all(np.diff(logged['trigger']) > 0)
+    accepted = logged[logged['bunch'] >= 0]
+    # 11 setpoints of 2 bunches, each once
+    assert sorted(accepted['bunch']) == list(range(22))
+    cooler = dict(zip(accepted['bunch'], accepted['cooler']))
+    assert all(cooler[bunch] == vrfq for bunch, vrfq in zip(raw[:, 2], raw[:, 5]))
+    assert np.all((logged['age_s'] >= 0) & (logged['age_s'] < 2.0))
+    assert logged['cooler'][0] * 1e4 == pytest.approx(simulated.COOLER_V, abs=2.0)
+
+
 def test_The_Elog_Panel_Sends_Text_Starts_Entries_And_Attaches_The_Spectrum(qapp, window):
     scan, elog = window.Scan, window._Elog
     scan.Elog_Edit.setPlainText('beam tuned to 59Co')

@@ -45,6 +45,20 @@ def test_The_Format_Cannot_Drift(tmp_path):
         run_file.Create(str(tmp_path), header)
 
 
+def test_The_Cooler_Log_Reads_Back_As_Taken_Closed_Or_Not(tmp_path):
+    path = str(tmp_path / 'run_0007.asdf')
+    assert run_file.Read_Cooler_Log(path) is None
+    run_file.Append_Cooler_Log(path, [[1, 0, 1.7e9, 2.9884, 0.02], [2, -1, 1.7e9, 2.9885, 0.12]])
+    run_file.Append_Cooler_Log(path, [[3, 1, 1.7e9 + 0.1, 2.9886, 0.01]])
+    partial = run_file.Read_Cooler_Log(path)
+    assert list(partial['trigger']) == [1, 2, 3] and list(partial['bunch']) == [0, -1, 1]
+    run_file.Close_Cooler_Log(path)
+    closed = run_file.Read_Cooler_Log(path)
+    assert not os.path.exists(run_file.Cooler_Log_Path(path, part=True))
+    assert closed.dtype == run_file.COOLER_LOG and np.array_equal(closed, partial)
+    assert closed['cooler'][2] == 2.9886 and closed['age_s'][1] == np.float32(0.12)
+
+
 def test_A_Run_File_Is_Never_Overwritten(tmp_path):
     run_file.Create(str(tmp_path), _Header())
     with pytest.raises(FileExistsError):

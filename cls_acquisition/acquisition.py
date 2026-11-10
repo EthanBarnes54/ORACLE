@@ -42,6 +42,7 @@ cls_acquisition.hardware inside the process.
 
 import logging
 import logging.handlers
+import math
 import multiprocessing
 import queue
 import threading
@@ -98,6 +99,7 @@ class Shared_State():
         self.Voltage = context.Value('d', 0.0)      # on the DAC now; the loop writes it
         self.Requested = context.Value('d', 0.0)    # quick tune's request; the GUI writes it
         self.Cooler = context.Value('d', 0.0)       # cooler meter volts; the GUI writes it
+        self.Cooler_At = context.Value('d', math.nan)   # its reading's perf_counter time
         self.Round = context.Value('i', 0)
         self.Bunches = context.Value('q', 0)
         self.Dropped = context.Value('q', 0)        # bunches dropped while a step settled
@@ -125,6 +127,7 @@ class Acquisition_Loop():
         self._Accepted = 0                  # bunches taken since the scan or stream began
         self._Taken = 0                     # bunches taken at this step
         self._Tagger_Ref = None             # the tagger's number for the last trigger read
+        self._Logging = False               # each trigger of a bunched scan, for its cooler log
         self._Heard_At = 0.0                # perf_counter time a trigger was last due
         self._Quiet_S = NO_TRIGGER_S        # longest the tagger may go without one
         self._Running = True
@@ -231,6 +234,7 @@ class Acquisition_Loop():
             raise _Refused(f"A scan of {rounds} rounds cannot be taken; it needs one at "
                            f"least.")
         self._Start_Triggers(timing)
+        self._Logging = bool(timing['bunched'])
         self._Plan = np.asarray(setpoints, dtype=float)
         self._Index = 0
         self._Scan_Type = scan_type
@@ -412,9 +416,14 @@ class Acquisition_Loop():
         marked = rows[:, 1] == MARK
         numbers = rows[marked, 0]
         self._Check_Count(numbers)
-        if room is not None and len(numbers) > room:
-            self._State.Dropped.value += len(numbers) - room
-            numbers = numbers[:room]
+        with self._State.Cooler.get_lock():     # one reading for the hits and the log
+            cooler, cooler_at = self._State.Cooler.value, self._State.Cooler_At.value
+        kept = len(numbers) if room is None else min(len(numbers), room)
+        if kind == 'scan' and self._Logging and len(numbers):
+            self._Log_Triggers(numbers, kept, cooler, cooler_at)
+        if kept < len(numbers):
+            self._State.Dropped.value += len(numbers) - kept
+            numbers = numbers[:kept]
         if not len(numbers):
             return 0
         first = self._Accepted
@@ -428,7 +437,7 @@ class Acquisition_Loop():
             out[:, 1] = self._Volts
             out[:, 2] = first + np.searchsorted(numbers, hits[:, 0])
             out[:, 3:5] = hits[:, 1:]
-            out[:, 5] = self._State.Cooler.value
+            out[:, 5] = cooler
             self._Data.put((kind, out))
         return len(numbers)
 
@@ -448,6 +457,22 @@ class Acquisition_Loop():
                      time.perf_counter() - self._Heard_At)
             self._State.Silent.value = 0.0
         self._Heard_At = time.perf_counter()
+
+    def _Log_Triggers(self, numbers, kept, volts, at):
+        """Each trigger of a read, for the run's cooler log (run_file.COOLER_LOG):
+        the tagger's number for it, the bunch it became (the first ``kept``;
+        -1 for one dropped), when it was read, and the cooler reading
+        ``volts`` then in force, taken at perf_counter ``at``, with its age.
+        The meter reads on its own clock, so the age bounds how far the
+        reading is from the trigger."""
+        rows = np.empty((len(numbers), 5))
+        rows[:, 0] = numbers
+        rows[:, 1] = -1
+        rows[:kept, 1] = self._Accepted + np.arange(kept)
+        rows[:, 2] = time.time()
+        rows[:, 3] = volts
+        rows[:, 4] = time.perf_counter() - at
+        self._Data.put(('triggers', rows))
 
     def _Check_Count(self, numbers):
         """The tagger numbers every trigger it sees, so a number missing since

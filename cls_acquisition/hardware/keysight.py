@@ -94,6 +94,7 @@ class _Meter():
 
     def __init__(self, session, config):
         self.Voltage = float('nan')
+        self.Voltage_At = float('nan')  # perf_counter as its READ? returned, one clock for all
         self.Mode = 'continuous'
         self.Idn = ''
         self.Memory = STANDARD_MEMORY
@@ -160,6 +161,7 @@ class _Meter():
             if self.Mode == 'continuous':
                 self.Voltage = float(Readings(inst.Query("READ?"), self._Session.Resource,
                                               'its poll')[0])
+                self.Voltage_At = time.perf_counter()
 
         while self._Polling:
             try:
