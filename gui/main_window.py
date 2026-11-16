@@ -1062,10 +1062,11 @@ class Main_Window(QMainWindow):
         return meta
 
     def _Linearity_Record(self, title):
-        """A linearity record chosen from the data folder, or anywhere, or ''."""
+        """A linearity record chosen from the data folder, or anywhere (ORACLE's, or a
+        bench tool sweep's points.csv), or ''."""
         return QFileDialog.getOpenFileName(
             self, title, os.path.join(self._Data_Dir, 'hardware_calibration'),
-            'Linearity records (linearity_2*.csv)')[0]
+            'Linearity records (linearity_2*.csv);;Bench tool sweeps (points.csv)')[0]
 
     def _Make_Table(self, path=None):
         """A table from a linearity record (and the stopped ones it resumes),
@@ -1074,9 +1075,14 @@ class Main_Window(QMainWindow):
         if not path:
             return
         try:
-            header, _, _ = hardware_calibration.Read_Record(path)
-            points, _ = hardware_calibration.Read_Table_Sweep(path)
-            table = scan_table.Build(points, self._Table_Meta(header, path))
+            if os.path.basename(path) == 'points.csv':
+                meta, points = hardware_calibration.Read_Bench_Tool(path)
+                meta['made_by'] = __version__
+            else:
+                header, _, _ = hardware_calibration.Read_Record(path)
+                points, _ = hardware_calibration.Read_Table_Sweep(path)
+                meta = self._Table_Meta(header, path)
+            table = scan_table.Build(points, meta)
             saved = scan_table.Save(table, self._Data_Dir)
         except (OSError, ValueError, hardware_calibration.Calibration_Error) as e:
             QMessageBox.warning(self, 'No table made', f"{os.path.basename(path)} made no bench "

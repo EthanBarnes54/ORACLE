@@ -12,9 +12,10 @@ measured as a linearity sweep (TABLE), resumable, and checked in minutes
 interpolated out between the checks, and a code not visited is
 interpolated and said to be, never extrapolated. The library
 ``<data>/tables`` keeps one CSV per table, its details as ``#`` lines,
-named by its ID (the SHA-256 of every number) and never overwritten. The
-table in force is named in the settings; one from another rack is warned
-of, not refused.
+named by its ID (the SHA-256 of every number) and never overwritten, and
+beside it the table as cls_tools reads it (:func:`Clstools`). The table in
+force is named in the settings; one from another rack is warned of, not
+refused.
 
 Depends on: numpy; cls_acquisition.hardware.mcc_dac.
 """
@@ -30,6 +31,7 @@ from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS, CODES, FULL_SCALE_V
 
 FOLDER = 'tables'
 COLUMNS = ('channel', 'code', 'setpoint_v', 'volts', 'sigma_v', 'readings')
+CLSTOOLS = {'format': 'clstools-scan-calibration', 'format_version': 1}   # load_table reads
 CHECK_RMS_V = 0.015                 # a table check's residual it passes at (to tune on the bench)
 WARMING_V_PER_H = 0.05              # 0 V checks still drifting this fast: warming up
 DRIFT_TOLERANCE_V = 0.010           # the 0 V drift worth a check: the table's own repeatability
@@ -331,6 +333,7 @@ def Save(table, directory):
             raise Table_Error(f"{e} Nothing was written over it.") from None
         if not same:
             raise Table_Error(f"{path} holds another table; nothing was written over it.")
+        Clstools(table, path)
         return path
     with open(path, 'x', encoding='utf-8', newline='') as fh:
         fh.write("# ORACLE bench table: platform volts relative to the 0 V level, by DAC "
@@ -340,7 +343,38 @@ def Save(table, directory):
         fh.write(','.join(COLUMNS) + '\n')
         for row in table.Rows():
             fh.write(f"{row[0]},{row[1]},{row[2]:.6f},{row[3]:.6f},{row[4]:.6f},{row[5]}\n")
+    Clstools(table, path)
     return path
+
+
+def Clstools(table, path):
+    """The table as cls_tools reads it (``clstools.load_table(path)``, its
+    scan-calibration format v1) beside its library file, written once
+    (``.json``): by setpoint, each through the converter the DAC drives it
+    with, its shape the volts relative to 0 V, its bench offset the 0 V level
+    mid-sweep and its repeatability REPEATABILITY_V. cls_tools takes it
+    exactly on its 1 V grid and a cubic off it. Returns its path."""
+    out = path[:-len('.csv')] + '.json'
+    if os.path.exists(out):
+        return out
+    name = os.path.basename(out)[:-len('.json')]
+    rows = sorted((float(t['setpoint_v'][i]), float(t['volts'][i]))
+                  for channel, t in table.Channels.items() for i in range(len(t['code']))
+                  if (t['setpoint_v'][i] >= 0) == (channel == CH_POS))
+    zero = table.Meta['zero_v']
+    record = dict(CLSTOOLS, id=name,
+                  measured=datetime.strptime(name.split('_')[1], '%Y%m%d').date().isoformat(),
+                  description=f"ORACLE bench table {table.Id[:8]}: the platform voltage by "
+                              f"setpoint, relative to the 0 V level.",
+                  set_v=[r[0] for r in rows], shape_v=[r[1] for r in rows],
+                  bench_offset_v=0.5 * (zero['first'] + zero['last']),
+                  repeat_rms_v=REPEATABILITY_V,
+                  provenance={'producer': 'ORACLE', 'library_file': os.path.basename(path),
+                              **table.Meta})
+    with open(out, 'x', encoding='utf-8') as fh:     # a key a line, as cls_tools ships its own
+        fh.write('{\n' + ',\n'.join(f" {json.dumps(k)}: {json.dumps(v)}"
+                                     for k, v in record.items()) + '\n}\n')
+    return out
 
 
 def Load(path):

@@ -60,7 +60,12 @@ File & Contents \\
     \code{wavenumber\_cm1}, and the loop's \code{bunches}, \code{dropped}, \code{skipped} \\
 \code{run\_NNNN\_performance.yaml} & the Scan Performance report: verdict, checks, flags,
     suggested dead times \\
-\code{run\_NNNN\_systematics.yaml} & the systematic inputs \\
+\code{run\_NNNN\_systematics.yaml} & the systematic inputs (schema 3): each source's
+    \code{id}, the \code{key} it moves, a \code{CLSDataFrame} attribute of cls\_tools (null:
+    informational, or cls\_tools' own fit), its \code{value} for the run where \oracle{}
+    knows it, its 1\,$\sigma$ \code{width} in its \code{unit} (null: not yet known) and
+    its \code{correlation} (\code{run}, \code{campaign}, \code{region} or \code{table});
+    and \code{clstools}, the arguments cls\_tools loads the run with (below) \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -72,7 +77,7 @@ Hardware calibrations write CSV records under \code{<data>/hardware\_calibration
 settings as \code{\#} lines above the columns, rows flushed as taken, and its status and
 results below; health checks as \code{health\_<time>.yaml}.
 
-Bench tables, proposed as the format for cls\_tools, are kept as
+Bench tables are kept as
 
 \begin{center}
 \code{<data>/tables/table\_<YYYYMMDD>\_<id8>.csv}
@@ -89,4 +94,22 @@ with
 
 \begin{lstlisting}[language=Python]
 pandas.read_csv(path, comment='#')
+\end{lstlisting}
+
+\noindent Beside each, \code{table\_<YYYYMMDD>\_<id8>.json} holds it in cls\_tools'
+scan-calibration format (version~1): by setpoint, each through the converter the DAC drives
+it with, its shape the volts relative to 0\,V, its bench offset the 0\,V level mid-sweep,
+and the library file's details under \code{provenance}. cls\_tools takes it exactly on its
+1\,V grid and a cubic off it. A run's systematic inputs name it, relative to their own
+file, so a run loads as \oracle{} took it:
+
+\begin{lstlisting}[language=Python]
+folder = os.path.dirname(run)                     # run: the run file's path
+c = yaml.safe_load(open(run.replace('.asdf', '_systematics.yaml')))['clstools']
+data = clstools.CLSDataFrame(**c['CLSDataFrame'])   # dividers, beam offset
+data.Load_Run(run)
+if c.get('Use_Scan_Calibration'):                  # the table in force, if any
+    data.Use_Scan_Calibration(
+        table=os.path.join(folder, c['Use_Scan_Calibration']['table']))
+data.Compute_Voltages()
 \end{lstlisting}

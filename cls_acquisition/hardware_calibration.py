@@ -839,6 +839,37 @@ def Read_Table_Sweep(path):
     return points, rungs
 
 
+def Read_Bench_Tool(path):
+    """``(meta, points)`` of a linearity sweep the bench tool (cls-cal, A.
+    Raggio) recorded, its ``points.csv`` or the folder holding it, as the
+    points a table is built from (scan_table.Build): each point on the
+    converter its set voltage's sign drove, the 0 V checks among them. The
+    24-26 October 2026 bench sweeps came this way."""
+    import csv
+    import json
+    points_csv = os.path.join(path, 'points.csv') if os.path.isdir(path) else path
+    folder = os.path.dirname(points_csv)
+    try:
+        with open(os.path.join(folder, 'meta.json'), encoding='utf-8') as fh:
+            meta = json.load(fh)
+        with open(points_csv, newline='', encoding='utf-8') as fh:
+            rows = list(csv.DictReader(fh))
+        points = []
+        for r in rows:
+            kv = float(r['set_kv'])
+            channel = CH_POS if kv >= 0 else CH_NEG
+            points.append({'Kind': r['kind'], 'Direction': r['direction'], 'Set_V': kv * 1e3,
+                           'Read_V': float(r['mean_kv']) * 1e3,
+                           'Sigma_V': float(r['std_kv']) * 1e3, 'Channel': channel,
+                           'Dac_V': float(r['ao0_v' if channel == CH_POS else 'ao1_v']),
+                           'Time_S': float(r['t_s'])})
+    except (KeyError, ValueError, json.JSONDecodeError) as e:
+        raise Calibration_Error(f"{points_csv} is not a bench tool sweep ({e}).") from None
+    return {'measured': str(meta.get('started', '')).replace('T', ' '),
+            'source': f"cls-cal {os.path.basename(folder)}",
+            'software': meta.get('software')}, points
+
+
 def Read_Cooler(path):
     """``(times, volts, integration_s)`` of a cooler record: the integration
     from its settings, the NPLC's if it was set, else the aperture's."""

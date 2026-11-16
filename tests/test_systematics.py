@@ -1,5 +1,7 @@
 """The systematics' inputs a run's analysis gives: each measured, declared or not yet known."""
 
+import os
+
 import numpy as np
 import pytest
 import yaml
@@ -119,3 +121,54 @@ def test_A_Run_Fitted_To_The_Bench_Table_Gives_That_Fits_Errors():
     assert calibration['Volts'] == pytest.approx(np.hypot(0.004, 3e-6 * 2000.0))
     assert 'bench table abababab was in force' in rows['Bench table repeatability'][
         'Detail'].lower()
+
+
+def test_Schema_3_Says_What_Each_Row_Moves_In_cls_tools(tmp_path):
+    """Each row keyed by the clstools.CLSDataFrame attribute it moves (None for an
+    informational one or cls_tools' own fit), its value where ORACLE knows it, its
+    1 sigma and unit, how runs share it; and the arguments the run loads with."""
+    _, result = _Analysed()
+    exported = yaml.safe_load(open(systematics.Export(str(tmp_path / 'run_0007.asdf'),
+                                                     result['Systematics']), encoding='utf-8'))
+    assert exported['schema'] == 3
+    rows = {s['id']: s for s in exported['sources']}
+    assert (rows['scan_divider']['key'], rows['scan_divider']['value'],
+            rows['scan_divider']['width'], rows['scan_divider']['unit'],
+            rows['scan_divider']['correlation']) == ('VAccDiv', 1000.0, 100.0, 'ppm', 'campaign')
+    assert (rows['beam_offset']['key'], rows['beam_offset']['value'],
+            rows['beam_offset']['width'], rows['beam_offset']['correlation']) == (
+        'VCoolOffset', 13.0, 8.0, 'region')
+    assert (rows['zero_drift']['key'], rows['zero_drift']['width']) == ('Scan_offset_v', 0.030)
+    assert (rows['wavemeter']['key'], rows['wavemeter']['unit']) == ('Laser_set', 'MHz')
+    assert rows['run_calibration']['key'] is None and rows['health']['key'] is None
+    assert rows['table_repeatability']['width'] is None       # not yet known, never 0
+    assert [s['source'] for s in exported['sources']][0] == 'Beam offset δU'
+    # no table was in force: cls_tools' polynomial, with ORACLE's dividers and δU
+    assert exported['clstools'] == {'CLSDataFrame': {'VCoolOffset': 13.0, 'VCoolDiv': 10000.0,
+                                                     'VAccDiv': 1000.0}}
+    _, undeclared = _Analysed(region='LCR', declared=dict(DECLARED, beam_offset_v={}))
+    assert 'VCoolOffset' not in systematics.Clstools(
+        str(tmp_path / 'run_0007.asdf'), undeclared['Systematics'])['CLSDataFrame']
+
+
+def test_A_Run_On_A_Bench_Table_Names_It_As_cls_tools_Reads_It(tmp_path):
+    from cls_acquisition import scan_table
+    from tests.test_scan_table import _Points
+    table = scan_table.Build(_Points('linearity_3kv_25oct.npz', 'zero_3kv_25oct.npz'),
+                             {'measured': '2026-10-25 02:14:14'})
+    library = scan_table.Save(table, str(tmp_path / 'data'))
+    os.remove(library[:-len('.csv')] + '.json')      # a library from before the copies
+    header, raw, monitor = _Run()
+    header[ORACLE_KEY].update(ScanTable=table.Id)
+    rows = sp.Analyse(header, raw, monitor, LASER, declared=DECLARED)['Systematics']
+    run = tmp_path / 'data' / '2026' / '11' / '24' / 'run_0007.asdf'
+    run.parent.mkdir(parents=True)
+    exported = yaml.safe_load(open(systematics.Export(str(run), rows), encoding='utf-8'))
+    relative = exported['clstools']['Use_Scan_Calibration']['table']
+    assert relative == f"../../../tables/table_20261025_{table.Id[:8]}.json"
+    assert os.path.isfile(run.parent / relative)               # written from the library
+    assert {s['id']: s for s in exported['sources']}['table_repeatability']['value'] == table.Id
+    # a table the run's data folder does not hold is named as missing, not guessed
+    header[ORACLE_KEY].update(ScanTable='0' * 64)
+    rows = sp.Analyse(header, raw, monitor, LASER, declared=DECLARED)['Systematics']
+    assert systematics.Clstools(str(run), rows)['Use_Scan_Calibration'] == {'table': None}

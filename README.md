@@ -41,7 +41,7 @@ Behind the window: one owner thread per instrument and every reading on command;
 
 Run files are the collinear DAQ's, so cls_tools and DENIS read them unchanged: `<data>/<year>/<month>/<day>/run_NNNN.asdf`, the archive's sixteen header keys and rows of `timestamp, voltage, bunch_number, channel, time, cooler`. One more key, `ORACLE`, holds ORACLE's own record (timing, view, gate, rack identity, dividers, DAC codes, bench table and fit), which readers that look keys up by name pass over. `run_NNNN_monitor.csv` beside each run records the rack every 0.1 s. Every key and file is listed in the manual (§9).
 
-**Proposed for cls_tools** (for A. Raggio's review): the bench table, `<data>/tables/table_<YYYYMMDD>_<id8>.csv`, one row per converter and code (`channel, code, setpoint_v, volts, sigma_v, readings`), with its details as `# key: value` lines above; a run's `DacCodes` and `ScanTable` let its calibration be fitted to it as V = a + b·T(code).
+**For cls_tools.** Each bench table is kept as `<data>/tables/table_<YYYYMMDD>_<id8>.csv`, one row per converter and code (`channel, code, setpoint_v, volts, sigma_v, readings`) with its details as `# key: value` lines above, and beside it as `.json` in cls_tools' own scan-calibration format (v1), which `clstools.load_table(path)` and `Use_Scan_Calibration(table=path)` read. Each run's `run_NNNN_systematics.yaml` keys every source by the `CLSDataFrame` attribute it moves and gives the arguments cls_tools loads the run with: its dividers, the declared beam offset and its table.
 
 ## Repository Layout
 

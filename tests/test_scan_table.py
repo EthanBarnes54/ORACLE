@@ -178,3 +178,83 @@ def test_A_Sweep_Without_Its_0_V_Checks_Makes_No_Table():
               if p['Kind'] == 'sweep']
     with pytest.raises(st.Table_Error, match="took 0 checks of 0 V"):
         st.Build(points)
+
+
+def _Bench_Tool_Sweep(folder, setpoints=(-3.0, -2.0, -1.0, 1.0, 2.0, 3.0)):
+    """A sweep as the bench tool (cls-cal) writes it: meta.json and
+    points.csv, its set voltage and readings in kV, 0 V checks between."""
+    import json
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, 'meta.json'), 'w') as fh:
+        json.dump({'kind': 'linearity', 'started': '2026-10-25T02:14:14',
+                   'software': 'cls-cal 0.1.0'}, fh)
+    head = ("index,kind,direction,set_kv,t_s,ao0_v,ao1_v,ao0_code,ao1_code,n,mean_dmm_v,"
+            "std_dmm_v,mean_kv,std_kv,sem_kv,error_v\n")
+    rows, t = [], 0.0
+    for kind, kv in [('zero', 0.0)] + [('sweep', v) for v in setpoints] + [('zero', 0.0)]:
+        t += 2.5
+        read = -0.000976 if kind == 'zero' else kv * 0.9992 - 0.000976
+        dac = abs(kv)
+        rows.append(f"{len(rows)},{kind},{'up' if kind == 'sweep' else ''},{kv},{t},"
+                    f"{dac if kv >= 0 else 0.0},{dac if kv < 0 else 0.0},0,0,5,{read},1e-6,"
+                    f"{read},1e-6,4e-7,0\n")
+    with open(os.path.join(folder, 'points.csv'), 'w') as fh:
+        fh.write(head + ''.join(rows))
+    return os.path.join(folder, 'points.csv')
+
+
+def test_The_Bench_Tools_Own_Sweep_Makes_A_Table(tmp_path):
+    """The 24-26 October 2026 sweeps are the bench tool's records: made
+    into a table as they are, both converters, the 0 V level taken out."""
+    from cls_acquisition import hardware_calibration as hc
+    meta, points = hc.Read_Bench_Tool(_Bench_Tool_Sweep(str(tmp_path / 'sweep')))
+    assert meta['measured'] == '2026-10-25 02:14:14'
+    table = st.Build(points, meta)
+    assert sorted(table.Channels) == [CH_POS, CH_NEG]
+    volts, exact = table.Volts([CH_POS], st.Codes([2.0]))
+    assert exact[0] and volts[0] == pytest.approx(2000.0 * 0.9992, abs=1e-6)
+    with pytest.raises(hc.Calibration_Error, match="not a bench tool sweep"):
+        with open(tmp_path / 'other.csv', 'w') as fh:
+            fh.write("kind,set_kv\nsweep,1.0\n")
+        (tmp_path / 'meta.json').write_text('{}')
+        hc.Read_Bench_Tool(str(tmp_path / 'other.csv'))
+
+
+@pytest.mark.skipif(not os.path.isdir(os.path.join(
+    os.path.dirname(BENCH), '..', '..', 'ORIGINAL_DAQ_STUFF', 'cls_calibration_tests', 'data',
+    '20261025_021414_linearity_3kvspan')), reason="the bench tool's records are not here")
+def test_The_Real_Sweep_Makes_The_Table_The_Next_Day_Sits_On(oct26):
+    from cls_acquisition import hardware_calibration as hc
+    folder = os.path.join(os.path.dirname(BENCH), '..', '..', 'ORIGINAL_DAQ_STUFF',
+                          'cls_calibration_tests', 'data', '20261025_021414_linearity_3kvspan')
+    meta, points = hc.Read_Bench_Tool(os.path.join(folder, 'points.csv'))
+    table = st.Build(points, meta)
+    zeros, (channels, codes, readback, times) = oct26
+    zero_t, zero_v = st.Zero_Level(zeros)
+    verdict, fit = st.Check(table, channels, codes, readback - np.interp(times, zero_t, zero_v))
+    assert verdict == 'PASS' and fit['Rms_V'] < 0.013
+
+
+def test_Every_Saved_Table_Has_Its_cls_tools_Copy_Beside_It(oct25, tmp_path):
+    """The rules clstools.calibration.ScanCalibration.from_dict reads a table by
+    (format v1), and each setpoint as the DAC writes it, through its own converter."""
+    import json
+    table, _ = oct25
+    path = st.Save(table, str(tmp_path))
+    out = path[:-len('.csv')] + '.json'
+    with open(out, encoding='utf-8') as fh:
+        d = json.load(fh)
+    assert (d['format'], d['format_version']) == ('clstools-scan-calibration', 1)
+    assert d['id'] == f"table_20261025_{table.Id[:8]}" and d['measured'] == '2026-10-25'
+    set_v, shape_v = np.array(d['set_v']), np.array(d['shape_v'])
+    assert set_v.shape == shape_v.shape and np.all(np.diff(set_v) > 0)
+    n = sum(len(t['code']) for t in table.Channels.values())
+    assert len(set_v) == n and set_v[0] == -3000.0 and set_v[-1] == 3000.0
+    by = {c: dict(zip(t['setpoint_v'], t['volts'])) for c, t in table.Channels.items()}
+    assert [by[CH_POS if v >= 0 else CH_NEG][v] for v in set_v] == list(shape_v)
+    zero = table.Meta['zero_v']
+    assert d['bench_offset_v'] == pytest.approx(0.5 * (zero['first'] + zero['last']))
+    assert d['repeat_rms_v'] == st.REPEATABILITY_V
+    assert d['provenance']['id'] == table.Id and d['provenance']['rack'] == table.Meta['rack']
+    assert st.Save(table, str(tmp_path)) == path and st.Clstools(table, path) == out
+    assert [p for p, _ in st.Library(str(tmp_path))] == [path]   # not a table of its own

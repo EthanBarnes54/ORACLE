@@ -833,7 +833,8 @@ class Table_Panel(QWidget):
         column = QVBoxLayout(self.Group)
         self.Make_Button = QPushButton(theme.Icon('file-down'), 'Make from a linearity record...')
         self.Make_Button.setToolTip("Make a table from a linearity sweep's record (with its 0 V "
-                                    "checks), keep it in the library and offer it for use.")
+                                    "checks), ORACLE's or the bench tool's points.csv, keep it "
+                                    "in the library and offer it for use.")
         self.Load_Button = QPushButton(theme.Icon('folder-open'), 'Use a table...')
         self.Load_Button.setToolTip("Make a table from the library, or one from anywhere, the "
                                     "one runs are fitted to.")
