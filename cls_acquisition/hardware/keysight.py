@@ -257,6 +257,11 @@ class _Meter():
                                  f"{count} readings in {timeout_s:.0f} s.")
             time.sleep(FETCH_POLL_S)
 
+    def Stream_Limit(self):
+        """The most readings the meter takes in one streamed record."""
+        return int(float(self._Session.Transaction(
+            lambda inst: inst.Query("SAMP:COUN? MAX"))))
+
     def Read_Available(self, most):
         """Up to ``most`` readings of a streamed capture, read out and erased
         from the meter's memory; none if it has taken none since the last."""

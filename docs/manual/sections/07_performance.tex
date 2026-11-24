@@ -37,8 +37,10 @@ against the line's width. Select a check to read what it found.
 \app{Systematic inputs} gives each source of error as a width at the line, in scan volts
 and MHz, marked measured, declared (in the settings) or not yet known; the Monte Carlo
 that turns them into errors is \denis{}'s. A short block goes to the ELOG as each run is
-analysed; \app{Post systematics to ELOG} posts the whole table. \app{Export report} writes
-\code{run\_NNNN\_performance.yaml} and \code{run\_NNNN\_systematics.yaml} beside the run.
+analysed; \app{Post systematics to ELOG} posts the whole table. As each run's analysis
+ends, \code{run\_NNNN\_performance.yaml} and \code{run\_NNNN\_systematics.yaml} are
+written beside it (cls\_tools' inputs, and the hardware history's); \app{Export report}
+writes them for any run shown.
 
 \begin{figure}[ht]
     \centering

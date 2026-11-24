@@ -96,10 +96,16 @@ class Scan_Tab(QWidget):
         self.Reference_Check.setToolTip("A run taken to measure the beam's offset from the "
                                         "cooler's readback (a line of known frequency), "
                                         "recorded as such.")
+        self.Diagnostics_Check = QCheckBox('Stream the HV readback (diagnostics)')
+        self.Diagnostics_Check.setToolTip(
+            "Streams the line meter every 1 ms for the whole scan, instead of polling it, into "
+            "diagnostics/run_NNNN beside the run (14 MB an hour), to tell whether the mains on "
+            "the readback is on the platform. The run file and its monitor record are as "
+            "without it.")
         rows = (('Scan type', self.Type_Combo), (None, self.Per_Step_Box),
                 ('Stepsize (V)', self.Step_Box), ('Experiment name', self.Experiment_Edit),
                 ('Interaction region', self.Region_Combo), ('PMT HV', self.Pmt_Hv_Edit),
-                ('', self.Reference_Check))
+                ('', self.Reference_Check), ('', self.Diagnostics_Check))
         for row, (text, widget) in enumerate(rows):
             grid.addWidget(self.Per_Step_Label if text is None else QLabel(text), row, 1)
             grid.addWidget(widget, row, 2)
@@ -312,7 +318,8 @@ class Scan_Tab(QWidget):
         region = self.Region_Combo.currentText()
         return {'InteractionRegion': None if region == REGIONS[0] else region,
                 'PmtHv': self.Pmt_Hv_Edit.text().strip() or None,
-                'ReferenceRun': self.Reference_Check.isChecked()}
+                'ReferenceRun': self.Reference_Check.isChecked(),
+                'Diagnostics': self.Diagnostics_Check.isChecked()}
 
     def View(self):
         """How the plots show a run, for its record."""
@@ -360,6 +367,8 @@ class Scan_Tab(QWidget):
             self.Pmt_Hv_Edit.setText((record['PmtHv'] or {}).get('Entered') or '')
         if 'ReferenceRun' in record:
             self.Reference_Check.setChecked(bool(record['ReferenceRun']))
+        if 'Diagnostics' in record:
+            self.Diagnostics_Check.setChecked(bool(record['Diagnostics']))
         if timing is None:
             unshown.append("its scan type, mode, trigger timing and view, which ORACLE did not "
                            "yet record")
@@ -389,7 +398,8 @@ class Scan_Tab(QWidget):
         return [('scan_type', self.Type_Combo), ('mode', (self.Dc_Radio, self.Bunched_Radio)),
                 ('per_step', self.Per_Step_Box), ('step', self.Step_Box),
                 ('region', self.Region_Combo), ('pmt_hv', self.Pmt_Hv_Edit),
-                ('reference_run', self.Reference_Check), *ranges,
+                ('reference_run', self.Reference_Check),
+                ('diagnostics', self.Diagnostics_Check), *ranges,
                 ('dwell', self.Dwell_Box), ('release', self.Release_Box),
                 ('tagger_delay', self.Tagger_Delay_Box), ('gate_start', self.Gate_Start_Box),
                 ('gate_length', self.Gate_Length_Box), ('tof_bin', self.Bin_Box),

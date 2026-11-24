@@ -29,9 +29,9 @@ ORACLE starts on the simulated rack. On the beamline PC, install with `rack`, se
 
 | Tab | What it does |
 |---|---|
-| **Scan controls** | Up to seven ranges, Sawtooth, Triangle or Single scans, bunched or DC; settle-aware stepping; a scan queue that runs unattended and stops on any fault; live HFS, TOF and TOF-HFS plots with a gate; the ELOG panel; File ▸ Open run brings any run back as taken |
+| **Scan controls** | Up to seven ranges, Sawtooth, Triangle or Single scans, bunched or DC; settle-aware stepping; a scan queue that runs unattended and stops on any fault; live HFS, TOF and TOF-HFS plots with a gate; the ELOG panel; File ▸ Open run brings any run back as taken; the HV readback streamed beside a run, for diagnostics |
 | **Scan Calibration** | Step-and-confirm calibration of every scan's own setpoints (a narrow scan's reached out to 400 V), judged by a gate before anything is written; each calibration fitted to the bench table, V = a + b·T, by cls_tools' own rule |
-| **Hardware Calibration** | The bench tool: settle time, linearity and DAC correction, cooler monitor, the bench table (measure, resume, check, compare) and a health check for the start of a shift |
+| **Hardware Calibration** | The bench tool: settle time, linearity and DAC correction, cooler monitor, the bench table (measure, resume, check, compare), a health check for the start of a shift, and the rack's history: every run's calibration, cooler and PMTs on one timeline, marked where the rack changed |
 | **Scan Performance** | How the rack shaped each run's spectrum, check by check against counting statistics; afterpulsing per PMT; the run's systematic inputs; nothing is ever cut |
 | **Time graphs** | Counts against time and each PMT's live afterpulse ratio |
 

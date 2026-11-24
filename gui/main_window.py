@@ -21,6 +21,7 @@ __version__ = '0.6.0'
 import contextlib
 import ctypes
 import getpass
+import html
 import json
 import logging
 import math
@@ -42,8 +43,8 @@ from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QGridLayout, Q
                                QLabel, QMainWindow, QMessageBox, QPushButton, QScrollArea,
                                QSlider, QSplashScreen, QStyle, QTabWidget, QWidget)
 
-from cls_acquisition import (calibration, hardware_calibration, health, run_file,
-                             scan_performance, scan_table, settings, systematics)
+from cls_acquisition import (calibration, diagnostics, hardware_calibration, health, history,
+                             run_file, scan_performance, scan_table, settings, systematics)
 from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
@@ -112,6 +113,7 @@ class Main_Window(QMainWindow):
         self._Live = Live_Data(float(config['detectors']['dead_time_us']))
         self._Volt_Edges = np.array([0.0, 1.0])
         self._Run = None                # path of the run file being written
+        self._Stream = None             # its diagnostics stream (WP9), if ticked
         self._Pending = None            # the scan waiting on its calibration
         self._Worker = None             # the calibration in progress, scan or hardware
         self._Correction = config['dac_correction'] or mcc_dac.CORRECTION
@@ -139,6 +141,7 @@ class Main_Window(QMainWindow):
         warnings = [*warnings, *missing]
         self._Settle_Model = config['settle_model']
         self._Analysis = None           # the performance analysis in progress
+        self._History = None            # the hardware history being read (WP10)
         self._Analysing = None          # the run it is of
         self._Wanted = None             # the run Scan Performance is to show
         self._Laser = config['laser']
@@ -260,6 +263,7 @@ class Main_Window(QMainWindow):
         hardware.Table.Check_Button.clicked.connect(lambda: self._Check_Table())
         hardware.Health.Run_Button.clicked.connect(self._Health_Check)
         hardware.Health.Post_Button.clicked.connect(self._Post_Health)
+        hardware.History.Refresh_Button.clicked.connect(self._Read_History)
         hardware.Table.Load_Button.clicked.connect(self._Use_Table)
         hardware.Table.Compare_Button.clicked.connect(self._Compare_Table)
         hardware.Table.Clear_Button.clicked.connect(lambda: self._Set_Table(None))
@@ -537,7 +541,10 @@ class Main_Window(QMainWindow):
                 + (f"Queued scan {queued[0]} of {queued[1]}, {rounds} scans\n" if queued
                    else "")
                 + ("REFERENCE RUN, for the beam's offset from the cooler's readback\n"
-                   if self.Scan.Reference_Check.isChecked() else ""))
+                   if self.Scan.Reference_Check.isChecked() else "")
+                + (f"DIAGNOSTICS: the HV readback streamed every 1 ms to "
+                   f"{diagnostics.Folder(run)}\n" if self.Scan.Diagnostics_Check.isChecked()
+                   else ""))
         self._Pending = {'plan': plan, 'run': run, 'when': when, 'pvs': pvs, 'text': text,
                          'pmt_hv': {c: v for c, v in pmt_hv.items() if v is not None},
                          'setup': self.Scan.Setup(),
@@ -612,7 +619,10 @@ class Main_Window(QMainWindow):
                   'CoolerRollingS': self._Rolling_S,
                   'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
                   # the dead time the PMTs are judged at; never applied to the data
-                  'DeadTimeUs': self._Dead_Time_Us}
+                  'DeadTimeUs': self._Dead_Time_Us,
+                  # what streamed beside it (WP9), relative to the data folder
+                  'Diagnostics': ({'Readback': diagnostics.Folder(pending['run'])}
+                                  if pending['setup']['Diagnostics'] else None)}
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
@@ -631,6 +641,10 @@ class Main_Window(QMainWindow):
             self.Shown_Label.setText(f"nothing: run {pending['run']} did not start")
             self._Queue_Scan_Ended('failed', "the acquisition process refused to start it")
             return
+        if pending['setup']['Diagnostics']:
+            self._Stream = diagnostics.Readback_Stream(
+                self._Line, self._Scan_Divider,
+                os.path.join(self._Data_Dir, diagnostics.Folder(pending['run'])))
         if self._Queue_Row is not None:
             self.Scan.Queue.Set_State(self._Queue_Row, 'running', f"run {pending['run']}")
         self.Run_Label.setText(str(pending['run']))
@@ -641,7 +655,16 @@ class Main_Window(QMainWindow):
         # would otherwise fall on a disabled button and the scan run on
         self._Show_State()
 
+    def _Stop_Stream(self):
+        """The run's diagnostics stream ended and described, if it had one."""
+        stream, self._Stream = self._Stream, None
+        if stream is not None:
+            meta = stream.Stop()
+            log.info("HV readback streamed to %s: %d readings%s", stream.Folder,
+                     meta['Readings'], f"; it stopped: {meta['Error']}" if meta['Error'] else '')
+
     def _End_Run(self):
+        self._Stop_Stream()
         finished = self._Run
         if self._Queue_Row is not None:
             held, taken = self._Queue_Held, self.Scan.Queue.Why(self._Queue_Row)
@@ -1332,6 +1355,13 @@ class Main_Window(QMainWindow):
         if path == self._Systematics_Run:
             self._Systematics_Run = None
             name = os.path.basename(path)[:-len('.asdf')]
+            if result is not None:
+                # beside every run as it ends: for cls_tools, and the hardware history
+                try:
+                    scan_performance.Export(path, result)
+                    systematics.Export(path, result['Systematics'])
+                except OSError:
+                    log.exception("The reports beside %s were not written", path)
             self._Elog.Append(f"\n{systematics.Elog_Text(result['Systematics'], name)}"
                               if result is not None else
                               f"\nSYSTEMATIC INPUTS, {name}: not estimated, as its analysis "
@@ -1345,6 +1375,25 @@ class Main_Window(QMainWindow):
         self._Elog.Append(f"\n{text}", self._Experiment())
         self.statusBar().showMessage("Systematic inputs appended to the ELOG entry" + (
             "" if self._Elog.Enabled else " (the ELOG is off: kept in the session log)"), 10000)
+
+    def _Read_History(self):
+        """The hardware history, read from the data folder off the window's thread."""
+        if self._History is not None:
+            return
+        page = self.Hardware.History
+        page.Refresh_Button.setEnabled(False)
+        self._History = Job_Worker(lambda progress, stopped: history.Collect(self._Data_Dir),
+                                   self)
+        self._History.Done.connect(page.Show)
+        self._History.Failed.connect(lambda message: page.Report_Label.setText(
+            f"The history was not read: {html.escape(message)}"))
+        self._History.finished.connect(self._History_Read)
+        self._History.start()
+
+    def _History_Read(self):
+        self._History.Retire()
+        self._History = None
+        self.Hardware.History.Refresh_Button.setEnabled(True)
 
     def _Analysis_Finished(self):
         self._Analysis.Retire()
@@ -1542,11 +1591,13 @@ class Main_Window(QMainWindow):
         self._Timer.stop()
         self._Inputs.Save()
         self._Awake.Hold(False)
-        if self._Analysis is not None:
-            self._Analysis.wait()       # a thread cannot outlive its window
+        for job in (self._Analysis, self._History):
+            if job is not None:
+                job.wait()              # a thread cannot outlive its window
         self._Take_Data()
         self._Link.Close()              # stops any scan and leaves the platform at 0 V
         self._Take_Data()
+        self._Stop_Stream()             # before the line meter closes
         for close in (self._Line.Close, self._Cooler.Close, self._Pvs.Close, self._Elog.Close,
                       lambda: settings.Update(experiment=self._Experiment())):
             try:

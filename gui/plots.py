@@ -35,11 +35,14 @@ GESTURES = ("Drag to pan, right-drag to stretch or squash, wheel to zoom (over a
             "shows and how it is calculated.")
 
 
-def Plot(title, x_axis, y_axis, about):
+def Plot(title, x_axis, y_axis, about, dates=False):
     """A plot in DENIS's dark style. Each axis is ``(label, units)`` (units get
     SI prefixes); ``about`` is ``(what it shows, how it is calculated)``,
-    shown over the title."""
+    shown over the title; ``dates``: x is seconds since the epoch, shown as
+    dates and times."""
     plot = Plot_Widget()
+    if dates:
+        plot.setAxisItems({'bottom': pg.DateAxisItem()})
     _Style(plot, title, x_axis, y_axis, about)
     return plot
 

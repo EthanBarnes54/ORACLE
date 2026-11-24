@@ -111,6 +111,49 @@ def test_A_Calibration_On_Its_Own_Fills_Its_Plots_And_Writes_No_Run(qapp, window
     assert calibration.Control_Group.isEnabled() and window.Quick_Group.isEnabled()
 
 
+def test_A_Run_Ends_With_Its_Reports_Beside_It_And_On_The_Hardware_History(qapp, window):
+    window.Scan.Per_Step_Box.setValue(30)
+    _Scan(qapp, window)
+    _Finished(qapp, window)
+    [path] = Run_Files(window)
+    base = path[:-len('.asdf')]
+    # written once its analysis ends, with no Export pressed: cls_tools' inputs for every run
+    assert Pump(qapp, lambda: os.path.exists(f"{base}_systematics.yaml"))
+    assert yaml.safe_load(open(f"{base}_systematics.yaml", encoding='utf-8'))['schema'] == 3
+    assert os.path.exists(f"{base}_performance.yaml")
+    page = window.Hardware.History
+    page.Refresh_Button.click()
+    assert Pump(qapp, lambda: window._History is None) and page.Refresh_Button.isEnabled()
+    [cooler] = page.Cooler_Plot.listDataItems()
+    detectors = yaml.safe_load(open(f"{base}_performance.yaml", encoding='utf-8'))['detectors']
+    assert len(cooler.getData()[0]) == 1
+    assert len(page.Pmt_Plot.listDataItems()) == len(detectors or {})     # a series per PMT
+    assert 'Rack changes, dashed' in page.Report_Label.text()
+
+
+def test_A_Run_Ticked_For_Diagnostics_Streams_Its_Readback_Beside_It(qapp, window):
+    from cls_acquisition import diagnostics
+    window.Scan.Diagnostics_Check.setChecked(True)
+    window.Scan.Per_Step_Box.setValue(10)
+    _Scan(qapp, window)
+    assert window._Stream is not None
+    _Finished(qapp, window)
+    assert window._Stream is None and window._Line.Mode == 'continuous'
+    [path] = Run_Files(window)
+    header, raw, monitor = run_file.Read(path)
+    assert header[run_file.ORACLE_KEY]['Diagnostics'] == {'Readback': 'diagnostics/run_0001'
+                                                          .replace('/', os.sep)}
+    times, volts = diagnostics.Read(os.path.join(window._Data_Dir, 'diagnostics', 'run_0001'))
+    # the whole scan at 1 kHz, the platform's 20 to 40 V on it; the run as without it
+    assert len(volts) > 100 and 15.0 < np.median(volts) < 45.0
+    assert times[0] <= monitor['time'][-1] and raw.shape[1] == 6
+    assert np.isfinite(monitor['readback_v']).all()
+    [start] = [text for text in window._Elog.Texts() if 'START SCAN NUMBER' in text]
+    assert 'DIAGNOSTICS: the HV readback streamed every 1 ms' in start
+    window.Show_Run(path)                       # opened again, the box shows it was ticked
+    assert window.Scan.Diagnostics_Check.isChecked()
+
+
 def test_A_Scan_Tells_The_Elog_And_The_Header_What_The_Old_Daq_Did(qapp, window):
     window.Scan.Experiment_Edit.setText('Ge-So-Offline')
     _Scan(qapp, window)

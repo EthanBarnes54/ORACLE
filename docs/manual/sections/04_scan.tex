@@ -17,6 +17,9 @@ Field & Meaning \\
 \app{Interaction region} & CEC or LCR: the cooler offset differs between them \\
 \app{PMT HV}             & the PMTs' high voltage, recorded where EPICS does not give it \\
 \app{Reference run}      & marks a run taken to measure the beam's offset from the cooler \\
+\app{Stream the HV readback} & streams the line meter every 1\,ms for the whole scan into
+    \code{diagnostics/run\_NNNN} beside the run (§\ref{sec:data}), to tell whether the
+    mains on the readback is on the platform; the run is as without it \\
 \bottomrule
 \end{tabularx}
 \end{center}

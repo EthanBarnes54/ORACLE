@@ -94,3 +94,13 @@ miscounted or lost, or a meter on its trigger input. Every check is kept as
     \caption{A health check on the simulated rack, and the cooler it read.}
     \label{fig:health}
 \end{figure}
+
+\subsection{History}
+
+Whether a hardware change worked, on one timeline. \app{Read the history} reads, without
+measuring anything again, every run's record and the reports written beside it as its
+analysis ended, and plots each run's 0\,V level $a$ and gain $b-1$ against the bench table
+($b$ only where the calibration spanned 400\,V and fitted it), its cooler scatter, and each
+PMT's afterpulsing. A run whose rack differs from the run before's is marked by a dashed
+line, and the report says what changed. Beside them are the bench records (settle,
+linearity, table sweeps and checks, cooler monitor), health checks and tables, newest first.

@@ -20,6 +20,7 @@ gui.plots, gui.shared_widgets, gui.theme.
 
 import html
 import os
+from datetime import datetime
 
 import numpy as np
 import pyqtgraph as pg
@@ -30,7 +31,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGridLayout, QGroupBox, QHB
                                QVBoxLayout, QWidget)
 
 from cls_acquisition import hardware_calibration as hc
-from cls_acquisition import health, scan_table
+from cls_acquisition import health, history, scan_table
 from cls_acquisition.calibration import SETTLE_MARGIN, THRESHOLDS, Line_Fit
 from cls_acquisition.hardware.mcc_dac import CH_NEG, CH_POS
 from gui import plots, theme
@@ -1044,6 +1045,96 @@ class Health_Panel(QWidget):
         self.Report_Label.setText(Report_Html([(('FAIL', 'Not completed'), [message])]))
 
 
+class History_Panel(QWidget):
+    """The rack's history (cls_acquisition.history): each run's calibration,
+    cooler and PMTs over time, the rack's changes dashed across them, and
+    the bench records beside."""
+
+    SYMBOLS = ('o', 't', 's', 'd')          # a PMT each, in one colour
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        date, kept = ('Date', None), "From each run's record, as kept: nothing is measured again."
+        self.A_Plot = plots.Plot('0 V level of each run', date, (plots.Sym('a'), 'V'), (
+            "Each run's 0 V level, a, from its calibration's fit to the bench table in force: "
+            "how the DAC's zero drifts from run to run.",
+            f"a of V = a + b·T, fitted as cls_tools fits it (TableFit in the run's record). "
+            f"{kept}"), dates=True)
+        self.B_Plot = plots.Plot('Gain of each run against the bench table', date,
+                                 (f"{plots.Sym('b')} − 1 (ppm)", None), (
+            "Each run's gain against the bench table, b − 1: the dividers and the HV chain "
+            "against the bench.",
+            f"b of V = a + b·T, where the calibration spanned 400 V and b was fitted; runs "
+            f"that took the bench's b are left out. {kept}"), dates=True)
+        self.Cooler_Plot = plots.Plot('Cooler scatter of each run', date, ('Scatter', 'V'), (
+            "How far each run's cooler readings scatter about the mean the analysis takes: "
+            "the mains ripple and the meter's noise.",
+            "The cooler-scatter row of the systematic inputs written beside each run once "
+            "its analysis ended."), dates=True)
+        self.Pmt_Plot = plots.Plot('Afterpulsing of each PMT', date, ('Afterpulse share (%)',
+                                                                     None), (
+            "The share of each PMT's counts that follow its own within the dead time, beyond "
+            "what the other PMTs show: its afterpulsing, run by run.",
+            "From the performance report written beside each run once its analysis ended; "
+            "one marker shape per PMT."), dates=True)
+        self.Pmt_Plot.addLegend(offset=(10, 10))
+        self.Plots = (self.A_Plot, self.B_Plot, self.Cooler_Plot, self.Pmt_Plot)
+        self.Group = QGroupBox('Hardware history')
+        self.Group.setMinimumWidth(REPORT_WIDTH)
+        column = QVBoxLayout(self.Group)
+        self.Refresh_Button = QPushButton('Read the history')
+        self.Refresh_Button.setToolTip("Reads every run's record and report, the bench "
+                                       "records, health checks and tables in the data folder.")
+        self.Report_Label = Report_Label(
+            "Not read in this session. It sets every run's calibration, cooler and PMTs, and "
+            "every bench record, on one timeline, the rack's changes marked, to show whether "
+            "a hardware change worked.")
+        column.addWidget(self.Refresh_Button)
+        column.addWidget(self.Report_Label)
+        column.addStretch(1)
+        shown = QWidget()
+        grid = QGridLayout(shown)
+        grid.setContentsMargins(0, 0, 0, 0)
+        for i, plot in enumerate(self.Plots):
+            grid.addWidget(plot, i // 2, i % 2)
+        Side_By_Side(self, ((self.Group, 1),), shown)
+
+    def Show(self, found):
+        """What :func:`history.Collect` ``found``."""
+        for plot in self.Plots:
+            plot.clear()
+        times = found['Time']
+        for plot, values in ((self.A_Plot, found['A_V']), (self.B_Plot, found['B_Ppm']),
+                             (self.Cooler_Plot, found['Cooler_V'])):
+            shown = np.isfinite(values)
+            plot.plot(times[shown], values[shown], **plots.Dots())
+        for (channel, (when, shares)), symbol in zip(found['Afterpulse'].items(),
+                                                     self.SYMBOLS * 4):
+            self.Pmt_Plot.plot(when, 100.0 * np.asarray(shares), name=f"PMT {channel}",
+                               **dict(plots.Dots(), symbol=symbol, symbolSize=6))
+        dashed = pg.mkPen(theme.VERDICT_COLOURS['WARN'], width=1, style=Qt.PenStyle.DashLine)
+        for when, _, _ in found['Racks']:
+            for plot in self.Plots:
+                plot.addItem(pg.InfiniteLine(when, angle=90, pen=dashed))
+        stamp = lambda t: f"{datetime.fromtimestamp(t):%Y-%m-%d %H:%M}"   # noqa: E731
+        span = (f"{stamp(times[0])} to {stamp(times[-1])}" if len(times) else 'none')
+        racks = [Report_Table(('Date', 'Run', 'What changed'),
+                              [(stamp(t), run, '; '.join(changes))
+                               for t, run, changes in found['Racks']])] if found['Racks'] \
+            else [Muted("No change of rack between the runs kept.")]
+        bench = found['Bench'][::-1]
+        count = lambda values: f"{np.count_nonzero(np.isfinite(values))}"   # noqa: E731
+        self.Report_Label.setText(Report_Html([
+            ('Runs', [('Read', f"{len(times)}"), ('From', span),
+                      ('Fitted to a bench table', count(found['A_V'])),
+                      ('With their reports', count(found['Cooler_V']))]),
+            ('Rack changes, dashed', racks),
+            ('Bench records, newest first',
+             [Report_Table(('Date', 'Record'), [(stamp(t), what) for t, what in bench[:30]])]
+             + ([Muted(f"and {len(bench) - 30} earlier")] if len(bench) > 30 else [])
+             if bench else [Muted("None kept.")])]))
+
+
 class Hardware_Tab(QWidget):
 
     def __init__(self, limit_v, parent=None):
@@ -1073,11 +1164,12 @@ class Hardware_Tab(QWidget):
         self.Cooler = Cooler_Panel()
         self.Table = Table_Panel(limit_v, self.Linearity.Settle_Box)
         self.Health = Health_Panel()
+        self.History = History_Panel()
         self.Panels = (self.Settle, self.Linearity, self.Cooler)
         self.Pages = QTabWidget()
-        for page, name in zip((*self.Panels, self.Table, self.Health),
+        for page, name in zip((*self.Panels, self.Table, self.Health, self.History),
                               ('Settle time', 'Linearity', 'Cooler monitor', 'Scan table',
-                               'Health check')):
+                               'Health check', 'History')):
             self.Pages.addTab(page, name)
         column = QVBoxLayout(self)
         column.addLayout(header)
