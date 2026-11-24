@@ -302,13 +302,18 @@ class Wheel_Focus_Guard(QObject):
 
 
 def Apply_Theme(app):
-    """Fusion, the dark palette and stylesheet, and the wheel guard."""
-    app.setStyle('Fusion')
+    """Fusion, the dark palette and stylesheet, and the wheel guard, set once:
+    a second call leaves them, as setting them again restyles every widget the
+    application holds (and installed a second guard)."""
     if sys.platform == 'darwin':
         # the title bar and native dialogs follow the dark theme
         app.styleHints().setColorScheme(Qt.ColorScheme.Dark)
+    sheet = Build_Qss()
+    if app.styleSheet() == sheet:
+        return
+    app.setStyle('Fusion')
     app.setPalette(Build_Palette())
-    app.setStyleSheet(Build_Qss())
+    app.setStyleSheet(sheet)
     app._Oracle_Wheel_Guard = Wheel_Focus_Guard(app)
     app.installEventFilter(app._Oracle_Wheel_Guard)
 

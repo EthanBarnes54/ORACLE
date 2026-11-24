@@ -578,6 +578,7 @@ def test_A_Bench_Table_Is_Made_From_A_Sweep_Kept_And_Named_By_Each_Run(qapp, win
     assert 'Earlier runs on this table' in window.Calibration.Report_Label.text()
     page.Clear_Button.click()
     assert window._Table is None and settings.Load()['scan_table'] is None
+    window.Calibration.To_Box.setValue(40.0)        # a short calibration says it as well
     window.Calibration.Start_Button.click()
     assert Pump(qapp, lambda: window._Worker is None)
     assert 'No bench table in force' in window.Calibration.Report_Label.text()
@@ -626,6 +627,9 @@ def test_A_Table_From_Another_Rack_Or_Missing_Is_Said_At_Start(qapp, monkeypatch
         assert warning and 'measured on another rack' in warning[0].toolTip()
         assert 'WARN' in window.Hardware.Table.Report_Label.text()
         # it covers -3000 to -226 V, not the scan's 20 to 40 V: said, not fitted
+        for box, volts in ((window.Calibration.From_Box, 20.0),
+                           (window.Calibration.To_Box, 40.0)):
+            box.setValue(volts)
         window.Calibration.Start_Button.click()
         assert Pump(qapp, lambda: window._Worker is None)
         assert 'does not cover this scan' in window.Calibration.Report_Label.text()

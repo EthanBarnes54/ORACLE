@@ -29,7 +29,7 @@ with open(os.path.join(BENCH, 'reference.json')) as _fh:
 
 
 def _Load(name):
-    return np.load(os.path.join(BENCH, name))
+    return dict(np.load(os.path.join(BENCH, name)))     # read out once, not at every index
 
 
 def _Points(name):

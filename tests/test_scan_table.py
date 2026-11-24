@@ -18,7 +18,8 @@ BENCH = os.path.join(os.path.dirname(__file__), 'data', 'bench')
 
 def _Points(sweep, zero):
     """A bench sweep and its 0 V checks as the points a linearity sweep takes."""
-    d, z = np.load(os.path.join(BENCH, sweep)), np.load(os.path.join(BENCH, zero))
+    # each array read out of its archive once: indexing the archive reads it again every time
+    d, z = (dict(np.load(os.path.join(BENCH, name))) for name in (sweep, zero))
     points = [{'Kind': 'zero', 'Direction': '', 'Set_V': 0.0, 'Read_V': float(v),
                'Sigma_V': float(e), 'Channel': CH_POS, 'Dac_V': 0.0, 'Time_S': float(t)}
               for t, v, e in zip(z['time_s'], z['read_v'], z['sigma_v'])]
