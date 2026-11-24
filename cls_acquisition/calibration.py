@@ -9,7 +9,8 @@ settling and takes one reading on command before the next goes out, so
 reading i cannot pair with write i + k (the old DAQ's Mode B). Readings
 integrate whole power line cycles (``nplc``), taking out the 76 mV of
 mains a 200 us reading caught (A. Raggio, November 2026). Every setpoint
-is read until cls_tools applies the bench table.
+is read, and a plan narrower than cls_tools takes a run's gain over is
+reached out with a few setpoints first (:func:`Reach`).
 
 The gate (:func:`Quality_Report`) checks that a calibration tracks and
 spans the command, was read settled, matches the plan, and ends where
@@ -21,6 +22,7 @@ Depends on: numpy.
 """
 
 import contextlib
+import copy
 import logging
 import time
 from functools import partial
@@ -102,6 +104,33 @@ class Calibration():
         self.Dac_Status = dac['Dac_Status']
         self.Dac_Correction = dac['Dac_Correction']
         self.Correction = dac.get('Correction')
+
+
+REACH_ANCHORS = 3       # whole-volt setpoints, 1 V apart, a narrow calibration reaches out with
+
+
+def Reach(plan, reach_v, limit_v):
+    """The plan to calibrate: ``plan``, or, when its setpoints span less than
+    ``reach_v``, REACH_ANCHORS whole-volt setpoints first, ``reach_v`` and on
+    from its far end, so cls_tools fits the run's gain against the bench table
+    (below 400 V it takes the bench's). They go toward 0 V, never across it
+    unless the scan crosses it, and never past ``limit_v``: with no room, or
+    ``reach_v`` 0, the plan as it is. The scan's own setpoints come last, so
+    the gate's held check is still on its last."""
+    low, high = float(plan.Setpoints.min()), float(plan.Setpoints.max())
+    if not reach_v or high - low >= reach_v:
+        return plan
+    crosses = low < 0 < high
+    sides = [anchors for anchors in (np.ceil(low + reach_v) + np.arange(REACH_ANCHORS),
+                                     np.floor(high - reach_v) - np.arange(REACH_ANCHORS))
+             if np.all(np.abs(anchors) <= limit_v)
+             and (crosses or np.all(anchors >= 0 if low >= 0 else anchors <= 0))]
+    if not sides:
+        return plan
+    reached = copy.copy(plan)
+    reached.Setpoints = np.concatenate([min(sides, key=lambda a: np.max(np.abs(a))),
+                                        plan.Setpoints])
+    return reached
 
 
 def Settle_For(model, jump_v):

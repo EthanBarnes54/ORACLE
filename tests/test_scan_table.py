@@ -143,17 +143,20 @@ def test_The_Library_Keeps_Every_Table_As_It_Was_And_Suggests_The_Racks_Own(oct2
 
 def _Run_Calibration(points, rng, low=-2000.0, high=-1000.0, every=5, noise=0.007):
     """A run's calibration out of a sweep: every ``every`` volts across the
-    scan, one reading each at the meter's ``noise``."""
+    scan, one reading each at the meter's ``noise`` (none: as read), with its
+    setpoints to the microvolt, as a plan writes them."""
     pick = [p for p in points if p['Kind'] == 'sweep' and low <= p['Set_V'] <= high
             and int(p['Set_V']) % every == 0]
-    return (np.array([p['Channel'] for p in pick]), st.Codes([p['Dac_V'] for p in pick]),
-            np.array([p['Read_V'] for p in pick]) + rng.normal(0.0, noise, len(pick)))
+    return (np.round([p['Set_V'] for p in pick], 6), np.array([p['Channel'] for p in pick]),
+            st.Codes([p['Dac_V'] for p in pick]),
+            np.array([p['Read_V'] for p in pick]) + (rng.normal(0.0, noise, len(pick))
+                                                     if noise else 0.0))
 
 
 def test_A_Runs_Calibration_Fits_The_Table_With_Its_0_V_Level_And_Gain(oct25, oct26):
     table, _ = oct25
-    channels, codes, readback = _Run_Calibration(oct26[0], np.random.default_rng(1))
-    fit = st.Fit_Run(table, channels, codes, readback, 0.007)
+    setpoints, channels, codes, readback = _Run_Calibration(oct26[0], np.random.default_rng(1))
+    fit = st.Fit_Run(table, setpoints, channels, codes, readback, 0.007)
     # a is the run's 0 V level, known to a few mV over two hundred points (Raggio: 6 mV
     # over 293); b within tens of ppm of one; the residual the meter and the table's own
     assert fit['Verdict'] == 'PASS' and fit['Points'] == len(readback) > 190
@@ -165,12 +168,34 @@ def test_A_Runs_Calibration_Fits_The_Table_With_Its_0_V_Level_And_Gain(oct25, oc
 
 def test_A_Table_That_No_Longer_Describes_The_Converters_Is_Warned_Of(oct25, oct26):
     table, _ = oct25
-    channels, codes, readback = _Run_Calibration(oct26[0], np.random.default_rng(2))
+    setpoints, channels, codes, readback = _Run_Calibration(oct26[0], np.random.default_rng(2))
     # the converters' shape moved by 40 codes since the table was measured
     moved = st.Table({c: dict(t, volts=np.roll(t['volts'], 40))
                       for c, t in table.Channels.items()}, {})
-    fit = st.Fit_Run(moved, channels, codes, readback, 0.007)
+    fit = st.Fit_Run(moved, setpoints, channels, codes, readback, 0.007)
     assert fit['Verdict'] == 'WARN' and fit['Rms_V'] > 0.1
+
+
+# what cls_tools main (23d1e76) gives on the same points, its table this one's .json:
+# ScanCalibration.fit_run(set, readback, gain='auto') -> offset, scale, rejected
+@pytest.mark.parametrize('low, high, every, bad, mode, offset, scale, rejected', [
+    (-2000, -1000, 5, 3, 'free', -0.991712145, 0.999975700331, [-1985.0]),
+    (-1100, -1060, 2, 1, 'bench', -0.965156550, 1.0, [-1098.0]),     # run 7268's reading
+    (-1400, -1000, 4, None, 'free', -0.965701642, 0.999997716072, []),   # 400 V: b fitted
+    (-1396, -1000, 4, None, 'bench', -0.962966632, 1.0, [])])            # 396 V: the bench's
+def test_A_Runs_Fit_Is_The_One_cls_tools_Applies(oct25, oct26, low, high, every, bad, mode,
+                                                offset, scale, rejected):
+    table, _ = oct25
+    setpoints, channels, codes, readback = _Run_Calibration(oct26[0], None, low, high, every,
+                                                            noise=0.0)
+    if bad is not None:
+        readback[bad] += 0.802        # the first reading after a jump, not yet settled
+    fit = st.Fit_Run(table, setpoints, channels, codes, readback, 0.007)
+    assert (fit['Scale_Mode'], fit['Rejected']) == (mode, rejected)
+    assert fit['A_V'] == pytest.approx(offset, abs=1e-9)
+    assert fit['B'] == pytest.approx(scale, abs=1e-12)
+    assert fit['Points'] == len(setpoints) - len(rejected)
+    assert ('b = 1 (bench)' in st.Summary(fit)) == (mode == 'bench')
 
 
 def test_A_Sweep_Without_Its_0_V_Checks_Makes_No_Table():

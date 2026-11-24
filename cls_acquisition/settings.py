@@ -77,11 +77,14 @@ DEFAULTS = {
         'amplifier': {'model': 'Trek 609E-6', 'serial': ''},
     },
     # each calibration reading integrates this many power line cycles (20 ms each),
-    # which takes out the mains on the divider; the poll keeps its 200 us aperture
-    'calibration': {'nplc': 1},
-    # the cooler as the analysis takes it: the rolling mean of its readings over this
-    # window (A. Raggio, November 2026), recorded with each run; Scan Performance
-    # judges a run by it and plots it over the readings
+    # which takes out the mains on the divider; the poll keeps its 200 us aperture.
+    # A calibration spanning less than reach_v gets three setpoints that far out first,
+    # so cls_tools fits the run's gain (its MIN_SPAN_GAIN_V, 400 V); 0 turns them off
+    'calibration': {'nplc': 1, 'reach_v': 400.0},
+    # the cooler as the analysis takes it: the rolling mean of its readings, trailing over
+    # this window live; for a finished run centred over four periods of the mains ripple
+    # as they alias it and at least this, as cls_tools takes it (A. Raggio, November
+    # 2026). Recorded with each run; Scan Performance judges a run by it
     'cooler': {'rolling_s': 15.0},
     # the PMTs as Scan Performance judges them: counts within this dead time of one on
     # the same PMT are tested for afterpulsing, and the dead time DENIS might apply is

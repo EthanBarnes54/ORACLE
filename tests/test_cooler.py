@@ -84,3 +84,21 @@ def test_A_Trailing_Mean_Lags_A_Ramp_By_Half_Its_Window():
 def test_A_Window_That_Is_Not_Positive_Is_Refused():
     with pytest.raises(ValueError, match="longer than 0 s"):
         cooler.Rolling(np.arange(3.0), np.ones(3), 0.0)
+
+
+def test_A_Finished_Runs_Window_Is_Four_Periods_Of_The_Ripple_As_cls_tools_Takes_It():
+    # the 50 Hz ripple read every 0.1004 s aliases to 0.199 Hz: a 5.0 s period
+    t = np.arange(0.0, 600.0, 0.1004)
+    volts = 30000.0 + 0.33 * np.sin(2 * np.pi * 50.0 * t)
+    window, period = cooler.Window(t, volts)
+    assert period == pytest.approx(5.02, abs=0.05) and window == 4 * period
+    assert cooler.Window(t, 30000.0 + 0.0 * t, 30.0)[0] >= 30.0        # never under the least
+    assert np.isnan(cooler.Window(t[:1000], volts[:1000])[1])        # 100 s: no alias, 15 s
+    assert cooler.Window(t[:1000], volts[:1000])[0] == cooler.ROLLING_S
+
+
+def test_A_Reading_5_V_From_The_Runs_Median_Is_A_Fault():
+    volts = np.r_[np.full(20, 30000.0), 30005.5, 0.0, 29996.0]
+    assert list(np.flatnonzero(cooler.Faulty(volts))) == [20, 21]
+    assert len(cooler.Faulty([])) == 0
+

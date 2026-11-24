@@ -109,7 +109,10 @@ class Calibration_Tab(QWidget):
         set_v, readback = np.array(self._Set), np.array(self._Readback)
         self._Curves[0].setData(set_v, readback)
         self._Curves[1].setData(set_v, readback - set_v)
-        self._Curves[2].setData(set_v[1:], np.diff(readback))
+        # a step of the plan's own size: not the reach out to its anchors, nor a range's join
+        steps = np.diff(set_v)
+        same = np.isclose(steps, np.median(steps)) if len(steps) else steps.astype(bool)
+        self._Curves[2].setData(set_v[1:][same], np.diff(readback)[same])
 
     def Show_Report(self, report, table=None, history=(), model=None):
         """The gate's verdict, its figures and each check; then the bench-table fit
@@ -149,12 +152,17 @@ class Calibration_Tab(QWidget):
                 ('a (0 V level)', f"{Figure(table['A_V'] * 1e3, '+.1f')} ± "
                                   f"{Figure(table['A_Err_V'] * 1e3, '.1f', 'mV')}"),
                 ('b − 1', f"{Figure((table['B'] - 1.0) * 1e6, '+.1f')} ± "
-                          f"{Figure(table['B_Err'] * 1e6, '.1f', 'ppm')}"),
+                          f"{Figure(table['B_Err'] * 1e6, '.1f', 'ppm')}"
+                          if table.get('Scale_Mode', 'free') == 'free' else
+                          "0, the bench's (under 400 V of calibration)"),
                 ('Residual rms', f"{Figure(table['Rms_V'] * 1e3, '.1f')} mV against "
                                  f"{Figure(table['Expected_V'] * 1e3, '.1f', 'mV')} expected"),
                 ('Points', f"{table['Points']}" + (f", {table['Interpolated']} between the "
                                                     f"table's codes"
                                                     if table['Interpolated'] else ''))]
+        if table.get('Rejected'):
+            rows.append(('Left out, unsettled', ', '.join(f"{v:g} V"
+                                                          for v in table['Rejected'])))
         if table['Verdict'] != 'PASS':
             rows.append(Muted("The readings sit further from the table than the meter and "
                               "the table's repeatability account for: the table is stale or "

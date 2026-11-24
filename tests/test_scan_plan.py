@@ -33,6 +33,13 @@ def test_Bad_Plans_Are_Refused(starts, stops, step):
         Scan_Plan(starts, stops, step)
 
 
+def test_A_Whole_Volt_Is_Exactly_One_Whatever_The_Step():
+    # cls_tools takes a setpoint on its table's grid only if it is exactly a whole volt
+    plan = Scan_Plan([0], [46.2], 0.1).Setpoints
+    assert plan[30] == 3.0 and plan[462] == 46.2
+    assert np.all(plan[::10] == np.arange(47))
+
+
 def test_Bin_Edges_Centre_On_Setpoints():
     plan = Scan_Plan([0], [10], 2)
     edges = plan.Bin_Edges()

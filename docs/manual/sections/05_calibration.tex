@@ -18,6 +18,13 @@ cannot slip apart. Each reading integrates whole power line cycles
 catches. Retries are capped at three a point and ten a calibration; any other fault stops
 the calibration with a sentence naming it.
 
+\paragraph{Reach.} cls\_tools fits a run's gain against the bench table only when its
+calibration spans 400\,V, and takes the bench's below. A scan narrower than that is
+calibrated with three whole-volt setpoints first, 400 to 402\,V from its far end
+(\code{calibration: reach\_v}; 0 turns them off): toward 0\,V, never across it unless the
+scan crosses it, never past the HV limit. They are in \code{CalSet} with the scan's own;
+the gate checks them all, and its held check stays on the scan's last setpoint.
+
 \paragraph{Settling.}
 SETTLE, 50\,ms, covers the amplifier's measured settling (a 2\,kV jump within 0.5\,V in
 20.5\,ms). Where the \app{Settle time} page has measured a settle model, each jump waits

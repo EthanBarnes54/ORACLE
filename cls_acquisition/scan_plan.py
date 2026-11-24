@@ -41,7 +41,9 @@ class Scan_Plan():
                 raise Scan_Plan_Error(
                     f"The range {low:g} to {high:g} V holds fewer than two points "
                     f"at a {self.Step:g} V step.")
-            ladder = low + self.Step * np.arange(count)
+            # to the microvolt, so a whole volt is one exactly (0.1 * 30 is 3.0000000000000004):
+            # cls_tools finds a setpoint on its table's grid only if it is
+            ladder = np.round(low + self.Step * np.arange(count), 6)
             if points and abs(ladder[0] - points[-1]) < 0.5 * self.Step:
                 ladder = ladder[1:]
             points.extend(ladder)

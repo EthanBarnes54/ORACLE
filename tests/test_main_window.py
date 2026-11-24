@@ -28,7 +28,9 @@ def test_A_Scan_Is_Calibrated_Gated_Written_And_Closed(qapp, window):
     assert Pump(qapp, lambda: not state.Scanning.is_set() and window._Run is None)
     [path] = Run_Files(window)
     with asdf.open(path) as f:
-        assert f['Run'] == 1 and len(f['CalSet']) == 11
+        # the scan's 11 setpoints, after the three a 20 V calibration reaches out to
+        assert f['Run'] == 1 and list(f['CalSet'][:4]) == [420.0, 421.0, 422.0, 20.0]
+        assert len(f['CalSet']) == 14 and f['ScanningRanges'] == [[20.0, 40.0]]
         assert f['raw'].shape[1] == 6
     assert 'PASS' in window.Calibration.Report_Label.text()
     assert window.Scan.Control_Group.isEnabled() and window.Dialogs == []
@@ -69,8 +71,9 @@ def test_A_Calibration_Lagged_By_Twelve_Starts_No_Scan(qapp, window, monkeypatch
         return stamp, answers[max(len(answers) - 13, 0)]
 
     monkeypatch.setattr(window._Line, 'Read_Settled', lagging)
-    window.Scan.From_Boxes[0].setValue(-150.0)
-    window.Scan.To_Boxes[0].setValue(150.0)
+    # 400 V, so the calibration is the scan's own setpoints, with no reach to them
+    window.Scan.From_Boxes[0].setValue(-200.0)
+    window.Scan.To_Boxes[0].setValue(200.0)
     window.Scan.Start_Button.click()
     assert Pump(qapp, lambda: window.Dialogs)
     title, text = window.Dialogs[0]

@@ -474,3 +474,27 @@ def test_The_Beamline_Geometry_On_The_Measured_Rack(measured):
     # them within 0.1 V
     assert _Verdict(report, 'polarity') == ('PASS' if measured else WARN)
     assert report['Verdict'] == ('PASS' if measured else WARN)
+
+
+def test_A_Narrow_Calibration_Reaches_Out_So_cls_tools_Fits_Its_Gain():
+    from cls_acquisition import scan_table
+    from cls_acquisition.scan_plan import Scan_Plan
+    from cls_acquisition.settings import DEFAULTS
+    assert DEFAULTS['calibration']['reach_v'] == scan_table.MIN_SPAN_GAIN_V
+    for ranges, anchors in ((([20], [40]), [420, 421, 422]),            # away: not across 0 V
+                            (([-1100], [-1060]), [-700, -699, -698]),   # toward 0 V
+                            (([500], [520]), [120, 119, 118])):
+        plan = Scan_Plan(*ranges, 2)
+        reached = calibration.Reach(plan, 400.0, 4000.0)
+        # first, so the gate's held check is still on the scan's last setpoint
+        assert list(reached.Setpoints[:3]) == anchors and reached.Step == plan.Step
+        assert np.array_equal(reached.Setpoints[3:], plan.Setpoints)
+        assert len(reached) == len(plan) + 3 == len(plan.Setpoints) + 3     # plan untouched
+        # one of them left out as unsettled still leaves 400 V for cls_tools
+        assert np.ptp(np.r_[reached.Setpoints[4:], anchors[1:]]) >= 400.0
+    wide = Scan_Plan([-1000], [0], 2)
+    assert calibration.Reach(wide, 400.0, 4000.0) is wide
+    narrow = Scan_Plan([3800], [3820], 2)
+    assert calibration.Reach(narrow, 0.0, 4000.0) is narrow           # turned off
+    assert calibration.Reach(narrow, 400.0, 3820.0).Setpoints[0] == 3420.0
+    assert calibration.Reach(Scan_Plan([-3990], [-3980], 2), 400.0, 4000.0).Setpoints[0] == -3590

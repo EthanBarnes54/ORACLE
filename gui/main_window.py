@@ -144,6 +144,7 @@ class Main_Window(QMainWindow):
         self._Laser = config['laser']
         self._Rolling_S = float(config['cooler']['rolling_s'])
         self._Nplc = config['calibration']['nplc']
+        self._Reach_V = float(config['calibration']['reach_v'])
         self._Dead_Time_Us = float(config['detectors']['dead_time_us'])
         self._Declared = config['systematics']
         self._Systematics_Run = None    # the run whose short systematics block is due
@@ -592,8 +593,8 @@ class Main_Window(QMainWindow):
                   'SettleModel': self._Settle_Model, 'Laser': dict(self._Laser),
                   'Channels': list(self._Channels), 'Rounds': pending['rounds'],
                   'Queue': list(pending['queued']) if pending['queued'] else None,
-                  # which hardware and code took it, and what the DAC held exactly: the
-                  # plan is the calibration's, so its codes are the scan's
+                  # which hardware and code took it, and what the DAC held exactly: a code
+                  # per CalSet point, the scan's setpoints and any the calibration reached to
                   'RackIdentity': self._Identity, 'Dividers': self._Rack.Dividers(),
                   'DacCodes': {'Channel': cal.Channels.tolist(), 'Code': cal.Codes.tolist()},
                   'DacCorrectionFull': cal.Correction, 'Commit': self._Commit,
@@ -607,7 +608,7 @@ class Main_Window(QMainWindow):
                   # CalReadback as ever
                   'TableFit': getattr(cal, 'Table_Fit', None) or getattr(cal, 'Table_Note',
                                                                          None),
-                  # the window the analysis takes the cooler's rolling mean over
+                  # the least window the analysis takes the cooler's rolling mean over
                   'CoolerRollingS': self._Rolling_S,
                   'CalibrationReadings': {'Nplc': cal.Nplc, 'DurationS': cal.Duration_S},
                   # the dead time the PMTs are judged at; never applied to the data
@@ -817,6 +818,7 @@ class Main_Window(QMainWindow):
         self._Calibrate(plan)
 
     def _Calibrate(self, plan):
+        plan = calibration.Reach(plan, self._Reach_V, self._Limit_V)
 
         def job(progress, stopped):
             cal = calibration.Run_Calibration(self._Link, self._Line, plan,
@@ -1018,7 +1020,7 @@ class Main_Window(QMainWindow):
         noise = (float(np.std(cal.Held, ddof=1)) * cal.Divider if len(cal.Held) > 1
                  else scan_table.REPEATABILITY_V)
         try:
-            fit = scan_table.Fit_Run(self._Table, cal.Channels, cal.Codes,
+            fit = scan_table.Fit_Run(self._Table, cal.Commanded, cal.Channels, cal.Codes,
                                      cal.Readings * cal.Divider, noise)
         except scan_table.Table_Error as e:
             return None, str(e), None

@@ -22,8 +22,10 @@ against the line's width. Select a check to read what it found.
         peak against its gate.
     \item[Beam and spectrum.] Beam losses and stability, the line's position scan by scan
         against what the HV and laser monitors predict, the spectrum's shape, each channel.
-    \item[Sources.] The cooler as the analysis takes it, a rolling mean over
-        \code{cooler: rolling\_s} (15\,s), how far the readings scatter about it, and
+    \item[Sources.] The cooler as the analysis takes it, as cls\_tools does: its readings'
+        centred mean over four periods of the mains ripple as they alias it, and at least
+        \code{cooler: rolling\_s} (15\,s), readings 5\,V from the run's median left out;
+        how far the readings scatter about it, and
         whether each hit's own reading is what its ions saw; the laser through the Doppler
         shift.
     \item[Detectors.] Each PMT's afterpulsing: its counts within \code{dead\_time\_us} of

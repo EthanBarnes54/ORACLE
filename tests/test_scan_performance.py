@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import yaml
 
+from cls_acquisition import cooler as cooler_module
 from cls_acquisition import scan_performance as sp
 from cls_acquisition.calibration import Settle_For, THRESHOLDS
 from cls_acquisition.hardware_calibration import Settle_Model
@@ -205,17 +206,21 @@ def test_A_Cooler_Drifting_Slowly_Is_Followed_By_Its_Rolling_Mean():
     """The cooler moves the line on the scan's axis, but the rolling mean of
     its readings follows it, so on the analysis' axis the line stands still,
     with or without the monitor's readings."""
-    span = 8 * len(PLAN) * 4 * 0.1
+    # 24 scans, 6.6 min: a window a minute long is held at the ends of a run this long
+    span = 24 * len(PLAN) * 4 * 0.1
     drift = lambda t: COOLER_V + 3.0 * t / span
     for legacy in (False, True):
-        header, raw, monitor = _Run(cooler=drift, legacy=legacy)
+        header, raw, monitor = _Run(cooler=drift, legacy=legacy, scans=24)
         result = sp.Analyse(header, raw, monitor, LASER)
         assert _Check(result, 'Line position')['Verdict'] == sp.PASS
         cooler = _Check(result, 'Cooler')
         # all 3 V of it but a quarter window's worth at each end, where the mean holds
-        # the readings on one side only (and the hits' readings start and end with them)
-        assert cooler['Verdict'] == sp.PASS
-        assert _Figure(cooler, 'moved over') == pytest.approx(3.0 * (1 - 7.5 / span), abs=0.1)
+        # the readings on one side only (and the hits' readings start and end with them);
+        # the window cls_tools' rule gives a run with no ripple to alias is its longest
+        window = _Figure(cooler, 'as the')
+        assert cooler['Verdict'] == sp.PASS and window >= cooler_module.ROLLING_S
+        assert _Figure(cooler, 'moved over') == pytest.approx(3.0 * (1 - window / 2 / span),
+                                                              abs=0.1)
         assert _Figure(cooler, 'readings scatter') < 0.05
         assert ('monitor' in cooler['Message']) != legacy
     assert result['Flagged'] == []
@@ -230,7 +235,7 @@ def _Width(result):
     return float(re.search(r"The line is ([\d.]+) V wide", result['Budget']).group(1))
 
 
-def test_Readings_Off_The_Bunch_Do_Not_Broaden_The_Line_On_The_Rolling_Axis():
+def test_Readings_Off_The_Bunch_Do_Not_Broaden_The_Line_On_The_Rolling_Axis(monkeypatch):
     """Readings that catch the ripple at random scatter about what the ions
     saw: taken hit by hit (a window shorter than the readings' spacing) they
     broaden the line; their rolling mean does not."""
@@ -242,7 +247,8 @@ def test_Readings_Off_The_Bunch_Do_Not_Broaden_The_Line_On_The_Rolling_Axis():
     assert _Check(rolled, 'Cooler')['Verdict'] == sp.PASS and rolled['Flagged'] == []
     assert _Figure(_Check(rolled, 'Cooler'), 'readings scatter') == pytest.approx(1.5, rel=0.05)
     assert 'cooler scatter' in rolled['Budget']
-    hit_by_hit = sp.Analyse(header, raw, monitor, LASER, rolling_s=0.01)
+    monkeypatch.setattr(cooler_module, 'Window', lambda *_: (0.01, np.nan))
+    hit_by_hit = sp.Analyse(header, raw, monitor, LASER)
     assert _Width(hit_by_hit) > 1.1 * clean
 
 
@@ -299,12 +305,14 @@ def test_The_Cross_Check_Judges_Only_What_It_Can_Tell():
     assert thin['Flagged'] == []
 
 
-def test_The_Window_A_Run_Recorded_Is_The_One_It_Is_Judged_By():
+def test_The_Least_Window_A_Run_Recorded_Is_The_One_It_Is_Judged_By():
+    # too short a run to show the ripple's alias, so the window is the least it recorded
     header, raw, monitor = _Run()
     header[ORACLE_KEY]['CoolerRollingS'] = 5.0
     message = _Check(sp.Analyse(header, raw, monitor, LASER, rolling_s=30.0),
                      'Cooler')['Message']
-    assert 'the 5 s rolling mean' in message and 'centred' in message
+    assert 'as cls_tools does, as the 5 s centred mean' in message
+    assert '(too short a run to show it), 5 s at least' in message
 
 
 def test_A_Hit_Without_A_Cooler_Reading_Is_Flagged():
@@ -348,6 +356,17 @@ def test_A_Calibration_Is_Judged_As_DENIS_Fits_It():
     check = _Check(result, 'Calibration')
     assert check['Verdict'] != sp.PASS and 'stand out' in check['Message']
     assert any(f.startswith('Calibration points at 0 V') for f in result['Flagged'])
+
+
+def test_A_Calibration_Is_Judged_Across_The_Scan_Not_Out_To_Its_Reach():
+    # the DAC 0.3 V off the line 400 V out, where no peak sits, moves the axis there only
+    header, raw, monitor = _Run()
+    reach = np.array([420.0, 421.0, 422.0])
+    plain = _Check(sp.Analyse(header, raw, monitor, LASER), 'Calibration')
+    header.update(CalSet=np.r_[reach, header['CalSet']],
+                  CalReadback=np.r_[(reach + 0.3) / 1000.0, header['CalReadback']])
+    reached = _Check(sp.Analyse(header, raw, monitor, LASER), 'Calibration')
+    assert reached['Value'] < 0.05 and reached['Verdict'] == plain['Verdict'] == sp.PASS
 
 
 def test_Arithmetic_Dust_On_A_Clean_Calibration_Never_Stands_Out(monkeypatch):

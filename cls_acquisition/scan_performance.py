@@ -22,6 +22,7 @@ Depends on: numpy, PyYAML; cls_acquisition.calibration, .cooler,
 .detectors, .run_file, .scan_plan, .systematics, .hardware.keysight.
 """
 
+import contextlib
 import math
 import os
 from datetime import datetime
@@ -341,11 +342,12 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
     _Rates(report, bunch_b, tags, len(sequence), per_step)
     del bunch_b
 
-    # the spectrum as the analysis builds it, the cooler taken as its rolling mean
+    # the spectrum as the analysis builds it, the cooler taken as cls_tools takes it: the
+    # centred mean over the window the hits' own readings give
     readings = _Cooler_Readings(raw, monitor, Dividers(header)[1])
-    rolling = (cooler.Rolling(readings[0], readings[1],
-                              float(record.get('CoolerRollingS') or rolling_s))
-               if len(readings[0]) else None)
+    least = float(record.get('CoolerRollingS') or rolling_s)
+    window, alias = cooler.Window(*_Hit_Readings(raw, Dividers(header)[1]), least)
+    rolling = cooler.Rolling(readings[0], readings[1], window) if len(readings[0]) else None
     reference = float(np.median(readings[1])) if len(readings[1]) else 0.0
     bins, departures = _Bins(raw, axis, step, rolling, reference, Dividers(header)[1])
     bins_t = bins if by_time is None else bins[by_time]
@@ -363,7 +365,7 @@ def Analyse(header, raw, monitor, laser, settle_model=None, history=(),
     _Calibration(report, header, scale, history)
     hv = _Readback(report, monitor, header, scale, times_t, t0)
     light = _Laser(report, monitor, header, laser, recorded_laser, scale, times_t, axis, t0)
-    _Cooler(report, raw, readings, rolling, reference, scale, t0)
+    _Cooler(report, raw, readings, rolling, (alias, least), reference, scale, t0)
     _Readings_Against_The_Line(report, bins_t, departures_t,
                                raw[:, 5] if by_time is None else raw[by_time, 5], axis, scale)
     del departures_t
@@ -443,10 +445,21 @@ def _Plan(header):
     return sequence, _Ladder(sequence.min(), sequence.max(), step), note
 
 
+def _Hit_Readings(raw, cooler_divider):
+    """The cooler readings as cls_tools finds them on the hits: each change of
+    the stamped reading in time order (platform volts), faults left out."""
+    order = np.argsort(raw[:, 0], kind='stable')
+    stamped = raw[order, 5]
+    first = np.r_[0, np.flatnonzero(np.diff(stamped) != 0) + 1]
+    t, volts = raw[order[first], 0], stamped[first] * cooler_divider
+    fault = cooler.Faulty(volts)
+    return t[~fault], volts[~fault]
+
+
 def _Cooler_Readings(raw, monitor, cooler_divider):
     """``(times, platform volts, source)``: the cooler readings in time order,
-    untaken (0) or non-numbers left out; the monitor's every 0.1 s, else each
-    bunch's stamped reading."""
+    untaken (0), non-numbers and faults (:func:`cooler.Faulty`) left out; the
+    monitor's every 0.1 s, else each bunch's stamped reading."""
     known = lambda v: np.isfinite(v) & (v != 0)
     if monitor is not None and np.count_nonzero(known(monitor.get('cooler_v', []))) >= 3:
         t, volts = monitor['time'], monitor['cooler_v']
@@ -457,6 +470,11 @@ def _Cooler_Readings(raw, monitor, cooler_divider):
         t, volts = raw[first, 0], raw[first, 5] * cooler_divider
         source = "one a bunch, as stamped on its hits"
     ok = known(volts)
+    fault = np.zeros(len(ok), dtype=bool)
+    fault[ok] = cooler.Faulty(volts[ok])
+    if fault.any():
+        source += f"; {np.count_nonzero(fault)} faulty, more than {cooler.MAX_DEV_V:g} V out"
+    ok &= ~fault
     order = np.argsort(t[ok], kind='stable')
     return t[ok][order], volts[ok][order], source
 
@@ -617,7 +635,13 @@ def _Calibration(report, header, scale, history):
         return
     gain, offset = _Order_One(cal_set, readback)
     residuals = readback - (gain * cal_set + offset)
-    worst = float(np.max(np.abs(residuals)))
+    # across the scan, not out to the setpoints a narrow calibration reaches with
+    ends = (min(cal_set), max(cal_set))
+    with contextlib.suppress(KeyError, TypeError, ValueError):
+        ends = tuple(float(f(np.asarray(header['ScanningRanges'], dtype=float)))
+                     for f in (np.min, np.max))
+    scanned = (cal_set >= ends[0]) & (cal_set <= ends[1])
+    worst = float(np.max(np.abs(residuals[scanned] if scanned.any() else residuals)))
     message = (f"Fitted as DENIS fits it, a straight line: gain {gain:.5f}, offset "
                f"{offset:+.3f} V. It leaves {np.sqrt(np.mean(residuals ** 2)):.3f} V rms, so a "
                f"peak can sit up to {scale.Text(worst)} from where the axis puts it.")
@@ -628,8 +652,7 @@ def _Calibration(report, header, scale, history):
         keep[suspects] = False
         trimmed = _Order_One(cal_set, readback, keep)
         # two lines are furthest apart at an end of the scan
-        impact = max(abs((gain - trimmed[0]) * x + offset - trimmed[1])
-                     for x in (cal_set.min(), cal_set.max()))
+        impact = max(abs((gain - trimmed[0]) * x + offset - trimmed[1]) for x in ends)
         flagged = impact > TOLERANCES['SuspectImpactV']
         where = ', '.join(f"{cal_set[i]:g}" for i in suspects[:5]) + (
             ', ...' if len(suspects) > 5 else '')
@@ -642,10 +665,10 @@ def _Calibration(report, header, scale, history):
             report.Flag(f"Calibration points at {where} V stand out; leaving them out in DENIS "
                         f"moves the axis by up to {scale.Text(impact)}.")
     report.Add(VOLTAGE, 'Calibration', verdict, worst, message)
-    _Calibration_History(report, (gain, offset), cal_set, history, scale)
+    _Calibration_History(report, (gain, offset), ends, history, scale)
 
 
-def _Calibration_History(report, line, cal_set, history, scale):
+def _Calibration_History(report, line, ends, history, scale):
     """This run's calibration against earlier runs' across this scan: how much a
     shift between them depends on which is right. Agreeing with one is enough."""
     found = []
@@ -657,8 +680,7 @@ def _Calibration_History(report, line, cal_set, history, scale):
         if n < 3 or _Tracking(set_b, read_b) < THRESHOLDS['MinTrackingR']:
             continue
         gain, offset = _Order_One(set_b, read_b)
-        apart = max(abs((line[0] - gain) * x + line[1] - offset)
-                    for x in (cal_set.min(), cal_set.max()))
+        apart = max(abs((line[0] - gain) * x + line[1] - offset) for x in ends)
         found.append((run, apart, gain, offset))
     if not found:
         return
@@ -1461,10 +1483,11 @@ def _Laser(report, monitor, header, laser, recorded, scale, times, axis, t0):
     return t, volts
 
 
-def _Cooler(report, raw, readings, rolling, reference, scale, t0):
+def _Cooler(report, raw, readings, rolling, window, reference, scale, t0):
     """The cooler as the analysis takes it: the rolling mean's wander is taken
-    out; the scatter about it (mains ripple, meter noise) no mean can. A hit
-    without its own reading is warned of while cls_tools takes each hit's."""
+    out; the scatter about it (mains ripple, meter noise) no mean can.
+    ``window`` is ``(alias period s, least s)``. A hit without its own reading
+    is warned of: the meter stopped answering."""
     cooler_v = raw[:, 5]
     missing = int(np.count_nonzero(~np.isfinite(cooler_v) | (cooler_v == 0)))
     t, volts, source = readings
@@ -1476,18 +1499,22 @@ def _Cooler(report, raw, readings, rolling, reference, scale, t0):
         return
     mean, partial = rolling.At(t)
     scatter = float(np.sqrt(np.mean((volts - mean) ** 2)))
-    message = (f"The analysis takes the cooler as the {rolling.Window_S:g} s rolling mean of "
-               f"its readings ({'centred' if rolling.Centred else 'trailing'}; {source}), as "
-               f"a reading is not taken with the bunch and alone aliases the mains ripple. The "
-               f"mean moved over {np.ptp(mean):.3f} V, which the analysis follows; the "
-               f"readings scatter {scatter:.3f} V rms about it ({scale.Text(scatter)}), the "
-               f"ripple, which broadens the line, and the meter's own noise, which only the "
-               f"readings carry.")
+    alias, least = window
+    message = (f"The analysis takes the cooler as cls_tools does, as the {rolling.Window_S:g} s "
+               f"centred mean of its readings ({source}): four periods of the mains ripple as "
+               f"the readings alias it ("
+               + (f"{alias:.1f} s" if np.isfinite(alias) else "too short a run to show it")
+               + f"), {least:g} s at least, as a reading is not taken with the bunch and alone "
+               f"aliases the ripple. The mean moved over {np.ptp(mean):.3f} V, which the "
+               f"analysis follows; the readings scatter {scatter:.3f} V rms about it "
+               f"({scale.Text(scatter)}), the ripple, which broadens the line, and the meter's "
+               f"own noise, which only the readings carry.")
     if missing:
-        message += (f" {missing} hits carry no reading of their own, which DENIS needs until "
-                    f"it takes the mean: the cooler meter stopped answering.")
-        report.Flag(f"{missing} hits have no cooler reading; DENIS cannot place them until it "
-                    f"takes the cooler's rolling mean.")
+        message += (f" {missing} hits carry no reading of their own: the cooler meter "
+                    f"stopped answering. cls_tools' mean places them from the readings around; "
+                    f"its hit-by-hit correction cannot.")
+        report.Flag(f"{missing} hits have no cooler reading; only cls_tools' mean of the "
+                    f"readings around places them.")
     report.Add(SOURCES, 'Cooler', WARN if missing else PASS, missing, message)
     report.Budget['Cooler'] = scatter
     report.Series['Cooler'] = (t - t0, volts - reference, mean - reference, partial)

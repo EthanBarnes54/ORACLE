@@ -82,7 +82,8 @@ def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, de
 
     ratios = record.get('Dividers') or {}
     cooler_v = float(header.get('CoolerVoltage', np.nan)) * dividers[1]
-    scan_v = float(np.max(np.abs(np.asarray(header.get('CalSet', [0.0]), dtype=float))))
+    scan_v = float(np.max(np.abs(np.asarray(header.get('ScanningRanges') or header.get(
+        'CalSet', [0.0]), dtype=float))))
     for name, key, level, what, row_id, frame, ratio in (
             ('Cooler divider', 'Cooler', cooler_v, 'the cooler', 'cooler_divider',
              'VCoolDiv', dividers[1]),
@@ -107,9 +108,12 @@ def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, de
         reach = table['Reach_T_V']
         axis = float(np.sqrt(table['A_Err_V'] ** 2 + (table['B_Err'] * reach) ** 2
                              + 2.0 * table.get('Cov_AB', 0.0) * reach))
+        gain = (f"b ± {table['B_Err'] * 1e6:.1f} ppm"
+                if table.get('Scale_Mode', 'free') == 'free' else
+                "b = 1, the bench's, as cls_tools takes it under 400 V of calibration")
         rows.append(_Row('Run calibration', MEASURED, axis, mhz_per_v,
                          f"Fitted to bench table {table['Table'][:8]}: a ± "
-                         f"{table['A_Err_V'] * 1e3:.1f} mV, b ± {table['B_Err'] * 1e6:.1f} ppm, "
+                         f"{table['A_Err_V'] * 1e3:.1f} mV, {gain}, "
                          f"the axis ± {axis:.3f} V at the scan's furthest setpoint; the "
                          f"readings sit {table['Rms_V'] * 1e3:.1f} mV rms from the table.",
                          ('run_calibration', None, axis, 'V', 'run')))
@@ -144,8 +148,9 @@ def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, de
             ('Wavemeter during the run', 'Laser',
              "The wavemeter's mean and wander against the setpoint DENIS takes."),
             ('Cooler scatter', 'Cooler',
-             f"Its readings about their {record.get('CoolerRollingS') or 15:g} s rolling mean: "
-             f"the mains ripple, which broadens the line, and the meter's noise.")):
+             f"Its readings about their mean over four periods of the mains ripple as they "
+             f"alias it, {record.get('CoolerRollingS') or 15:g} s at least, as cls_tools takes "
+             f"it: the ripple, which broadens the line, and the meter's noise.")):
         contract = (ids[key], None, budget.get(key), 'V', 'run')
         rows.append(_Row(name, MEASURED, budget[key], mhz_per_v, detail, contract)
                     if key in budget else _Row(

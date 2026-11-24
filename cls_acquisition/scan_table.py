@@ -37,6 +37,9 @@ WARMING_V_PER_H = 0.05              # 0 V checks still drifting this fast: warmi
 DRIFT_TOLERANCE_V = 0.010           # the 0 V drift worth a check: the table's own repeatability
 REPEATABILITY_V = 0.010             # a table's day to day, once 0 V is taken out (Raggio)
 STALE_FACTOR = 2.0                  # a run's residual this many times what is expected: stale
+# cls_tools' rule for a run's fit (calibration.ScanCalibration.fit_run, gain 'auto'): a reading
+# this far from the rest is unsettled, and b is fitted only over this span of setpoints
+REJECT_MIN_V, REJECT_SIGMA, MIN_SPAN_GAIN_V = 0.5, 5.0, 400.0
 BRANCHES = ((CH_POS, 'positive'), (CH_NEG, 'negative'))
 TABLE = {'step_v': 1.0, 'readings': 5, 'nplc': 10.0, 'zero_every': 10}
 TABLE_SPANS_V = (1000.0, 3000.0)    # either way of 0 V: a quick table and a full one
@@ -248,22 +251,53 @@ def Fit(table, channels, codes, readback, sigma=None):
             'Reach_T_V': float(np.max(np.abs(x)))}
 
 
-def Fit_Run(table, channels, codes, readback, noise_v):
-    """A run's calibration fitted to the table (WP5), each point weighted by the
-    meter's ``noise_v`` and the table's repeatability: :func:`Fit` with
-    ``Expected_V`` and ``Verdict``, WARN at STALE_FACTOR times the expected
-    residual (a stale table, or changed hardware). Never a refusal."""
+def Fit_Run(table, setpoints, channels, codes, readback, noise_v):
+    """A run's calibration fitted to the table (WP5) by cls_tools' rule, so what
+    ORACLE records is what cls_tools applies: a reading further than
+    max(REJECT_MIN_V, REJECT_SIGMA robust sigma) from the rest is unsettled
+    and left out (``Rejected``, its setpoint); b is fitted with a only when
+    the rest span MIN_SPAN_GAIN_V of setpoints, else it is the bench's, 1
+    (``Scale_Mode``). :func:`Fit`'s keys, with ``Expected_V`` and ``Verdict``:
+    WARN at STALE_FACTOR times the residual the meter's ``noise_v`` and the
+    table's repeatability give (a stale table, or changed hardware). Never a
+    refusal; a lag or a dead readback the gate refuses before."""
+    t, exact = table.Volts(channels, codes)
+    setpoints, readback = np.asarray(setpoints, dtype=float), np.asarray(readback, dtype=float)
+    inside = np.isfinite(t) & np.isfinite(readback)
+    if inside.sum() < 3:
+        raise Table_Error(f"Only {int(inside.sum())} of the calibration's {len(readback)} "
+                          f"points fall inside the table {table.Id[:8]}; it does not cover "
+                          f"this scan.")
+    d = readback - t
+    off = np.abs(d - np.median(d[inside]))
+    keep = inside & (off <= max(REJECT_MIN_V, REJECT_SIGMA * 1.4826 * np.median(off[inside])))
+    x, y = t[keep], readback[keep]
+    if keep.sum() >= 3 and np.ptp(setpoints[keep]) >= MIN_SPAN_GAIN_V:
+        mode, ((b, a), cov) = 'free', np.polyfit(x, y, 1, cov=True)
+    else:
+        mode, b, a = 'bench', 1.0, float(np.mean(y - x))
+        cov = np.diag([0.0, np.var(y - x, ddof=1) / len(y)])
+    residual = y - (a + b * x)
     expected = float(np.hypot(noise_v, REPEATABILITY_V))
-    fit = Fit(table, channels, codes, readback, np.full(len(readback), expected))
-    stale = fit['Points'] >= 10 and fit['Rms_V'] > STALE_FACTOR * expected
-    fit.update(Expected_V=expected, Verdict='WARN' if stale else 'PASS')
-    return fit
+    rms = float(np.sqrt(np.mean(residual ** 2)))
+    dof = max(len(y) - 1 - (mode == 'free'), 1)
+    return {'Table': table.Id, 'A_V': float(a), 'A_Err_V': float(np.sqrt(cov[1, 1])),
+            'B': float(b), 'B_Err': float(np.sqrt(cov[0, 0])), 'Cov_AB': float(cov[0, 1]),
+            'Scale_Mode': mode, 'Rms_V': rms,
+            'Chi2': float(np.sum((residual / expected) ** 2) / dof),
+            'Points': int(keep.sum()), 'Interpolated': int(np.count_nonzero(~exact[keep])),
+            'Rejected': [float(v) for v in setpoints[inside & ~keep]],
+            'Reach_T_V': float(np.max(np.abs(x))), 'Expected_V': expected,
+            'Verdict': 'WARN' if keep.sum() >= 10 and rms > STALE_FACTOR * expected else 'PASS'}
 
 
 def Summary(fit):
     """One line of a run's fit to the table, for the ELOG and the log."""
-    return (f"a = {fit['A_V'] * 1e3:+.1f} ± {fit['A_Err_V'] * 1e3:.1f} mV, b - 1 = "
-            f"{(fit['B'] - 1.0) * 1e6:+.1f} ± {fit['B_Err'] * 1e6:.1f} ppm, residual "
+    rejected = len(fit.get('Rejected', ()))
+    return (f"a = {fit['A_V'] * 1e3:+.1f} ± {fit['A_Err_V'] * 1e3:.1f} mV, "
+            + (f"b - 1 = {(fit['B'] - 1.0) * 1e6:+.1f} ± {fit['B_Err'] * 1e6:.1f} ppm"
+               if fit.get('Scale_Mode', 'free') == 'free' else "b = 1 (bench)")
+            + (f", {rejected} unsettled left out" if rejected else '') + ", residual "
             f"{fit['Rms_V'] * 1e3:.1f} mV rms over {fit['Points']} points  {fit['Verdict']}")
 
 

@@ -104,7 +104,8 @@ def test_A_Calibration_On_Its_Own_Fills_Its_Plots_And_Writes_No_Run(qapp, window
     assert Pump(qapp, lambda: window._Worker is None)
     report = calibration.Report_Label.text()
     assert 'REJECT' not in report and ('PASS' in report or 'WARN' in report)
-    for curve, count in zip(calibration._Curves, (11, 11, 10)):
+    # 200 V reaches out to 300-302 V first; the step plot keeps the scan's own 20 V steps
+    for curve, count in zip(calibration._Curves, (14, 14, 10)):
         assert len(curve.getData()[0]) == count
     assert Run_Files(window) == [] and window.Dialogs == []
     assert calibration.Control_Group.isEnabled() and window.Quick_Group.isEnabled()
@@ -520,7 +521,8 @@ def test_A_Bench_Table_Is_Made_From_A_Sweep_Kept_And_Named_By_Each_Run(qapp, win
     record = header[run_file.ORACLE_KEY]
     fit = record['TableFit']
     assert record['ScanTable'] == fit['Table'] == table.Id
-    assert fit['Verdict'] == 'PASS' and fit['Points'] == len(header['CalSet'])
+    # the reach's three setpoints, 420-422 V, lie past this sweep's ±400 V: not fitted
+    assert fit['Verdict'] == 'PASS' and fit['Points'] == len(header['CalSet']) - 3
     assert fit['Interpolated'] == fit['Points']     # the sweep stepped 50 V, the scan 2 V
     report = window.Calibration.Report_Label.text()
     assert 'Against the bench table' in report and 'Earlier runs on this table' in report
