@@ -5,8 +5,8 @@
 
 \begin{enumerate}
     \item Launch \oracle{}. On \app{Scan controls}, tick the first range and set
-        \app{From (V)} 15 and \app{To (V)} 85, \app{Stepsize (V)} 1, \app{Bunches per
-        channel} 25 and \app{Scan type} Sawtooth.
+        \app{From (V)} 15 and \app{To (V)} 85, \app{Step-size (V)} 1, \app{Bunches per
+        step} 25 and \app{Scan type} Sawtooth.
     \item Press \app{Start scan}. \oracle{} calibrates the scan's own setpoints, puts the
         calibration through the gate, writes the run's header and starts. The plots fill
         as hits arrive (Figure~\ref{fig:scan}); the simulated beam has lines at 32, 47 and
@@ -38,8 +38,7 @@
         triggers and both meters' trigger sources, set against the last check.
     \item If the hardware changed, measure the settle model (\app{Settle time}) and the
         bench table (\app{Scan table}) again before taking data.
-    \item On \app{Scan controls}, set the \app{Experiment name}, the \app{Interaction region}
-        and the \app{PMT HV}, and the buncher timing.
+    \item On \app{Scan controls}, set the \app{Experiment name} and the buncher timing.
     \item Take scans one at a time, or lay them out in the \app{Scan queue} and let it run
         unattended.
     \item Read each run's \app{Scan Performance} verdict, and anything flagged for review,

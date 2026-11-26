@@ -4,7 +4,7 @@
 
 The data acquisition for collinear laser spectroscopy (CLS) at IGISOL: it steps the platform voltage through a scan, records every ion the time tagger sees against the voltage it was taken at, and calibrates the voltage axis before every run. It keeps the collinear DAQ's layout and file format, brings in the bench calibration tool (cls-cal), and is built so that the old DAQ's faults cannot happen rather than being caught afterwards.
 
-**Version:** 0.6.1
+**Version:** 0.6.2
 **Developer:** Ethan Barnes (ethan.barnes@postgrad.manchester.ac.uk)
 **Framework:** PySide6 (Qt6) + pyqtgraph + numpy + asdf
 **Manual:** [`docs/manual/manual.pdf`](docs/manual/manual.pdf)

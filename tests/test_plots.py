@@ -71,6 +71,63 @@ def test_A_Double_Click_On_The_Gate_Removes_It_And_Leaves_The_View(qapp):
     tof.close()
 
 
+def _Drag(qapp, widget, start, end):
+    """A left-drag across ``widget`` from ``start`` to ``end`` (QPoints in it),
+    in steps, as the mouse sends it: further apart than pyqtgraph's scene,
+    which drops moves closer than its rate limit, takes them."""
+    import time
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtTest import QTest
+    viewport, left = widget.viewport(), Qt.MouseButton.LeftButton
+    QTest.mousePress(viewport, left, Qt.KeyboardModifier.NoModifier, start)
+    for step in range(1, 11):
+        time.sleep(0.03)
+        point = QPointF(start + (end - start) * (step / 10))
+        qapp.sendEvent(viewport, QMouseEvent(QEvent.Type.MouseMove, point,
+                                             viewport.mapToGlobal(point), Qt.MouseButton.NoButton,
+                                             left, Qt.KeyboardModifier.NoModifier))
+    QTest.mouseRelease(viewport, left, Qt.KeyboardModifier.NoModifier, end)
+    qapp.processEvents()
+
+
+def test_Dragging_An_Axis_Stretches_Or_Squashes_That_Axis_Alone(qapp, plot):
+    from PySide6.QtCore import QPoint
+    view = plot.getViewBox()
+    plot.setXRange(0, 100, padding=0)
+    plot.setYRange(0, 1000, padding=0)
+
+    def middle(side):
+        # the axis's own strip: its bounding rectangle takes in the grid it draws
+        axis = plot.getAxis(side)
+        return plot.mapFromScene(axis.parentItem().mapRectToScene(axis.geometry()).center())
+
+    def spans():
+        (x0, x1), (y0, y1) = view.viewRange()
+        return x1 - x0, y1 - y0
+
+    # along x, rightwards: x stretched (a narrower range), y untouched; back: squashed
+    bottom = middle('bottom')
+    _Drag(qapp, plot, bottom, bottom + QPoint(40, 0))
+    x_span, y_span = spans()
+    assert x_span < 0.7 * 100 and y_span == pytest.approx(1000)
+    _Drag(qapp, plot, bottom, bottom - QPoint(80, 0))
+    assert spans()[0] > 1.5 * x_span and spans()[1] == pytest.approx(1000)
+    # along y, upwards: y stretched, x untouched
+    x_span = spans()[0]
+    left = middle('left')
+    _Drag(qapp, plot, left, left - QPoint(0, 40))
+    assert spans()[1] < 0.7 * 1000 and spans()[0] == pytest.approx(x_span)
+    assert not _Following(plot)
+    # inside the plot a drag still pans: both spans kept, the view moved
+    x_range = view.viewRange()[0]
+    x_span, y_span = spans()
+    centre = plot.mapFromScene(view.sceneBoundingRect().center())
+    _Drag(qapp, plot, centre, centre + QPoint(40, 0))
+    assert spans() == pytest.approx((x_span, y_span)) and view.viewRange()[0][0] < x_range[0]
+    assert plot.getAxis('bottom').cursor().shape() == Qt.CursorShape.SizeHorCursor
+
+
 def test_The_Corner_Button_Sits_In_The_Top_Right(qapp, plot):
     button = plot.Autoscale_Button
     assert button.isVisible()

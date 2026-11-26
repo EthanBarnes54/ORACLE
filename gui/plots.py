@@ -4,9 +4,10 @@ Date:    2026-11-10
 Version: 0.6.0
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
-pyqtgraph, for redraws several times a second. Drag pans, right-drag
-stretches, the wheel zooms (one axis, over an axis) and Shift-drag zooms
-to a box; a handled plot stops following its data until autoscaled. On a
+pyqtgraph, for redraws several times a second. Drag pans; drag an axis
+(or right-drag the plot) to stretch or squash; the wheel zooms (one axis,
+over an axis) and Shift-drag zooms to a box; a handled plot stops
+following its data until autoscaled. On a
 gate plot, Ctrl-drag (Cmd on macOS) sets the gate. Every title says what
 the plot shows and how, its axes carry symbols (:func:`Sym`), and a
 :class:`Dense_Curve` paints only what is in view.
@@ -27,12 +28,13 @@ from gui import theme
 
 AXIS_WIDTH = 72
 BUTTON_MARGIN = 6
+STRETCH_PER_PX = 1.02               # an axis dragged a pixel scales by this, as right-drag does
 # Qt's raster engine puts coordinates on a 1/64 px grid, which moves where each
 # half device pixel begins by this much, in half pixels
 HALF_PIXEL_OFFSET = 1 / 64
-GESTURES = ("Drag to pan, right-drag to stretch or squash, wheel to zoom (over an axis: that "
-            "axis alone), Shift-drag to zoom to a box. Hover over a plot's title for what it "
-            "shows and how it is calculated.")
+GESTURES = ("Drag to pan; drag an axis (or right-drag the plot) to stretch or squash; wheel "
+            "to zoom (over an axis: that axis alone); Shift-drag to zoom to a box. Hover over "
+            "a plot's title for what it shows and how it is calculated.")
 
 
 def Plot(title, x_axis, y_axis, about, dates=False):
@@ -59,13 +61,30 @@ class _View(pg.ViewBox):
     """The handling every plot shares; see the module's docstring."""
 
     def mouseDragEvent(self, event, axis=None):
+        left = event.button() == Qt.MouseButton.LeftButton
+        if left and axis is not None:
+            self._Stretch(event, axis)
+            return
         shift = QApplication.keyboardModifiers() == Qt.KeyboardModifier.ShiftModifier
-        if shift and event.button() == Qt.MouseButton.LeftButton and axis is None:
+        if shift and left:
             self.setMouseMode(pg.ViewBox.RectMode)
             super().mouseDragEvent(event, axis)
             self.setMouseMode(pg.ViewBox.PanMode)
             return
         super().mouseDragEvent(event, axis)
+
+    def _Stretch(self, event, axis):
+        """An axis dragged: that axis alone stretched (right along x, up along
+        y) or squashed, about the point it was pressed at."""
+        event.accept()
+        if not self.state['mouseEnabled'][axis]:
+            return
+        moved = event.screenPos() - event.lastScreenPos()
+        factor = STRETCH_PER_PX ** (-moved.x() if axis == 0 else moved.y())
+        self._resetTarget()
+        self.scaleBy(x=factor if axis == 0 else None, y=factor if axis == 1 else None,
+                     center=self.mapSceneToView(event.buttonDownScenePos()))
+        self.sigRangeChangedManually.emit(self.state['mouseEnabled'])
 
     def mouseClickEvent(self, event):
         if event.double() and event.button() == Qt.MouseButton.LeftButton:
@@ -109,8 +128,11 @@ def _Style(plot, title, x_axis, y_axis, about):
     label = plot.getPlotItem().titleLabel
     label.setToolTip(About_Html(title, about))
     label.setCursor(Qt.CursorShape.WhatsThisCursor)
-    for side, (label, units) in (('bottom', x_axis), ('left', y_axis)):
+    for side, (label, units), cursor in (
+            ('bottom', x_axis, Qt.CursorShape.SizeHorCursor),
+            ('left', y_axis, Qt.CursorShape.SizeVerCursor)):
         axis = plot.getAxis(side)
+        axis.setCursor(cursor)          # a drag on it stretches or squashes it
         axis.setPen(theme.PLOT_FOREGROUND)
         axis.setTextPen(theme.PLOT_FOREGROUND)
         axis.setLabel(label, units=units, color=theme.PLOT_FOREGROUND)
@@ -288,7 +310,7 @@ class _Gate_View(_View):
         self.On_Change()
 
 
-TOF_TITLE = 'Time-of-flight spectrum'
+TOF_TITLE = 'Time-of-Flight Spectrum'
 TOF_ABOUT = (
     "The distribution of photon arrival times after the time-tagger trigger, accumulated over "
     "the run for the selected detector channels. Ion bunches appear as a peak above the flat "
@@ -296,8 +318,7 @@ TOF_ABOUT = (
     "Every hit on the selected channels is histogrammed by its time-tagger timestamp, in bins "
     "of the width set below the plot (widened if the window would need more than 50 000 bins). "
     "The shaded gate selects the hits counted by the spectrum, the time-of-flight map and the "
-    "time graph: Ctrl-drag (Cmd-drag on macOS) to set it, drag its edges to move it, and "
-    "double-click to remove it.")
+    "time graph.")
 
 
 class Gate_Plot(Plot_Widget):
@@ -307,13 +328,13 @@ class Gate_Plot(Plot_Widget):
     Gate_Changed = Signal()
 
     def __init__(self, parent=None, title=TOF_TITLE,
-                 x_axis=('Time of flight <i>t</i><sub>TOF</sub> (µs)', None),
+                 x_axis=('Time of Flight <i>t</i><sub>TOF</sub> (µs)', None),
                  what='TOF', about=TOF_ABOUT):
         view = _Gate_View()
         super().__init__(parent, view)
         self._View = view
         view.On_Change = self.Gate_Changed.emit
-        _Style(self, title, x_axis, ('Counts per bin <i>N</i>', None), about)
+        _Style(self, title, x_axis, ('Counts <i>N</i>', None), about)
         self.setToolTip(f"Ctrl-drag (Cmd-drag on macOS) to set the {what} gate, drag its "
                         f"edges to move it, double-click it to remove it.")
         self.Curve = Dense_Curve(pen=Pen())

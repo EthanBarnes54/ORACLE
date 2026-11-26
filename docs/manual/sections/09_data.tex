@@ -44,7 +44,8 @@ Key & Contents \\
 \code{TaggerLevels} & each input's threshold (\code{Inputs}) and the trigger's
     (\code{Trigger}), as in force when the run started \\
 \code{ScanTable}, \code{TableFit} & the bench table in force; the calibration's fit to it \\
-\code{InteractionRegion}, \code{ReferenceRun}, \code{PmtHv} & what the operator gave \\
+\code{ReferenceRun} & whether the run is a reference run (\app{Run type}); older runs
+    may also hold \code{InteractionRegion} and \code{PmtHv}, no longer recorded \\
 \code{Diagnostics} & what streamed beside the run (\code{Readback}: its folder), or null \\
 \bottomrule
 \end{tabularx}
@@ -61,7 +62,7 @@ File & Contents \\
 \code{run\_NNNN\_monitor.csv} & the rack every 0.1\,s, written once a second: \code{time},
     \code{round}, \code{setpoint\_v}, \code{readback\_v}, \code{cooler\_v},
     \code{wavenumber\_cm1}, and the loop's \code{bunches}, \code{dropped}, \code{skipped} \\
-\code{diagnostics/run\_NNNN/} & with \app{Stream the HV readback}: \code{readback.f32},
+\code{diagnostics/run\_NNNN/} & with \app{HV readback} streamed: \code{readback.f32},
     the line meter every 1\,ms at 200\us{} (float32 platform volts, 14\,MB an hour),
     and \code{readback.json}, each record's start and interval and how the stream ended;
     \code{cls\_acquisition.diagnostics.Read} gives times and volts \\

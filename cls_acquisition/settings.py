@@ -45,9 +45,6 @@ DEFAULTS = {
         'wavenumber': 'FURIOS:Wavemeter2:Wavenumber1',
         'mass': 'IGISOL:MagnetControl:Mass',
         'mass_setpoint': 'IGISOL:MagnetControl:Target',
-        # each tagger input's PMT high voltage, recorded with every run; empty:
-        # not on EPICS, and the Scan tab's PMT HV box is recorded instead
-        'pmt_hv_1': '', 'pmt_hv_2': '', 'pmt_hv_3': '', 'pmt_hv_4': '',
     },
     'instruments': {
         'line_meter': 'USB0::0x2A8D::0x0101::MY57506790::INSTR',
@@ -96,12 +93,12 @@ DEFAULTS = {
     # suggested from them; nothing here applies it
     'detectors': {'dead_time_us': 10.0},
     # the systematics' inputs a run cannot measure (Scan Performance's table):
-    # beam_offset_v is the beam's offset from the cooler's readback by interaction
-    # region, [offset, its error] in volts from the campaign's reference runs (for
-    # example CEC: [13.0, 8.0] for Bi, LCR: [-30.0, 5.0] for Yb+, November 2026);
-    # zero_drift_v the 0 V drift assumed until ORACLE checks it during runs; and
+    # beam_offset_v is the beam's offset from the cooler's readback in the light
+    # collection region, [offset, its error] in volts from the campaign's reference
+    # runs (for example [-30.0, 5.0] for Yb+, November 2026); null: not yet measured.
+    # zero_drift_v is the 0 V drift assumed until ORACLE checks it during runs, and
     # wavemeter_mhz the wavemeter's accuracy per run at the fundamental
-    'systematics': {'beam_offset_v': {}, 'zero_drift_v': 0.030, 'wavemeter_mhz': 10.0},
+    'systematics': {'beam_offset_v': None, 'zero_drift_v': 0.030, 'wavemeter_mhz': 10.0},
     # how the laser meets the ions, as DENIS takes it: the Scan Performance tab
     # converts the wavemeter's drift into scan volts with these
     'laser': {

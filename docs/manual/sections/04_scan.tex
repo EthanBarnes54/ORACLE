@@ -9,17 +9,17 @@
 Field & Meaning \\
 \midrule
 \app{Scan type}          & Sawtooth (repeats up), Triangle (up and back) or Single scan \\
-\app{Bunches per channel} & bunches taken at each setpoint; \app{Seconds per channel} in DC mode \\
-\app{Stepsize (V)}       & the step between setpoints \\
+\app{Bunches per step} & bunches taken at each setpoint; \app{Seconds per step} in DC mode \\
+\app{Step-size (V)}       & the step between setpoints \\
 \app{From (V)}, \app{To (V)} & up to seven ranges, each ticked to be scanned; a point
                            shared by two ranges is visited once \\
 \app{Experiment name}    & recorded with every run and in the ELOG \\
-\app{Interaction region} & CEC or LCR: the cooler offset differs between them \\
-\app{PMT HV}             & the PMTs' high voltage, recorded where EPICS does not give it \\
-\app{Reference run}      & marks a run taken to measure the beam's offset from the cooler \\
-\app{Stream the HV readback} & streams the line meter every 1\,ms for the whole scan into
-    \code{diagnostics/run\_NNNN} beside the run (§\ref{sec:data}), to tell whether the
-    mains on the readback is on the platform; the run is as without it \\
+\app{Run type}           & \app{Standard}, or \app{Reference}: a run on a line of known
+    frequency, taken to measure the beam's offset from the cooler, and recorded as such \\
+\app{HV readback}        & \app{Polled}, or \app{Streamed, 1\,ms}: a diagnostic that reads
+    the line meter every 1\,ms for the whole scan into \code{diagnostics/run\_NNNN} beside
+    the run (§\ref{sec:data}), to tell whether the mains on the readback is on the
+    platform; the run is the same either way \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -68,14 +68,14 @@ Rows and states survive a crash; a restarted queue takes up at the first scan no
 
 \subsection{Plots}
 
-The hyperfine-structure spectrum, the time-of-flight (TOF) spectrum and, with \app{Show
-time-of-flight map}, the TOF against scan voltage. Ctrl-drag (Cmd-drag on macOS) on the TOF
+The hyperfine-structure spectrum, the time-of-flight (TOF) spectrum and the \app{ToF Map},
+the TOF against scan voltage. Ctrl-drag (Cmd-drag on macOS) on the TOF
 spectrum sets the gate, a double-click removes it; the spectrum and map count only hits
-inside it. \app{Bin size} and the \app{Channel} boxes choose the TOF binning and the PMTs.
+inside it. \app{ToF bin width} and the \app{Channel} boxes choose the TOF binning and the PMTs.
 The view is held from Start to the scan's last event and recorded with the run.
 
-Every plot handles alike: drag to pan, right-drag to stretch, the wheel to zoom (over an
-axis, that axis alone), Shift-drag to zoom to a box. A plot handled by hand stops following
+Every plot handles alike: drag to pan; drag an axis (or right-drag the plot) to stretch or
+squash it; the wheel to zoom (over an axis, that axis alone); Shift-drag to zoom to a box. A plot handled by hand stops following
 the data until its \raisebox{-0.1ex}{$\circlearrowleft$} button, a double-click or
 \menu{View > Autoscale all plots} (Ctrl+0) returns it. Resting the cursor on a title says
 what the plot shows and how it is calculated.
@@ -91,11 +91,14 @@ calibration; a simulated rack posts nothing.
 from the voltage already there. Spin boxes and the slider take the mouse wheel only once
 clicked, so scrolling past them never moves the platform. Below, the cooler and readback
 voltages, the wavenumber, run and scan numbers, the buncher mode, and \app{Shown}: the run
-every tab is showing, live, saved or opened.
+every tab is showing and its state in a word or two (\app{Calibrating}, \app{Live},
+\app{Saved}, \app{From file}; \app{Rejected}, \app{Not written} or \app{Calibration failed}
+in red; \app{Not saved} for the trigger stream). Resting the cursor on it gives the
+details.
 
 Beside them, under \app{Tagger thresholds}, are the tagger's thresholds in one row:
 \app{Trigger} for its Start input (the PulseBlaster's channel 18, rising edge) and
-\app{Channel 1}--\app{Channel 4} for the PMTs (inputs A--D on the card; a negative threshold
+\app{PMT channel 1}--\app{4} for the PMTs (inputs A--D on the card; a negative threshold
 counts falling edges, a positive one rising). Each is
 put to the card as it is entered, saved in the settings and recorded with every run; the
 card takes $-1.32$ to $+1.18$\,V and a channel's threshold cannot be 0\,V. They are locked

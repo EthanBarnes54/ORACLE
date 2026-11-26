@@ -37,7 +37,7 @@ class Calibration_Tab(QWidget):
         self.To_Box = Spin(min(3000.0, limit_v), -limit_v, limit_v)
         self.Step_Box = Spin(10.0, 0.0, 2 * limit_v)
         Form(self.Params_Group, (('From (V)', self.From_Box), ('To (V)', self.To_Box),
-                                 ('Stepsize (V)', self.Step_Box)))
+                                 ('Step-size (V)', self.Step_Box)))
 
         self.Control_Group = QGroupBox('Calibration control')
         self.Control_Group.setMinimumWidth(REPORT_WIDTH)

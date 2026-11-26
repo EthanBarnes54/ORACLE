@@ -62,23 +62,21 @@ def Table(header, record, monitor, dividers, budget, mhz_per_v, volts_per_hz, de
     run's (scan, cooler) ``dividers``, Scan Performance's ``budget``,
     ``volts_per_hz``, ``detectors``, ``timing`` verdicts and ``declared``."""
     rows = []
-    region = record.get('InteractionRegion')
-    offset = (declared.get('beam_offset_v') or {}).get(region)
+    offset = declared.get('beam_offset_v')
     reference = " This run is tagged as a reference run." if record.get('ReferenceRun') else ""
-    if offset is not None and len(offset) == 2:
+    if isinstance(offset, (list, tuple)) and len(offset) == 2:
         rows.append(_Row('Beam offset δU', DECLARED, offset[1], mhz_per_v,
-                         f"{offset[0]:+g} ± {offset[1]:g} V for the {region}, from the "
-                         f"campaign's reference runs (settings: systematics, beam_offset_v); "
-                         f"it also scales every splitting by δU/2U.{reference}",
-                         ('beam_offset', 'VCoolOffset', offset[1], 'V', 'region'),
+                         f"{offset[0]:+g} ± {offset[1]:g} V, from the campaign's reference "
+                         f"runs (settings: systematics, beam_offset_v); it also scales every "
+                         f"splitting by δU/2U.{reference}",
+                         ('beam_offset', 'VCoolOffset', offset[1], 'V', 'campaign'),
                          float(offset[0])))
     else:
-        which = f"the {region}" if region else "a run whose interaction region was not stated"
         rows.append(_Row('Beam offset δU', UNKNOWN, None, mhz_per_v,
-                         f"None declared for {which}: set systematics: beam_offset_v from the "
-                         f"campaign's reference runs. It dominated the centroid for Bi in "
-                         f"November 2026 (8 V, 73 MHz).{reference}",
-                         ('beam_offset', 'VCoolOffset', None, 'V', 'region')))
+                         f"None declared: set systematics: beam_offset_v from the campaign's "
+                         f"reference runs. It dominated the centroid for Bi in November 2026 "
+                         f"(8 V, 73 MHz).{reference}",
+                         ('beam_offset', 'VCoolOffset', None, 'V', 'campaign')))
 
     ratios = record.get('Dividers') or {}
     cooler_v = float(header.get('CoolerVoltage', np.nan)) * dividers[1]
@@ -226,7 +224,7 @@ def Elog_Text(rows, run, full=False):
 
 def Clstools(path, rows):
     """What cls_tools needs beyond the run file to load it as ORACLE took it:
-    ``CLSDataFrame``'s dividers and the beam offset declared for its region,
+    ``CLSDataFrame``'s dividers and the beam offset declared,
     and ``Use_Scan_Calibration``'s table, the one in force as cls_tools reads
     it (written from the library if it is not yet), relative to the run's
     folder, or None if the run's ``<data>/tables`` does not hold it."""

@@ -1,7 +1,7 @@
 """ORACLE's main window and entry point.
 
 Date:    2026-11-10
-Version: 0.6.1
+Version: 0.6.2
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window (Scan, Scan Calibration, Time graphs) with Hardware
@@ -18,7 +18,7 @@ one instance per user, the theme and the rack, closing all if any fails.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.6.1'
+__version__ = '0.6.2'
 
 import contextlib
 import ctypes
@@ -76,15 +76,6 @@ log = logging.getLogger('oracle.gui')
 
 def _Number(value, fmt):
     return 'unavailable' if value is None else format(value, fmt)
-
-
-def _Volts(value):
-    """A PV's value as a float, or None if it has none or is not a number: a
-    PV that misbehaves is not worth refusing a run for."""
-    try:
-        return None if value is None else float(value)
-    except (TypeError, ValueError):
-        return None
 
 
 class _Window_Grid(QGridLayout):
@@ -329,15 +320,26 @@ class Main_Window(QMainWindow):
             grid.addWidget(label, row, 2 * (i % 3) + 1)
             grid.setColumnStretch(2 * (i % 3) + 1, 1)
         # the one run every tab shows, and whether it is live, saved or from a file
-        self.Shown_Label = QLabel('nothing yet', wordWrap=True)
+        self.Shown_Label = QLabel(wordWrap=True, textFormat=Qt.TextFormat.RichText)
+        self._Set_Shown('None')
         grid.addWidget(QLabel('Shown:'), 2, 0)
         grid.addWidget(self.Shown_Label, 2, 1, 1, 5)
         self._Build_Thresholds(grid, 6)
         return group
 
+    def _Set_Shown(self, what, status='', detail='', tone=None, *more):
+        """The Shown line: what every tab shows (a run, the trigger stream) and
+        its ``status`` in a word or two, coloured by ``tone`` (a verdict), with
+        any ``more`` ``(status, tone)``; ``detail``, in full, in its tooltip."""
+        parts = [html.escape(what)] + [
+            f"<span style='color:{theme.VERDICT_COLOURS[t]}'>{html.escape(word)}</span>"
+            if t else html.escape(word) for word, t in ((status, tone), *more) if word]
+        self.Shown_Label.setText(' — '.join(parts))
+        self.Shown_Label.setToolTip(detail)
+
     def _Build_Thresholds(self, grid, column):
         """The tagger's thresholds in ``grid`` from ``column``, set off by a rule:
-        the trigger's, then each channel's, in one row under their names. Each is put to the
+        the trigger's, then each PMT channel's, in one row under their names. Each is put to the
         card as it is entered (:meth:`_Set_Tagger_Levels`)."""
         low, high = timetagger.LEVEL_RANGE_V
         span = f"{low:+.2f} to {high:+.2f} V".replace('-', '−')
@@ -355,8 +357,8 @@ class Main_Window(QMainWindow):
                                      "The tagger's trigger input (Start on the card), which "
                                      "opens a window on the rising edge of PulseBlaster "
                                      "channel 18.")
-        self.Level_Boxes = [box(level, f"Channel {i + 1}'s threshold (input {'ABCD'[i]} on "
-                                       f"the card): a negative one counts falling edges, a "
+        self.Level_Boxes = [box(level, f"PMT channel {i + 1}'s threshold (input {'ABCD'[i]} "
+                                       f"on the card): a negative one counts falling edges, a "
                                        f"positive one rising.")
                             for i, level in enumerate(self._Tagger_Levels['Inputs'])]
         rule = QFrame(frameShape=QFrame.Shape.VLine, frameShadow=QFrame.Shadow.Plain)
@@ -368,7 +370,7 @@ class Main_Window(QMainWindow):
         # window that margin again and push it off a 768 px screen.
         grid.addWidget(QLabel('Tagger thresholds:'), 0, column + 1, 1, 5)
         boxes = (('Trigger', self.Trigger_Level_Box),
-                 *((f"Channel {i + 1}", level_box)
+                 *((f"PMT channel {i + 1}", level_box)
                    for i, level_box in enumerate(self.Level_Boxes)))
         for i, (text, level_box) in enumerate(boxes):
             caption = QLabel(text, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -399,7 +401,7 @@ class Main_Window(QMainWindow):
         self._Tagger_Levels = {'Inputs': reply['Inputs'], 'Trigger': reply['Trigger']}
         settings.Update_Section('instruments', tagger_levels=inputs,
                                 tagger_trigger_level=trigger)
-        log.info("Tagger thresholds: trigger %+.2f V; channels %s", trigger,
+        log.info("Tagger thresholds: trigger %+.2f V; PMT channels %s", trigger,
                  ', '.join(f"{level:+.2f} V" for level in inputs))
 
     def _Build_Menus(self):
@@ -450,7 +452,8 @@ class Main_Window(QMainWindow):
             plan = Scan_Plan(*zip(*header['ScanningRanges']), header['StepSize'])
         except Exception as e:
             log.exception("Opening %s failed", path)
-            self.Shown_Label.setText(f"nothing: {name} could not be read")
+            self._Set_Shown(name, 'Unreadable', f"{name} could not be read as a run file: {e}",
+                            'FAIL')
             if not quiet:
                 QMessageBox.warning(self, 'Run not opened', f"{name} could not be read as a "
                                                             f"run file: {e}")
@@ -481,11 +484,13 @@ class Main_Window(QMainWindow):
         self._Refresh_Runs(keep=path)
         self._Analyse(path, run)
         self.Tabs.setCurrentWidget(self.Scan)
-        self.Shown_Label.setText(
-            f"{name}, from its file: {len(raw)} hits, {len(plan)} setpoints of {plan.Step:g} V, "
-            f"{header.get('BunchesPerChannel')} bunches each "
-            f"({header.get('Experiment') or 'no experiment named'})"
-            + (f". Not shown, so as set now: {'; '.join(unshown)}." if unshown else ""))
+        self._Set_Shown(
+            f"Run {header.get('Run')}", 'From file',
+            f"{name}: {len(raw)} hits, {len(plan)} setpoints of {plan.Step:g} V, "
+            f"{header.get('BunchesPerChannel')} bunches each; "
+            f"{header.get('Experiment') or 'no experiment named'}."
+            + (f" Not restored, so as set now: {'; '.join(unshown)}." if unshown else ""),
+            None, ('Settings incomplete', 'WARN') if unshown else ('', None))
         for sentence in unshown:
             log.info("%s: not shown, %s", name, sentence)
         log.info("Showing %s", path)
@@ -506,12 +511,13 @@ class Main_Window(QMainWindow):
         self.Sweep_To.setValue(plan.Setpoints.max())
         return unshown
 
-    def _Clear_Shown(self, shown, waiting):
-        """Every tab given over to what starts now (``shown``): the scan plots
-        are cleared by _Start_Live, and Scan Performance waits, saying why."""
+    def _Clear_Shown(self, waiting, *shown):
+        """Every tab given over to what starts now (``shown``, as _Set_Shown
+        takes it): the scan plots are cleared by _Start_Live, and Scan
+        Performance waits, saying why."""
         self._Wanted = None             # an analysis still running is not shown
         self.Performance.Clear(waiting)
-        self.Shown_Label.setText(shown)
+        self._Set_Shown(*shown)
 
     def _Open_Folder(self, folder):
         """Show ``folder`` in Explorer or the Finder, made first if this
@@ -591,16 +597,17 @@ class Main_Window(QMainWindow):
         except (ValueError, OSError) as e:
             return str(e)
 
-        in_queue = f" (queued scan {queued[0]} of {queued[1]})" if queued else ''
+        in_queue = f", queued scan {queued[0]} of {queued[1]}," if queued else ''
         self._Start_Live(plan, timing)
-        self._Clear_Shown(f"run_{run:04d}, being calibrated{in_queue}",
-                          f"Run {run} is being taken: it is analysed as it ends.")
+        self._Clear_Shown(f"Run {run} is being taken: it is analysed as it ends.",
+                          f"Run {run}", 'Calibrating',
+                          f"Run {run}{in_queue} is being calibrated; its scan starts once the "
+                          f"gate passes the calibration.")
         self.Sweep_From.setValue(plan.Setpoints.min())
         self.Sweep_To.setValue(plan.Setpoints.max())
         when = datetime.now()
         pvs = {key: self._Pvs.Value(key) for key in ('wavenumber', 'mass', 'mass_setpoint')}
-        pmt_hv = {channel: _Volts(self._Pvs.Value(f"pmt_hv_{channel}"))
-                  for channel in (1, 2, 3, 4)}
+        setup = self.Scan.Setup()
         bunches = self.Scan.Bunches_Per_Step()
         text = (f"\n--------------------------------------\n{when:%d/%m/%Y %H:%M:%S}\n"
                 f"START SCAN NUMBER {run}\nscanning ranges:\n"
@@ -614,14 +621,11 @@ class Main_Window(QMainWindow):
                 + (f"Queued scan {queued[0]} of {queued[1]}, {rounds} scans\n" if queued
                    else "")
                 + ("REFERENCE RUN, for the beam's offset from the cooler's readback\n"
-                   if self.Scan.Reference_Check.isChecked() else "")
+                   if setup['ReferenceRun'] else "")
                 + (f"DIAGNOSTICS: the HV readback streamed every 1 ms to "
-                   f"{diagnostics.Folder(run)}\n" if self.Scan.Diagnostics_Check.isChecked()
-                   else ""))
+                   f"{diagnostics.Folder(run)}\n" if setup['Diagnostics'] else ""))
         self._Pending = {'plan': plan, 'run': run, 'when': when, 'pvs': pvs, 'text': text,
-                         'pmt_hv': {c: v for c, v in pmt_hv.items() if v is not None},
-                         'setup': self.Scan.Setup(),
-                         'bunches': bunches, 'timing': timing, 'rounds': rounds,
+                         'setup': setup, 'bunches': bunches, 'timing': timing, 'rounds': rounds,
                          'queued': queued, 'scan_type': self.Scan.Type_Combo.currentText()}
         self._Calibrate(plan)
         return None
@@ -642,8 +646,9 @@ class Main_Window(QMainWindow):
                         "scan started:\n%s", pending['run'], calibration.Rejections(report))
             self._Elog.Append(text + "RUN REJECTED: no file written, no scan started.\n",
                               self._Experiment())
-            self.Shown_Label.setText(f"run_{pending['run']:04d}'s calibration, refused by "
-                                     f"the gate: nothing written")
+            self._Set_Shown(f"Run {pending['run']}", 'Rejected',
+                            f"The gate refused its calibration, so no file was written: "
+                            f"{calibration.Rejections(report)}", 'FAIL')
             self._Queue_Scan_Ended('rejected', f"its calibration was refused by the gate: "
                                                f"{calibration.Rejections(report)}")
             QMessageBox.critical(self, 'Run rejected', f"{calibration.Rejections(report)}\n\n"
@@ -678,9 +683,6 @@ class Main_Window(QMainWindow):
                   'RackIdentity': self._Identity, 'Dividers': self._Rack.Dividers(),
                   'DacCodes': {'Channel': cal.Channels.tolist(), 'Code': cal.Codes.tolist()},
                   'DacCorrectionFull': cal.Correction, 'Commit': self._Commit,
-                  'InteractionRegion': pending['setup']['InteractionRegion'],
-                  'PmtHv': {'Pvs': pending['pmt_hv'] or None,
-                            'Entered': pending['setup']['PmtHv']},
                   'TaggerLevels': self._Tagger_Levels,
                   'ReferenceRun': pending['setup']['ReferenceRun'],
                   'ScanTable': self._Table.Id if self._Table else None,
@@ -699,7 +701,8 @@ class Main_Window(QMainWindow):
         try:
             self._Run = run_file.Create(self._Data_Dir, header, record)
         except (OSError, ValueError) as e:
-            self.Shown_Label.setText(f"nothing: run {pending['run']}'s file was not written")
+            self._Set_Shown(f"Run {pending['run']}", 'Not written',
+                            f"Its run file could not be written: {e}", 'FAIL')
             self._Queue_Scan_Ended('failed', f"its run file was not written: {e}")
             QMessageBox.critical(self, 'Run file not written', str(e))
             return
@@ -711,7 +714,9 @@ class Main_Window(QMainWindow):
             with contextlib.suppress(OSError):
                 os.remove(self._Run)    # a header with no scan behind it is not a run
             self._Run = None
-            self.Shown_Label.setText(f"nothing: run {pending['run']} did not start")
+            self._Set_Shown(f"Run {pending['run']}", 'Not started',
+                            "The acquisition process refused to start it; its file was "
+                            "removed.", 'FAIL')
             self._Queue_Scan_Ended('failed', "the acquisition process refused to start it")
             return
         if pending['setup']['Diagnostics']:
@@ -721,8 +726,9 @@ class Main_Window(QMainWindow):
         if self._Queue_Row is not None:
             self.Scan.Queue.Set_State(self._Queue_Row, 'running', f"run {pending['run']}")
         self.Run_Label.setText(str(pending['run']))
-        self.Shown_Label.setText(f"{os.path.basename(self._Run)}, live: written to its file "
-                                 f"as it comes in")
+        self._Set_Shown(f"Run {pending['run']}", 'Live',
+                        f"{os.path.basename(self._Run)}, written to its file as the hits "
+                        f"arrive.", 'PASS')
         log.info("Run %d started: %s", pending['run'], self._Run)
         # Stop is live the moment the scan is, not at the next tick: a click in between
         # would otherwise fall on a disabled button and the scan run on
@@ -752,7 +758,8 @@ class Main_Window(QMainWindow):
         if finished is not None:
             # kept on every tab, as taken, until a scan or another run takes them
             name = os.path.basename(finished)
-            self.Shown_Label.setText(f"{name}, as taken: saved to its file")
+            self._Set_Shown(f"Run {self.Run_Label.text()}", 'Saved',
+                            f"{name}, as taken, saved to its file.")
             self._Refresh_Runs(keep=finished)
             if self.Performance.Follow_Check.isChecked():
                 self._Systematics_Run = finished    # its short block goes to the ELOG
@@ -779,8 +786,10 @@ class Main_Window(QMainWindow):
         except Scan_Plan_Error:
             plan = None             # the TOF still shows; the spectrum has no axis
         self._Start_Live(plan, timing)
-        self._Clear_Shown("the triggers' stream, live: not saved",
-                          "The triggers are streaming; nothing of theirs is saved or analysed.")
+        self._Clear_Shown("The triggers are streaming; nothing of theirs is saved or analysed.",
+                          'Trigger stream', 'Not saved',
+                          "The triggers stream to the plots; nothing of theirs is saved or "
+                          "analysed.", 'WARN')
         self._Send('Start_Triggering', timing=timing)
 
     def _Toggle_Voltage(self):
@@ -951,8 +960,8 @@ class Main_Window(QMainWindow):
         if pending is not None:
             self._Elog.Append(pending['text'] + f"Calibration failed: {message}\n"
                               f"No file written, no scan started.\n", self._Experiment())
-            self.Shown_Label.setText(f"run_{pending['run']:04d}'s calibration, which failed: "
-                                     f"nothing written")
+            self._Set_Shown(f"Run {pending['run']}", 'Calibration failed',
+                            f"{message.rstrip('.')}. No file was written.", 'FAIL')
         QMessageBox.critical(self, 'Calibration failed', message)
 
     def _Worker_Finished(self):
@@ -1512,7 +1521,7 @@ class Main_Window(QMainWindow):
         self._Take_Data()
         scan, timing = self.Scan, self._Shown_Timing
         self._Live.Configure(self._Volt_Edges, scan.Tof_Edges(timing), scan.Tof_Plot.Gate(),
-                             scan.Channels(), scan.Map_Check.isChecked())
+                             scan.Channels(), True)
         self._Live.Update()
         if self.Tabs.currentWidget() is scan:
             scan.Draw(self._Live)

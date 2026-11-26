@@ -199,10 +199,10 @@ def test_Pvs_With_No_Name_Are_Not_Asked_Of_Epics(monkeypatch):
     epics.PV = lambda name, **_: made.append(name) or types.SimpleNamespace(
         disconnect=lambda: None)
     monkeypatch.setitem(sys.modules, 'epics', epics)
-    pvs = facility.Pv_Monitors(settings.DEFAULTS['pvs'], simulated=False)
+    pvs = facility.Pv_Monitors({**settings.DEFAULTS['pvs'], 'unnamed': ''}, simulated=False)
     assert made == ['FURIOS:Wavemeter2:Wavenumber1', 'IGISOL:MagnetControl:Mass',
                     'IGISOL:MagnetControl:Target']
-    assert pvs.Value('pmt_hv_1') is None
+    assert pvs.Value('unnamed') is None
 
 
 def test_A_Tagger_Threshold_The_Card_Would_Refuse_Is_Refused_Before_Anything_Opens():

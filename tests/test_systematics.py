@@ -10,8 +10,7 @@ from cls_acquisition import scan_performance as sp
 from cls_acquisition import systematics
 from tests.test_scan_performance import LASER, ORACLE_KEY, _Run
 
-DECLARED = {'beam_offset_v': {'CEC': [13.0, 8.0], 'LCR': [-30.0, 5.0]}, 'zero_drift_v': 0.030,
-            'wavemeter_mhz': 10.0}
+DECLARED = {'beam_offset_v': [13.0, 8.0], 'zero_drift_v': 0.030, 'wavemeter_mhz': 10.0}
 DIVIDERS = {'Scan': {'ratio': 1000.0, 'ppm': 100.0}, 'Cooler': {'ratio': 10000.0, 'ppm': 100.0}}
 
 
@@ -19,11 +18,10 @@ def _Rows(result):
     return {row['Source']: row for row in result['Systematics']}
 
 
-def _Analysed(region='CEC', legacy=False, declared=DECLARED, **run):
+def _Analysed(legacy=False, declared=DECLARED, **run):
     header, raw, monitor = _Run(legacy=legacy, **run)
     if not legacy:
-        header[ORACLE_KEY].update(InteractionRegion=region, Dividers=DIVIDERS,
-                                  ReferenceRun=True)
+        header[ORACLE_KEY].update(Dividers=DIVIDERS, ReferenceRun=True)
     return header, sp.Analyse(header, raw, monitor, LASER, declared=declared)
 
 
@@ -41,7 +39,7 @@ def test_Every_Source_Is_There_And_Says_Whether_It_Was_Measured_Or_Declared():
     assert kinds['0 V drift during the run'] == kinds['Wavemeter accuracy'] == systematics.DECLARED
     assert kinds['Run calibration'] == kinds['Cooler scatter'] == systematics.MEASURED
     assert kinds['Bench table repeatability'] == systematics.UNKNOWN
-    # the CEC's declared offset, and a run tagged as a reference run says so
+    # the declared offset, and a run tagged as a reference run says so
     assert rows['Beam offset δU']['Volts'] == 8.0 and '+13 ± 8 V' in rows['Beam offset δU'][
         'Detail'] and 'reference run' in rows['Beam offset δU']['Detail']
     assert rows['Cooler divider']['Volts'] == pytest.approx(29950.0 * 100e-6)
@@ -66,17 +64,19 @@ def test_The_Calibrations_Errors_Are_Its_Straight_Lines_At_The_Scans_Ends():
 
 
 def test_What_The_Run_Cannot_Say_Is_Not_Yet_Known_Rather_Than_Guessed():
-    # an old DAQ run: no monitor, no record of its region or dividers
+    # an old DAQ run: no monitor, no record of its dividers; the campaign's offset holds
+    # for it as for any run, the light being collected in the LCR alone
     _, result = _Analysed(legacy=True)
     rows = _Rows(result)
-    for name in ('Beam offset δU', 'Cooler divider', 'Scan divider', 'HV against its calibration',
+    for name in ('Cooler divider', 'Scan divider', 'HV against its calibration',
                  'Wavemeter during the run', 'Bench table repeatability'):
         assert rows[name]['Kind'] == systematics.UNKNOWN and rows[name]['Volts'] is None, name
-    assert 'interaction region was not stated' in rows['Beam offset δU']['Detail']
-    # nothing declared: no offset for a region the settings do not give
-    _, result = _Analysed(region='LCR', declared={})
+    assert rows['Beam offset δU']['Kind'] == systematics.DECLARED
+    # nothing declared: no offset, and the drift not assumed
+    _, result = _Analysed(declared={})
     rows = _Rows(result)
     assert rows['Beam offset δU']['Kind'] == systematics.UNKNOWN
+    assert rows['Beam offset δU']['Detail'].startswith('None declared')
     assert rows['0 V drift during the run']['Kind'] == systematics.UNKNOWN
 
 
@@ -137,7 +137,7 @@ def test_Schema_3_Says_What_Each_Row_Moves_In_cls_tools(tmp_path):
             rows['scan_divider']['correlation']) == ('VAccDiv', 1000.0, 100.0, 'ppm', 'campaign')
     assert (rows['beam_offset']['key'], rows['beam_offset']['value'],
             rows['beam_offset']['width'], rows['beam_offset']['correlation']) == (
-        'VCoolOffset', 13.0, 8.0, 'region')
+        'VCoolOffset', 13.0, 8.0, 'campaign')
     assert (rows['zero_drift']['key'], rows['zero_drift']['width']) == ('Scan_offset_v', 0.030)
     assert (rows['wavemeter']['key'], rows['wavemeter']['unit']) == ('Laser_set', 'MHz')
     assert rows['run_calibration']['key'] is None and rows['health']['key'] is None
@@ -146,7 +146,7 @@ def test_Schema_3_Says_What_Each_Row_Moves_In_cls_tools(tmp_path):
     # no table was in force: cls_tools' polynomial, with ORACLE's dividers and δU
     assert exported['clstools'] == {'CLSDataFrame': {'VCoolOffset': 13.0, 'VCoolDiv': 10000.0,
                                                      'VAccDiv': 1000.0}}
-    _, undeclared = _Analysed(region='LCR', declared=dict(DECLARED, beam_offset_v={}))
+    _, undeclared = _Analysed(declared=dict(DECLARED, beam_offset_v=None))
     assert 'VCoolOffset' not in systematics.Clstools(
         str(tmp_path / 'run_0007.asdf'), undeclared['Systematics'])['CLSDataFrame']
 

@@ -133,7 +133,7 @@ def test_A_Run_Ends_With_Its_Reports_Beside_It_And_On_The_Hardware_History(qapp,
 
 def test_A_Run_Ticked_For_Diagnostics_Streams_Its_Readback_Beside_It(qapp, window):
     from cls_acquisition import diagnostics
-    window.Scan.Diagnostics_Check.setChecked(True)
+    window.Scan.Readback_Combo.setCurrentText('Streamed, 1 ms')
     window.Scan.Per_Step_Box.setValue(10)
     _Scan(qapp, window)
     assert window._Stream is not None
@@ -150,8 +150,9 @@ def test_A_Run_Ticked_For_Diagnostics_Streams_Its_Readback_Beside_It(qapp, windo
     assert np.isfinite(monitor['readback_v']).all()
     [start] = [text for text in window._Elog.Texts() if 'START SCAN NUMBER' in text]
     assert 'DIAGNOSTICS: the HV readback streamed every 1 ms' in start
-    window.Show_Run(path)                       # opened again, the box shows it was ticked
-    assert window.Scan.Diagnostics_Check.isChecked()
+    window.Scan.Readback_Combo.setCurrentIndex(0)
+    window.Show_Run(path)                       # opened again, the box shows it streamed
+    assert window.Scan.Readback_Combo.currentText() == 'Streamed, 1 ms'
 
 
 def test_A_Scan_Tells_The_Elog_And_The_Header_What_The_Old_Daq_Did(qapp, window):
@@ -280,7 +281,7 @@ def test_Quick_Tune_Puts_Its_Voltage_On_The_Platform_And_Takes_It_Off(qapp, wind
 def test_A_Dc_Scan_Counts_Seconds_At_The_Dc_Trigger_With_Its_Gate_Settable(qapp, window):
     scan = window.Scan
     scan.Dc_Radio.setChecked(True)
-    assert scan.Per_Step_Label.text() == 'Seconds per channel'
+    assert scan.Per_Step_Label.text() == 'Seconds per step'
     grid = scan.Per_Step_Box.parentWidget().layout()        # beside its box, not Reference run
     assert len({grid.getItemPosition(grid.indexOf(w))[0]
                 for w in (scan.Per_Step_Label, scan.Per_Step_Box)}) == 1
@@ -846,7 +847,7 @@ def test_The_Line_Meter_Is_Read_Precisely_Against_The_Platforms_Setpoint(qapp, w
 # ── After the run ───────────────────────────────────────────────
 
 def test_A_Finished_Run_Is_Analysed_And_Its_Report_Exported(qapp, window):
-    window.Scan.Reference_Check.setChecked(True)
+    window.Scan.Run_Type_Combo.setCurrentText('Reference')
     window.Scan.Per_Step_Box.setValue(30)       # hits enough that the run is never empty
     _Scan(qapp, window)
     _Finished(qapp, window)
@@ -938,8 +939,9 @@ def test_An_Opened_Run_Comes_Back_As_It_Stood_When_It_Was_Taken(qapp, window, mo
     for attribute, key in (('Tof_Edges', 'tof_edges'), ('Spectrum', 'spectrum'), ('Tof', 'tof')):
         assert np.array_equal(getattr(live, attribute), taken[key]), attribute
     _, raw, _ = run_file.Read(path)
-    assert window.Shown_Label.text().startswith(f"run_0001.asdf, from its file: {len(raw)} hits")
-    assert 'Not shown' not in window.Shown_Label.text() and window.Dialogs == []
+    assert window.Shown_Label.text() == 'Run 1 — From file'
+    assert window.Shown_Label.toolTip().startswith(f"run_0001.asdf: {len(raw)} hits")
+    assert 'Not restored' not in window.Shown_Label.toolTip() and window.Dialogs == []
 
 
 def test_A_Runs_Record_Holds_What_It_Was_Taken_With_And_Its_View_Is_Held(qapp, window):
@@ -948,7 +950,7 @@ def test_A_Runs_Record_Holds_What_It_Was_Taken_With_And_Its_View_Is_Held(qapp, w
     timing = scan.Timing()
     _Scan(qapp, window, 'Sawtooth')
     # held from Start to the last event, so the record holds for every one
-    assert not scan.Bin_Box.isEnabled() and not scan.Map_Check.isEnabled()
+    assert not scan.Bin_Box.isEnabled()
     assert scan.Tof_Plot._View.Locked and not window.Time.Bin_Combo.isEnabled()
     scan.Stop_Button.click()
     _Finished(qapp, window)
@@ -965,8 +967,6 @@ def test_A_Runs_Record_Holds_What_It_Was_Taken_With_And_Its_View_Is_Held(qapp, w
 
 def test_A_Run_Records_The_Rack_It_Was_Taken_On_And_The_Codes_Its_Dac_Held(qapp, window):
     scan = window.Scan
-    scan.Region_Combo.setCurrentText('LCR')
-    scan.Pmt_Hv_Edit.setText('1: 1850, 2: 1900 V')
     _Scan(qapp, window)
     _Finished(qapp, window)
     [path] = Run_Files(window)
@@ -990,8 +990,8 @@ def test_A_Run_Records_The_Rack_It_Was_Taken_On_And_The_Codes_Its_Dac_Held(qapp,
         assert channel == mcc_dac.CH_POS and abs(held - volts) <= half_code + 1e-9
     assert record['DacCorrectionFull'] == mcc_dac.CORRECTION
     assert record['Commit'] == settings.Commit()
-    assert record['InteractionRegion'] == 'LCR'
-    assert record['PmtHv'] == {'Pvs': None, 'Entered': '1: 1850, 2: 1900 V'}
+    # the PMTs' HV is the lab's controller's, and the light is always collected in the LCR
+    assert 'PmtHv' not in record and 'InteractionRegion' not in record
     assert record['CoolerRollingS'] == settings.DEFAULTS['cooler']['rolling_s']
     # each calibration reading over a whole mains cycle, and the poll back at 200 us after
     assert record['DeadTimeUs'] == settings.DEFAULTS['detectors']['dead_time_us']
@@ -1002,12 +1002,6 @@ def test_A_Run_Records_The_Rack_It_Was_Taken_On_And_The_Codes_Its_Dac_Held(qapp,
     assert record['TaggerLevels'] == {
         'Inputs': settings.DEFAULTS['instruments']['tagger_levels'],
         'Trigger': settings.DEFAULTS['instruments']['tagger_trigger_level']}
-    # and opened, the run puts them back as it was taken
-    scan.Region_Combo.setCurrentText('CEC')
-    scan.Pmt_Hv_Edit.clear()
-    window.Show_Run(path)
-    assert scan.Region_Combo.currentText() == 'LCR'
-    assert scan.Pmt_Hv_Edit.text() == '1: 1850, 2: 1900 V'
 
 
 def test_The_Dividers_Set_Scale_The_Gate_The_Readbacks_And_The_Record(qapp, monkeypatch,
@@ -1082,7 +1076,7 @@ def test_Reopened_After_A_Crash_The_Window_Has_What_Was_Entered(qapp, window, mo
         assert again.Scan.Elog_Edit.toPlainText() == "for the next entry"
         [queued] = again.Scan.Queue.Value()
         assert (queued['ranges'], queued['order'], queued['scans']) == ('20:30', 'Triangle', '4')
-        assert again.Shown_Label.text().startswith("run_0001.asdf, from its file")
+        assert again.Shown_Label.text() == 'Run 1 — From file'
         assert again._Shown_Timing == timing
     finally:
         Close_Window(qapp, again)

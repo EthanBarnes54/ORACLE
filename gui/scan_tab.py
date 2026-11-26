@@ -10,7 +10,7 @@ its widgets into a plan, timing and bunches per step; voltages are held to
 the platform's limit, the gate to the tagger's range and the cycle, and a
 TOF bin finer than MAX_TOF_BINS across the gate is widened. Its second
 page is the scan queue. The operator records what the rack cannot
-(``Setup``: interaction region, PMT HV, reference run). ``Show_Settings``
+(``Setup``: a reference run, the HV readback streamed). ``Show_Settings``
 restores a run's controls; ``Inputs`` names every input.
 
 Depends on: pyqtgraph, PySide6; cls_acquisition.acquisition,
@@ -35,11 +35,12 @@ from gui.scan_queue import ORDERS, Scan_Queue
 from gui.shared_widgets import Row, Side_By_Side, Spin
 
 RANGES = 7
-REGIONS = ('Not stated', 'CEC', 'LCR')    # where the laser meets the beam
+RUN_TYPES = ('Standard', 'Reference')
+READBACKS = ('Polled', 'Streamed, 1 ms')
 CHANNELS = (1, 2, 3, 4)
 DC_TRIGGER_HZ = 1e9 / triggers.DC_PERIOD_NS
 MAX_TOF_BINS = 50000                # across the gate; the old DAQ's cap
-SCAN_AXIS = ('Scan voltage <i>U</i><sub>scan</sub>', 'V')
+SCAN_AXIS = ('Scan Voltage <i>U</i><sub>scan</sub>', 'V')
 
 
 def _Put(box, value, what, unshown):
@@ -84,28 +85,21 @@ class Scan_Tab(QWidget):
         self.Per_Step_Box = Spin(1.0, 0.01, 9999999.0)
         self.Step_Box = Spin(1.0, 0.01, 10000.0)
         self.Experiment_Edit = QLineEdit()
-        self.Region_Combo = QComboBox()
-        self.Region_Combo.addItems(REGIONS)
-        self.Region_Combo.setToolTip("Where the laser meets the beam: the charge-exchange cell "
-                                     "(CEC, atoms) or the light collection region (LCR, ions). "
-                                     "Recorded with every run.")
-        self.Pmt_Hv_Edit = QLineEdit(placeholderText='e.g. 1: 1850, 2: 1900 V')
-        self.Pmt_Hv_Edit.setToolTip("The PMTs' high voltage as set, recorded with every run "
-                                    "where it is not read from EPICS.")
-        self.Reference_Check = QCheckBox('Reference run')
-        self.Reference_Check.setToolTip("A run taken to measure the beam's offset from the "
-                                        "cooler's readback (a line of known frequency), "
-                                        "recorded as such.")
-        self.Diagnostics_Check = QCheckBox('Stream the HV readback (diagnostics)')
-        self.Diagnostics_Check.setToolTip(
-            "Streams the line meter every 1 ms for the whole scan, instead of polling it, into "
-            "diagnostics/run_NNNN beside the run (14 MB an hour), to tell whether the mains on "
-            "the readback is on the platform. The run file and its monitor record are as "
-            "without it.")
+        self.Run_Type_Combo = QComboBox()
+        self.Run_Type_Combo.addItems(RUN_TYPES)
+        self.Run_Type_Combo.setToolTip("Reference: a run on a line of known frequency, taken to "
+                                       "measure the beam's offset from the cooler's readback, "
+                                       "and recorded as such in its file and ELOG entry.")
+        self.Readback_Combo = QComboBox()
+        self.Readback_Combo.addItems(READBACKS)
+        self.Readback_Combo.setToolTip(
+            "A diagnostic. Streamed: the HV line meter is read every 1 ms for the whole scan, "
+            "instead of polled, into diagnostics/run_NNNN beside the run (14 MB an hour), to "
+            "tell whether the mains on the readback is on the platform. The run file and its "
+            "monitor record are the same either way.")
         rows = (('Scan type', self.Type_Combo), (None, self.Per_Step_Box),
-                ('Stepsize (V)', self.Step_Box), ('Experiment name', self.Experiment_Edit),
-                ('Interaction region', self.Region_Combo), ('PMT HV', self.Pmt_Hv_Edit),
-                ('', self.Reference_Check), ('', self.Diagnostics_Check))
+                ('Step-size (V)', self.Step_Box), ('Experiment name', self.Experiment_Edit),
+                ('Run type', self.Run_Type_Combo), ('HV readback', self.Readback_Combo))
         for row, (text, widget) in enumerate(rows):
             grid.addWidget(self.Per_Step_Label if text is None else QLabel(text), row, 1)
             grid.addWidget(widget, row, 2)
@@ -179,43 +173,41 @@ class Scan_Tab(QWidget):
     def _Build_Plots(self):
         group = QGroupBox('Plots')
         grid = QGridLayout(group)
-        self.Spectrum_Plot = plots.Plot('Hyperfine-structure spectrum', SCAN_AXIS,
-                                        ('Counts per setpoint <i>N</i>', None), (
+        self.Spectrum_Plot = plots.Plot('Hyperfine-Structure Spectrum', SCAN_AXIS,
+                                        ('Counts <i>N</i>', None), (
             "Photon counts against the scanning voltage, accumulated over every scan of the "
             "run being taken, or of the run opened for display.",
             "Hits on the selected detector channels whose time of flight lies inside the gate "
-            "(every hit, if no gate is set) are histogrammed in one bin per voltage setpoint. "
-            "The voltage is the setpoint commanded on the DAC, before the calibration and the "
-            "cooler correction that DENIS applies; counts are not normalised to the number of "
-            "scans."))
+            "(every hit, if no gate is set) are histogrammed in one bin per voltage setpoint."))
         self.Spectrum_Curve = plots.Dense_Curve(pen=plots.Pen())
         self.Spectrum_Plot.addItem(self.Spectrum_Curve)
         self.Tof_Plot = plots.Gate_Plot()
-        self.Map_Plot = plots.Plot('Time of flight versus scan voltage', SCAN_AXIS,
-                                   ('Time of flight <i>t</i><sub>TOF</sub> (µs)', None), (
+        self.Map_Plot = plots.Plot('ToF Map', SCAN_AXIS,
+                                   ('Time of Flight <i>t</i><sub>TOF</sub> (µs)', None), (
             "A two-dimensional histogram of hits by scanning voltage and time of flight; the "
             "colour gives the counts in each cell, on an automatically scaled inferno scale. "
             "Resonant fluorescence appears as a localised spot at the line's voltage and the "
             "ion bunch's arrival time.",
             "Hits on the selected channels inside the time-of-flight gate, binned by setpoint "
             "and by time of flight; to bound the memory it takes, cells are merged to at most "
-            "2000 along each axis. It is computed only while the map is switched on below the "
-            "plot."))
+            "2000 along each axis."))
         self.Map_Image = pg.ImageItem(colorMap=pg.colormap.get('inferno'))
         self.Map_Plot.addItem(self.Map_Image)
         self.Bin_Box = Spin(1.0, 0.0005, 10000.0, 4, ' µs')
         self.Bin_Box.setKeyboardTracking(False)
-        self.Map_Check = QCheckBox('Show time-of-flight map')
+        self.Bin_Box.setToolTip("The time-of-flight spectrum's bin width, widened if the gate "
+                                f"would need more than {MAX_TOF_BINS:,} bins.")
         self.Channel_Checks = [QCheckBox(f'Channel {c}', checked=True) for c in CHANNELS]
-        # each plot's own control sits in a strip under it, on one row, so the two
-        # plots stay the same size; the channels filter every plot and run under both
         grid.addWidget(self.Spectrum_Plot, 0, 0, 1, 2)
         grid.addWidget(self.Tof_Plot, 1, 0)
         grid.addWidget(self.Map_Plot, 1, 1)
-        right = Qt.AlignmentFlag.AlignRight
-        grid.addLayout(Row(QLabel('Bin size:'), self.Bin_Box), 2, 0, right)
-        grid.addWidget(self.Map_Check, 2, 1, right)
-        grid.addLayout(Row(*self.Channel_Checks), 3, 0, 1, 2, Qt.AlignmentFlag.AlignLeft)
+        # one strip of controls under both plots, labelled as the forms on the left are
+        controls = Row(QLabel('ToF bin width'), self.Bin_Box)
+        controls.addSpacing(24)
+        for check in self.Channel_Checks:
+            controls.addWidget(check)
+        controls.addStretch(1)
+        grid.addLayout(controls, 2, 0, 1, 2)
         grid.setRowStretch(0, 1)
         grid.setRowStretch(1, 1)
         grid.setColumnStretch(0, 1)
@@ -226,7 +218,7 @@ class Scan_Tab(QWidget):
 
     def _Mode_Changed(self):
         bunched = self.Bunched_Radio.isChecked()
-        self.Per_Step_Label.setText('Bunches per channel' if bunched else 'Seconds per channel')
+        self.Per_Step_Label.setText('Bunches per step' if bunched else 'Seconds per step')
         self.Per_Step_Box.setValue(1.0 if bunched else 0.1)
         for box in self._Bunched_Boxes:
             box.setEnabled(bunched)
@@ -313,24 +305,21 @@ class Scan_Tab(QWidget):
         return [c for c, check in zip(CHANNELS, self.Channel_Checks) if check.isChecked()]
 
     def Setup(self):
-        """The interaction region and the PMTs' HV as the operator entered them
-        (None where not), for the run's record."""
-        region = self.Region_Combo.currentText()
-        return {'InteractionRegion': None if region == REGIONS[0] else region,
-                'PmtHv': self.Pmt_Hv_Edit.text().strip() or None,
-                'ReferenceRun': self.Reference_Check.isChecked(),
-                'Diagnostics': self.Diagnostics_Check.isChecked()}
+        """Whether the run is a reference run and streams its HV readback, for
+        its record."""
+        return {'ReferenceRun': self.Run_Type_Combo.currentIndex() == 1,
+                'Diagnostics': self.Readback_Combo.currentIndex() == 1}
 
     def View(self):
         """How the plots show a run, for its record."""
         gate = self.Tof_Plot.Gate()
         return {'tof_bin_us': self.Bin_Box.value(), 'tof_gate_us': gate and list(gate),
-                'channels': self.Channels(), 'map': self.Map_Check.isChecked()}
+                'channels': self.Channels(), 'map': True}
 
     def Lock_View(self, locked):
         """The view held as it is while a scan runs, so its record holds for
         every event; the plots still pan and zoom."""
-        for widget in (self.Bin_Box, self.Map_Check, *self.Channel_Checks):
+        for widget in (self.Bin_Box, *self.Channel_Checks):
             widget.setEnabled(not locked)
         self.Tof_Plot.Lock_Gate(locked)
 
@@ -361,14 +350,10 @@ class Scan_Tab(QWidget):
              'its bunches per step', unshown)
         _Put(self.Dwell_Box, int(header['DwellTime']), 'its dwell', unshown)
         self.Experiment_Edit.setText(str(header.get('Experiment') or ''))
-        if 'InteractionRegion' in record:
-            self.Region_Combo.setCurrentText(record['InteractionRegion'] or REGIONS[0])
-        if 'PmtHv' in record:
-            self.Pmt_Hv_Edit.setText((record['PmtHv'] or {}).get('Entered') or '')
         if 'ReferenceRun' in record:
-            self.Reference_Check.setChecked(bool(record['ReferenceRun']))
+            self.Run_Type_Combo.setCurrentIndex(int(bool(record['ReferenceRun'])))
         if 'Diagnostics' in record:
-            self.Diagnostics_Check.setChecked(bool(record['Diagnostics']))
+            self.Readback_Combo.setCurrentIndex(int(bool(record['Diagnostics'])))
         if timing is None:
             unshown.append("its scan type, mode, trigger timing and view, which ORACLE did not "
                            "yet record")
@@ -386,7 +371,6 @@ class Scan_Tab(QWidget):
             self.Tof_Plot.Set_Gate(view['tof_gate_us'])
             for channel, check in zip(CHANNELS, self.Channel_Checks):
                 check.setChecked(channel in view['channels'])
-            self.Map_Check.setChecked(view['map'])
         return unshown
 
     def Inputs(self):
@@ -397,27 +381,25 @@ class Scan_Tab(QWidget):
             for part, widget in zip(('on', 'from', 'to'), row)]
         return [('scan_type', self.Type_Combo), ('mode', (self.Dc_Radio, self.Bunched_Radio)),
                 ('per_step', self.Per_Step_Box), ('step', self.Step_Box),
-                ('region', self.Region_Combo), ('pmt_hv', self.Pmt_Hv_Edit),
-                ('reference_run', self.Reference_Check),
-                ('diagnostics', self.Diagnostics_Check), *ranges,
+                ('run_type', self.Run_Type_Combo), ('hv_readback', self.Readback_Combo), *ranges,
                 ('dwell', self.Dwell_Box), ('release', self.Release_Box),
                 ('tagger_delay', self.Tagger_Delay_Box), ('gate_start', self.Gate_Start_Box),
                 ('gate_length', self.Gate_Length_Box), ('tof_bin', self.Bin_Box),
-                ('tof_gate', self.Tof_Plot), ('map', self.Map_Check),
+                ('tof_gate', self.Tof_Plot),
                 *((f"channel_{c}", check) for c, check in zip(CHANNELS, self.Channel_Checks)),
                 ('elog_text', self.Elog_Edit), ('queue_mode', self.Queue.Mode_Combo),
                 ('queue', self.Queue)]
 
     def Draw(self, live):
-        """The plots from ``live``, redrawn only when it or the map's box has
-        changed: a full redraw costs tens of milliseconds a tick."""
-        drawn = (live, live.Version, self.Map_Check.isChecked())
+        """The plots from ``live``, redrawn only when it has changed: a full
+        redraw costs tens of milliseconds a tick."""
+        drawn = (live, live.Version)
         if drawn == self._Drawn:
             return
         self._Drawn = drawn
         self.Spectrum_Curve.setData(live.Volt_Edges, live.Spectrum, stepMode='center')
         self.Tof_Plot.Curve.setData(live.Tof_Edges, live.Tof, stepMode='center')
-        if self.Map_Check.isChecked():
+        if live.Tof_Map.size:
             volts, tof = live.Volt_Edges, live.Tof_Edges
             self.Map_Image.setImage(live.Tof_Map, autoLevels=True)
             self.Map_Image.setRect(QRectF(volts[0], tof[0], volts[-1] - volts[0],

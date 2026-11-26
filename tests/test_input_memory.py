@@ -43,7 +43,7 @@ def test_Every_Input_Comes_Back_As_It_Was_Left(qapp, tmp_path, scan_tabs):
     again = scan_tabs()
     Input_Memory(path).Add('scan', again.Inputs())
     assert _Values(again.Inputs()) == left
-    assert again.Per_Step_Label.text() == 'Seconds per channel'
+    assert again.Per_Step_Label.text() == 'Seconds per step'
 
 
 def test_A_Change_Is_Kept_Within_Half_A_Second_And_Never_Half_Written(qapp, tmp_path,
@@ -72,6 +72,23 @@ def test_A_File_It_Cannot_Use_Costs_Only_Its_Values(qapp, tmp_path, scan_tabs, c
     assert tab.Step_Box.value() == 1.0 and tab.Type_Combo.currentText() == 'Sawtooth'
     assert tab.Dwell_Box.value() == 250                         # the rest still come back
     assert tab.Release_Box.value() == tab.Release_Box.maximum()  # held to its limit
+    assert "'Spiral' is not one of its choices" in caplog.text
+
+
+def test_A_Choice_Since_Shortened_Still_Comes_Back(qapp, tmp_path, scan_tabs):
+    """'Manual: ask before each scan' is now 'Manual': a queue left in Manual
+    must not come back Automatic. Only the words before a colon count, so a
+    remembered '1000' is never taken for a '1'."""
+    path = tmp_path / 'inputs.yaml'
+    path.write_text("scan.queue_mode: 'Manual: ask before each scan'\n", encoding='utf-8')
+    tab = scan_tabs()
+    Input_Memory(str(path)).Add('scan', tab.Inputs())
+    assert tab.Queue.Mode_Combo.currentText() == 'Manual' and tab.Queue.Manual()
+    from PySide6.QtWidgets import QComboBox
+    combo = QComboBox()
+    combo.addItems(('1', '10'))
+    with pytest.raises(ValueError):
+        input_memory._Choose(combo, '1000')
 
 
 def test_Only_Inputs_The_Window_Knows_Are_Taken():

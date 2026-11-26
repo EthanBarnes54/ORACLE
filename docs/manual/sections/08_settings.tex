@@ -17,8 +17,7 @@ Key & Meaning (default) \\
     \code{<app>/data/simulated} \\
 \code{experiment} & the experiment name, saved as it is edited \\
 \code{elog} & \code{enabled}, \code{url}, \code{author} (disabled; never from a simulated rack) \\
-\code{pvs} & EPICS names of the wavenumber, mass, mass setpoint and each input's PMT HV
-    (\code{pmt\_hv\_1}--\code{4}) \\
+\code{pvs} & EPICS names of the wavenumber, mass and mass setpoint \\
 \code{hardware} & what the rack cannot say: \code{scan\_divider} and \code{cooler\_divider}
     (\code{model}, \code{serial}, \code{ratio}, \code{ppm}; ratios 1000 and 10000) and the
     \code{amplifier}; recorded with every run \\
@@ -37,7 +36,7 @@ Key & Meaning (default) \\
 \code{cooler} & \code{rolling\_s}: the window of the cooler's rolling mean live, and the
     least for a finished run (15\,s) \\
 \code{detectors} & \code{dead\_time\_us}: the dead time the PMTs are judged at (10\,\us) \\
-\code{systematics} & \code{beam\_offset\_v} by region as \code{[offset, error]},
+\code{systematics} & \code{beam\_offset\_v} as \code{[offset, error]} (null: not measured),
     \code{zero\_drift\_v} (0.030), \code{wavemeter\_mhz} (10) \\
 \code{laser} & harmonic (4), geometry (anti-collinear) and charge (1) \\
 \code{cooler\_pv} & publish the cooler as EPICS PVs (\code{FURIOS:Cooler:}; needs pcaspy) \\

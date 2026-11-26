@@ -28,6 +28,20 @@ SAVE_AFTER_MS = 500                 # after the last change: one write for a bur
 log = logging.getLogger('oracle.gui')
 
 
+def _Choose(combo, text):
+    """``text`` chosen in ``combo``, or the item it explained after a colon
+    before its wording was shortened ('Manual: ask before each scan' is now
+    'Manual'); ValueError if neither is there."""
+    text = str(text)
+    index = combo.findText(text)
+    if index < 0:
+        index = next((i for i in range(combo.count())
+                      if text.startswith(f"{combo.itemText(i)}:")), -1)
+    if index < 0:
+        raise ValueError(f"{text!r} is not one of its choices")
+    combo.setCurrentIndex(index)
+
+
 def _Accessors(widget):
     """``(read, set, change signals)`` for an input: a widget, a Gate_Plot's
     gate, a tuple of radio buttons, or anything with ``Value()``,
@@ -44,8 +58,7 @@ def _Accessors(widget):
     if isinstance(widget, QAbstractButton):
         return widget.isChecked, lambda v: widget.setChecked(bool(v)), [widget.toggled]
     if isinstance(widget, QComboBox):
-        return (widget.currentText, lambda v: widget.setCurrentText(str(v)),
-                [widget.currentTextChanged])
+        return widget.currentText, lambda v: _Choose(widget, v), [widget.currentTextChanged]
     if isinstance(widget, QLineEdit):
         return widget.text, lambda v: widget.setText(str(v)), [widget.textChanged]
     if isinstance(widget, QTextEdit):
