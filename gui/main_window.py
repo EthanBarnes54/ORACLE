@@ -1,7 +1,7 @@
 """ORACLE's main window and entry point.
 
 Date:    2026-11-10
-Version: 0.6.0
+Version: 0.6.1
 Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 The old DAQ's window (Scan, Scan Calibration, Time graphs) with Hardware
@@ -18,7 +18,7 @@ one instance per user, the theme and the rack, closing all if any fails.
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
 """
 
-__version__ = '0.6.0'
+__version__ = '0.6.1'
 
 import contextlib
 import ctypes
@@ -311,6 +311,9 @@ class Main_Window(QMainWindow):
     def _Build_Information(self):
         group = QGroupBox('Experiment information')
         grid = QGridLayout(group)
+        # rows of readouts, set close so the window keeps inside a 768 px screen
+        # whatever the system font (macOS's is the tallest)
+        grid.setVerticalSpacing(3)
         (self.Cooler_Label, self.Readback_Label, self.Wavenumber_Label,
          self.Run_Label, self.Round_Label, self.Mode_Label) = (QLabel() for _ in range(6))
         if os.path.isdir(self._Data_Dir):
@@ -334,7 +337,7 @@ class Main_Window(QMainWindow):
 
     def _Build_Thresholds(self, grid, column):
         """The tagger's thresholds in ``grid`` from ``column``, set off by a rule:
-        the trigger's, then each channel's above its name. Each is put to the
+        the trigger's, then each channel's, in one row under their names. Each is put to the
         card as it is entered (:meth:`_Set_Tagger_Levels`)."""
         low, high = timetagger.LEVEL_RANGE_V
         span = f"{low:+.2f} to {high:+.2f} V".replace('-', '−')
@@ -359,14 +362,19 @@ class Main_Window(QMainWindow):
         rule = QFrame(frameShape=QFrame.Shape.VLine, frameShadow=QFrame.Shadow.Plain)
         rule.setStyleSheet(f"color: {theme.TOKENS['border_soft']};")
         grid.addWidget(rule, 0, column, 3, 1)
-        grid.addWidget(QLabel('Tagger trigger:'), 0, column + 1)
-        grid.addWidget(self.Trigger_Level_Box, 0, column + 2)
-        grid.addWidget(QLabel('PMT thresholds:'), 1, column + 1)
-        for i, level_box in enumerate(self.Level_Boxes):
-            caption = QLabel(f"Channel {i + 1}", alignment=Qt.AlignmentFlag.AlignHCenter)
+        # One row of boxes, on the Shown row, under captions on the label rows
+        # above: a box is taller than a label by a margin that grows with the
+        # system font (more on macOS), so a second row of boxes would cost the
+        # window that margin again and push it off a 768 px screen.
+        grid.addWidget(QLabel('Tagger thresholds:'), 0, column + 1, 1, 5)
+        boxes = (('Trigger', self.Trigger_Level_Box),
+                 *((f"Channel {i + 1}", level_box)
+                   for i, level_box in enumerate(self.Level_Boxes)))
+        for i, (text, level_box) in enumerate(boxes):
+            caption = QLabel(text, alignment=Qt.AlignmentFlag.AlignHCenter)
             caption.setStyleSheet(f"color: {theme.TOKENS['text_muted']};")
-            grid.addWidget(level_box, 1, column + 2 + i)
-            grid.addWidget(caption, 2, column + 2 + i)
+            grid.addWidget(caption, 1, column + 1 + i)
+            grid.addWidget(level_box, 2, column + 1 + i)
 
     def _Show_Tagger_Levels(self):
         """The threshold boxes as the card has them."""
