@@ -23,7 +23,9 @@ Key & Meaning (default) \\
     (\code{model}, \code{serial}, \code{ratio}, \code{ppm}; ratios 1000 and 10000) and the
     \code{amplifier}; recorded with every run \\
 \code{instruments} & VISA resources of both meters, the MCC board (\code{dac\_board}), the
-    tagger driver's folder and thresholds, \code{hv\_limit\_v} (4000, the most allowed) and
+    tagger driver's folder, \code{tagger\_trigger\_level} (+1.18\,V) and
+    \code{tagger\_levels} (written from the window's threshold boxes; $-1.32$ to $+1.18$\,V,
+    refused at start-up otherwise), \code{hv\_limit\_v} (4000, the most allowed) and
     \code{settle\_gate\_bit} (the MCC line gating the tagger; empty: not wired) \\
 \code{dac\_correction} & a measured DAC correction (identity), written by \app{Use as DAC
     correction} \\

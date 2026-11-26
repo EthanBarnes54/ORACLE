@@ -5,6 +5,7 @@ in sys.modules by recording stubs, as the old DAQ's digital twin did, so
 each driver is checked against the calls the rack's libraries expect.
 """
 
+import re
 import sys
 import time
 import types
@@ -224,7 +225,7 @@ class Card_Stub():
 
 def test_Tagger_Configures_Each_Input_And_Reads_Microseconds(monkeypatch):
     monkeypatch.setitem(sys.modules, 'timetagger4', types.SimpleNamespace(TimeTagger=Card_Stub))
-    tagger = timetagger.Time_Tagger([-0.2, 0.1], 2.5)
+    tagger = timetagger.Time_Tagger([-0.2, 0.1], 1.18)
     tagger.Configure(10.0, 210.0)
     tagger.Start()
     options = Card_Stub.Made[-1].Options
@@ -243,7 +244,7 @@ def _Tagger_With(monkeypatch, replies, version):
     card = type('Card', (Card_Stub,), {})
     monkeypatch.setitem(sys.modules, 'timetagger4',
                         types.SimpleNamespace(TimeTagger=card, ORACLE_WRAPPER=version))
-    tagger = timetagger.Time_Tagger([-0.2, 0.1], 2.5)
+    tagger = timetagger.Time_Tagger([-0.2, 0.1], 1.18)
     tagger.Start()
     card.Made[-1].Replies = list(replies)
     return tagger
@@ -271,7 +272,7 @@ def test_A_Read_Says_How_Many_Triggers_It_Holds_Empty_Ones_Too(monkeypatch):
 
 def test_The_Tagger_Window_Stays_Inside_The_Timestamp_Range(monkeypatch):
     monkeypatch.setitem(sys.modules, 'timetagger4', types.SimpleNamespace(TimeTagger=Card_Stub))
-    tagger = timetagger.Time_Tagger([-0.2, 0.1], 2.5)
+    tagger = timetagger.Time_Tagger([-0.2, 0.1], 1.18)
     with pytest.raises(ValueError, match="8388.6 us timestamp range"):
         tagger.Configure(0.0, 9000.0)
     with pytest.raises(ValueError, match="does not fit"):
@@ -282,16 +283,54 @@ def test_The_Old_Wrappers_Edge_Fault_Is_Said_At_Start_Up(monkeypatch):
     rack_levels = [-0.2, -0.6, 0.1, 0.1]
     old = types.SimpleNamespace(TimeTagger=Card_Stub)
     monkeypatch.setitem(sys.modules, 'timetagger4', old)
-    edges, unmarked = timetagger.Time_Tagger(rack_levels, 2.5).Warnings
+    edges, unmarked = timetagger.Time_Tagger(rack_levels, 1.18).Warnings
     assert "input 3 and 4 on input 2's falling edge" in edges
     assert unmarked == timetagger.Unmarked()
     first = types.SimpleNamespace(TimeTagger=Card_Stub, ORACLE_WRAPPER=1)
     monkeypatch.setitem(sys.modules, 'timetagger4', first)
-    assert timetagger.Time_Tagger(rack_levels, 2.5).Warnings == [timetagger.Unmarked()]
+    assert timetagger.Time_Tagger(rack_levels, 1.18).Warnings == [timetagger.Unmarked()]
     corrected = types.SimpleNamespace(TimeTagger=Card_Stub, ORACLE_WRAPPER=2)
     monkeypatch.setitem(sys.modules, 'timetagger4', corrected)
-    assert timetagger.Time_Tagger(rack_levels, 2.5).Warnings == []
+    assert timetagger.Time_Tagger(rack_levels, 1.18).Warnings == []
     assert timetagger.Edge_Fault([-0.2, -0.6, -0.1, -0.3], False) is None
+
+
+def test_Every_Threshold_Is_Held_To_The_Cards_Range():
+    """What driver 1.13 refuses (the old DAQ's 2.5 V trigger among them) is
+    refused before the card is asked, with which threshold and why."""
+    low, high = timetagger.LEVEL_RANGE_V
+    timetagger.Check_Levels([low, -0.2, 0.4, high], high)
+    for levels, trigger, why in (([0.4] * 4, 2.5, "trigger threshold of +2.50 V is outside"),
+                                 ([0.4, -1.5, 0.4, 0.4], 1.18, "input 2 threshold of -1.50 V"),
+                                 ([0.4, 0.4, 0.0, 0.4], 1.18, "input 3 threshold is 0 V"),
+                                 ([0.4] * 4, '1.18', "trigger threshold is '1.18', not a"),
+                                 ([True, 0.4, 0.4, 0.4], 1.18, "input 1 threshold is True")):
+        with pytest.raises(ValueError, match=re.escape(why)):
+            timetagger.Check_Levels(levels, trigger)
+
+
+def test_New_Thresholds_Reopen_The_Card_And_One_It_Refuses_Keeps_The_Last(monkeypatch):
+    class Refusing_Card(Card_Stub):
+        def __init__(self, **options):
+            if options['channel_0_level'] == -1.0:
+                raise RuntimeError("The TimeTagger4 could not be configured: stub refusal")
+            super().__init__(**options)
+
+    monkeypatch.setitem(sys.modules, 'timetagger4',
+                        types.SimpleNamespace(TimeTagger=Refusing_Card, ORACLE_WRAPPER=2))
+    tagger = timetagger.Time_Tagger([-0.2, 0.1], 1.18)
+    tagger.Set_Levels([0.4, 0.4], 1.0)
+    options = Refusing_Card.Made[-1].Options
+    assert (options['trigger_level'], options['channel_0_level']) == (1.0, 0.4)
+    assert options['channel_0_rising'] is True
+    with pytest.raises(RuntimeError, match="stub refusal"):
+        tagger.Set_Levels([-1.0, 0.4], 1.0)
+    # the card is opened again with the thresholds in force, and starts with them
+    tagger.Start()
+    assert Refusing_Card.Made[-1].Options['channel_0_level'] == 0.4
+    with pytest.raises(ValueError, match="3 input thresholds were given for the tagger's 2"):
+        tagger.Set_Levels([0.4] * 3, 1.0)
+    tagger.Stop()
 
 
 class Ul_Error(Exception):

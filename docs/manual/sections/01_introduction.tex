@@ -32,8 +32,9 @@ cannot slip. Nothing is cut: what deserves a look is flagged, and the operator d
 
 \paragraph{Status.}
 \oracle{} runs end to end on its simulated rack, which imitates the rack the bench tool
-measured in October 2026. It has not yet driven the beamline: its drivers follow code that
-has run on the rack but are tested against stand-ins for the vendor libraries.
+measured in October 2026. On the beamline PC it opens the real rack (26 November 2026: both
+meters, the USB-231, the PulseBlaster and the corrected tagger wrapper), but it has not yet
+taken a run there; its suite tests the drivers against stand-ins for the vendor libraries.
 
 \paragraph{Scope.}
 This is a user manual. The code (\code{cls\_acquisition/}, \code{gui/}) documents itself

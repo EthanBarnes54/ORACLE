@@ -6,7 +6,8 @@ Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 
 ``settings/settings.yaml`` (or ``ORACLE_SETTINGS_PATH``) holds what was
 set, :data:`DEFAULTS` the rest; the window's inputs live beside it in
-``inputs.yaml``. :func:`Update` rewrites only its keys, on a fresh read. A
+``inputs.yaml``. :func:`Update` rewrites only its keys, on a fresh read,
+and :func:`Update_Section` only its keys within one section. A
 file that is not a YAML mapping raises Settings_Error with its line (on
 Windows, often a quoted folder's backslashes). ``hardware`` holds what the
 rack cannot say (dividers, amplifier), recorded with every run, as is
@@ -60,8 +61,12 @@ DEFAULTS = {
         # the loop discards settling bunches in software instead
         'settle_gate_bit': None,
         'tagger_driver': '',        # folder holding timetagger4 and its DLLs
-        'tagger_trigger_level': 2.5,
-        # threshold per tagger input in volts; a negative one is a falling edge
+        # the trigger input's threshold, for the PulseBlaster's TTL: the top of the
+        # -1.32 to +1.18 V the card takes. The old DAQ asked for 2.5 V, which driver
+        # 1.13 refuses and the old wrapper never said; set from the window
+        'tagger_trigger_level': 1.18,
+        # threshold per tagger input in volts; a negative one is a falling edge.
+        # Set from the window (Experiment information), which saves them here
         'tagger_levels': [-0.2, -0.6, 0.1, 0.1],
         # the inputs with a detector wired to them; Scan Performance reports one
         # that records nothing as a possible fault
@@ -189,14 +194,26 @@ def Load():
     return _Merged(DEFAULTS, _Read())
 
 
-def Update(**values):
-    """Set top-level keys in the settings file, leaving the rest as it is."""
-    stored = _Read()
-    stored.update(values)
+def _Write(stored):
     path = Settings_Path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w', encoding='utf-8') as fh:
         yaml.safe_dump(stored, fh, default_flow_style=False, sort_keys=False)
+
+
+def Update(**values):
+    """Set top-level keys in the settings file, leaving the rest as it is."""
+    stored = _Read()
+    stored.update(values)
+    _Write(stored)
+
+
+def Update_Section(section, **values):
+    """Set keys within one ``section`` of the settings file (``instruments``,
+    say), leaving its other keys and the rest of the file as they are."""
+    stored = _Read()
+    stored[section] = {**(stored.get(section) or {}), **values}
+    _Write(stored)
 
 
 def Commit():

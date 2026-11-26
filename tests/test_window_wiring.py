@@ -382,6 +382,39 @@ def test_The_Experiment_Name_Is_Kept_In_The_Settings(qapp, window):
     assert settings.Load()['experiment'] == 'IS700'
 
 
+def test_The_Tagger_Thresholds_Are_Set_Saved_Recorded_And_Locked_While_Anything_Runs(
+        qapp, window):
+    """The boxes beside the readings put each threshold to the card and into
+    the settings as it is entered; a run records those in force; nothing
+    changes while anything runs; and one the card would refuse is refused,
+    its box put back to the threshold in force."""
+    boxes = (window.Trigger_Level_Box, *window.Level_Boxes)
+    instruments = settings.DEFAULTS['instruments']
+    assert [box.value() for box in boxes] == [instruments['tagger_trigger_level'],
+                                              *instruments['tagger_levels']]
+    window.Trigger_Level_Box.setValue(1.0)
+    for box in window.Level_Boxes:
+        box.setValue(0.4)
+    window.Level_Boxes[-1].editingFinished.emit()
+    in_force = {'Inputs': [0.4] * 4, 'Trigger': 1.0}
+    assert window._Tagger_Levels == in_force
+    saved = settings.Load()['instruments']
+    assert (saved['tagger_levels'], saved['tagger_trigger_level']) == ([0.4] * 4, 1.0)
+    _Scan(qapp, window)
+    assert not any(box.isEnabled() for box in boxes)
+    _Finished(qapp, window)
+    assert Pump(qapp, lambda: all(box.isEnabled() for box in boxes))
+    [path] = Run_Files(window)
+    header, _, _ = run_file.Read(path)
+    assert header[run_file.ORACLE_KEY]['TaggerLevels'] == in_force
+    window.Level_Boxes[2].setValue(0.0)
+    window.Level_Boxes[2].editingFinished.emit()
+    title, text = window.Dialogs[-1]
+    assert title == 'Thresholds not changed' and "input 3 threshold is 0 V" in text
+    assert window.Level_Boxes[2].value() == 0.4 and window._Tagger_Levels == in_force
+    assert settings.Load()['instruments']['tagger_levels'] == [0.4] * 4
+
+
 def test_The_Folders_Open_And_A_Missing_Simulated_One_Is_Made(qapp, window, monkeypatch):
     opened = []
     monkeypatch.setattr(main_window.QDesktopServices, 'openUrl',

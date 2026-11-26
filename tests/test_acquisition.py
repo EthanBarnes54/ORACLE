@@ -60,6 +60,20 @@ def test_Nothing_Starts_While_Something_Else_Runs(loop):
     assert loop.Send('Stop_Triggering')[0]
 
 
+def test_The_Tagger_Thresholds_Change_Only_While_Nothing_Runs(loop):
+    assert loop.Send('Set_Levels', levels=[0.4] * 4, trigger_level=1.18) == (
+        True, {'Inputs': [0.4] * 4, 'Trigger': 1.18})
+    assert loop.Tagger.Levels == ([0.4] * 4, 1.18)
+    assert loop.Send('Start_Triggering', timing=TIMING)[0]
+    ok, why = loop.Send('Set_Levels', levels=[-0.2] * 4, trigger_level=1.18)
+    assert not ok and why == ("Cannot change the tagger's thresholds while the triggers are "
+                              "running.")
+    assert loop.Send('Stop_Triggering')[0]
+    ok, why = loop.Send('Set_Levels', levels=[0.4] * 4, trigger_level=2.5)
+    assert not ok and "+2.50 V is outside" in why and why.endswith("were not changed.")
+    assert loop.Tagger.Levels == ([0.4] * 4, 1.18)
+
+
 def test_A_Count_Of_Triggers_And_Hits_Keeps_Nothing_And_Leaves_Them_Off(loop):
     """The health check's count: every trigger the period gives numbered and
     read, each input's hits counted, nothing sent as data, the triggers off."""

@@ -10,7 +10,9 @@ the plan and passes it through the gate before the header is written; a
 REJECT writes nothing. Data are appended as they arrive, and the file
 closes at the scan's end. Every tab shows one run, which opens as it was
 taken; the queue and every input survive a crash; a dead acquisition
-process closes the run on what it recorded. ``main()`` sets up the log,
+process closes the run on what it recorded. The tagger's thresholds sit
+beside the experiment information, put to the card as they are entered
+and locked while anything runs. ``main()`` sets up the log,
 one instance per user, the theme and the rack, closing all if any fails.
 
 Depends on: PySide6, pyqtgraph; cls_acquisition and the gui tabs.
@@ -48,7 +50,7 @@ from cls_acquisition import (calibration, diagnostics, hardware_calibration, hea
 from cls_acquisition.acquisition import Acquisition_Error, No_Trigger, Rack_Link
 from cls_acquisition.facility import Cooler_Pv_Server, Elog, Pv_Monitors
 from cls_acquisition.keep_awake import Keep_Awake
-from cls_acquisition.hardware import Changes, Rack, mcc_dac
+from cls_acquisition.hardware import Changes, Rack, mcc_dac, timetagger
 from cls_acquisition.scan_plan import Scan_Plan, Scan_Plan_Error
 from gui import plots, session_log, theme
 from gui.calibration_tab import Calibration_Tab
@@ -327,7 +329,70 @@ class Main_Window(QMainWindow):
         self.Shown_Label = QLabel('nothing yet', wordWrap=True)
         grid.addWidget(QLabel('Shown:'), 2, 0)
         grid.addWidget(self.Shown_Label, 2, 1, 1, 5)
+        self._Build_Thresholds(grid, 6)
         return group
+
+    def _Build_Thresholds(self, grid, column):
+        """The tagger's thresholds in ``grid`` from ``column``, set off by a rule:
+        the trigger's, then each channel's above its name. Each is put to the
+        card as it is entered (:meth:`_Set_Tagger_Levels`)."""
+        low, high = timetagger.LEVEL_RANGE_V
+        span = f"{low:+.2f} to {high:+.2f} V".replace('-', '−')
+
+        def box(value, tip):
+            spin = Spin(value, low, high, 2, ' V')
+            spin.setSingleStep(0.05)
+            spin.setToolTip(f"{tip} The card takes {span}. Put to it as entered, saved in "
+                            f"the settings and recorded with every run; locked while "
+                            f"anything runs.")
+            spin.editingFinished.connect(self._Set_Tagger_Levels)
+            return spin
+
+        self.Trigger_Level_Box = box(self._Tagger_Levels['Trigger'],
+                                     "The tagger's trigger input (Start on the card), which "
+                                     "opens a window on the rising edge of PulseBlaster "
+                                     "channel 18.")
+        self.Level_Boxes = [box(level, f"Channel {i + 1}'s threshold (input {'ABCD'[i]} on "
+                                       f"the card): a negative one counts falling edges, a "
+                                       f"positive one rising.")
+                            for i, level in enumerate(self._Tagger_Levels['Inputs'])]
+        rule = QFrame(frameShape=QFrame.Shape.VLine, frameShadow=QFrame.Shadow.Plain)
+        rule.setStyleSheet(f"color: {theme.TOKENS['border_soft']};")
+        grid.addWidget(rule, 0, column, 3, 1)
+        grid.addWidget(QLabel('Tagger trigger:'), 0, column + 1)
+        grid.addWidget(self.Trigger_Level_Box, 0, column + 2)
+        grid.addWidget(QLabel('PMT thresholds:'), 1, column + 1)
+        for i, level_box in enumerate(self.Level_Boxes):
+            caption = QLabel(f"Channel {i + 1}", alignment=Qt.AlignmentFlag.AlignHCenter)
+            caption.setStyleSheet(f"color: {theme.TOKENS['text_muted']};")
+            grid.addWidget(level_box, 1, column + 2 + i)
+            grid.addWidget(caption, 2, column + 2 + i)
+
+    def _Show_Tagger_Levels(self):
+        """The threshold boxes as the card has them."""
+        self.Trigger_Level_Box.setValue(self._Tagger_Levels['Trigger'])
+        for level_box, level in zip(self.Level_Boxes, self._Tagger_Levels['Inputs']):
+            level_box.setValue(level)
+
+    def _Set_Tagger_Levels(self):
+        """The thresholds as entered, put to the card and into the settings, and
+        recorded with the runs from now on. A refused one is said, the boxes back
+        at those in force first, as the dialog takes their focus."""
+        inputs = [round(level_box.value(), 2) for level_box in self.Level_Boxes]
+        trigger = round(self.Trigger_Level_Box.value(), 2)
+        if {'Inputs': inputs, 'Trigger': trigger} == self._Tagger_Levels:
+            return
+        try:
+            reply = self._Link.Send('Set_Levels', levels=inputs, trigger_level=trigger)
+        except Acquisition_Error as e:
+            self._Show_Tagger_Levels()
+            QMessageBox.warning(self, 'Thresholds not changed', str(e))
+            return
+        self._Tagger_Levels = {'Inputs': reply['Inputs'], 'Trigger': reply['Trigger']}
+        settings.Update_Section('instruments', tagger_levels=inputs,
+                                tagger_trigger_level=trigger)
+        log.info("Tagger thresholds: trigger %+.2f V; channels %s", trigger,
+                 ', '.join(f"{level:+.2f} V" for level in inputs))
 
     def _Build_Menus(self):
         file_menu = self.menuBar().addMenu('&File')
@@ -1556,6 +1621,9 @@ class Main_Window(QMainWindow):
         scan.Stop_Button.setEnabled(scanning)
         busy = calibrating or scanning
         self._Awake.Hold(busy or triggering or outputting)
+        # the card is reopened with new thresholds, so only while nothing uses it
+        for level_box in (self.Trigger_Level_Box, *self.Level_Boxes):
+            level_box.setEnabled(not (busy or triggering))
         hardware = self.Hardware
         for widget in (self.Calibration.Params_Group, self.Calibration.Control_Group,
                        self.Quick_Group, scan.New_Entry_Button, hardware.Ramp_Group,

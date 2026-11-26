@@ -27,6 +27,20 @@ def test_Update_Rewrites_Only_Its_Keys(monkeypatch, tmp_path):
     assert loaded['instruments'] == settings.DEFAULTS['instruments']
 
 
+def test_Update_Section_Rewrites_Only_Its_Keys_Within_It(monkeypatch, tmp_path):
+    path = tmp_path / 'settings.yaml'
+    monkeypatch.setenv('ORACLE_SETTINGS_PATH', str(path))
+    path.write_text(yaml.safe_dump({'rack': 'hardware',
+                                    'instruments': {'tagger_driver': 'C:/tagger'}}))
+    settings.Update_Section('instruments', tagger_levels=[0.4] * 4, tagger_trigger_level=1.0)
+    assert yaml.safe_load(path.read_text()) == {
+        'rack': 'hardware', 'instruments': {'tagger_driver': 'C:/tagger',
+                                            'tagger_levels': [0.4] * 4,
+                                            'tagger_trigger_level': 1.0}}
+    loaded = settings.Load()['instruments']
+    assert loaded['tagger_levels'] == [0.4] * 4 and loaded['dac_board'] == 1
+
+
 def test_Each_Kind_Of_Rack_Is_Kept_For_The_Next_Session_And_Its_Changes_Named(
         monkeypatch, tmp_path):
     """The last rack of each kind is kept beside the settings; what differs
@@ -189,6 +203,15 @@ def test_Pvs_With_No_Name_Are_Not_Asked_Of_Epics(monkeypatch):
     assert made == ['FURIOS:Wavemeter2:Wavenumber1', 'IGISOL:MagnetControl:Mass',
                     'IGISOL:MagnetControl:Target']
     assert pvs.Value('pmt_hv_1') is None
+
+
+def test_A_Tagger_Threshold_The_Card_Would_Refuse_Is_Refused_Before_Anything_Opens():
+    from cls_acquisition.hardware.timetagger import LEVEL_RANGE_V
+    assert settings.DEFAULTS['instruments']['tagger_trigger_level'] == LEVEL_RANGE_V[1]
+    for change in ({'tagger_trigger_level': 2.5}, {'tagger_levels': [-0.2, -0.6, 0.0, 0.1]}):
+        config = settings._Merged(settings.DEFAULTS, {'instruments': change})
+        with pytest.raises(ValueError, match="instruments: tagger_levels, tagger_trigger_level"):
+            Rack(config, multiprocessing.get_context('spawn'))
 
 
 def test_A_Limit_Above_The_Amplifiers_Rating_Is_Refused():

@@ -9,7 +9,7 @@ The data acquisition for collinear laser spectroscopy (CLS) at IGISOL: it steps 
 **Framework:** PySide6 (Qt6) + pyqtgraph + numpy + asdf
 **Manual:** [`docs/manual/manual.pdf`](docs/manual/manual.pdf)
 
-> **Status.** ORACLE runs end to end on its simulated rack, which imitates the rack the bench tool measured in October 2026. It has not yet driven the beamline: its drivers are tested against stand-ins for the vendor libraries.
+> **Status.** ORACLE runs end to end on its simulated rack, which imitates the rack the bench tool measured in October 2026. On the beamline PC it opens the real rack (26 November 2026: both meters, the USB-231, the PulseBlaster and the corrected tagger wrapper, built against cronologic's driver 1.13), but it has not yet taken a run there; its suite tests the drivers against stand-ins for the vendor libraries.
 
 ---
 
@@ -23,13 +23,13 @@ install.bat full       # Windows   (no argument: a menu; rack = full + instrumen
 uv run python gui.py   # or launch from the shortcut
 ```
 
-ORACLE starts on the simulated rack. On the beamline PC, install with `rack`, set `rack: hardware` in `settings/settings.yaml`, and build the corrected time-tagger wrapper in `cls_acquisition/hardware/timetagger4_wrapper/` (manual, §2).
+ORACLE starts on the simulated rack. On the beamline PC, install with `rack` (it needs git on the PATH, as py-elog comes from GitHub), set `rack: hardware` in `settings/settings.yaml`, and build the corrected time-tagger wrapper in `cls_acquisition/hardware/timetagger4_wrapper/` (manual, §2).
 
 ## Features
 
 | Tab | What it does |
 |---|---|
-| **Scan controls** | Up to seven ranges, Sawtooth, Triangle or Single scans, bunched or DC; settle-aware stepping; a scan queue that runs unattended and stops on any fault; live HFS, TOF and TOF-HFS plots with a gate; the ELOG panel; File ▸ Open run brings any run back as taken; the HV readback streamed beside a run, for diagnostics |
+| **Scan controls** | Up to seven ranges, Sawtooth, Triangle or Single scans, bunched or DC; settle-aware stepping; a scan queue that runs unattended and stops on any fault; live HFS, TOF and TOF-HFS plots with a gate; the ELOG panel; File ▸ Open run brings any run back as taken; the HV readback streamed beside a run, for diagnostics; the tagger's trigger and PMT thresholds beside the experiment information, put to the card as entered and recorded with every run |
 | **Scan Calibration** | Step-and-confirm calibration of every scan's own setpoints (a narrow scan's reached out to 400 V), judged by a gate before anything is written; each calibration fitted to the bench table, V = a + b·T, by cls_tools' own rule |
 | **Hardware Calibration** | The bench tool: settle time, linearity and DAC correction, cooler monitor, the bench table (measure, resume, check, compare), a health check for the start of a shift, and the rack's history: every run's calibration, cooler and PMTs on one timeline, marked where the rack changed |
 | **Scan Performance** | How the rack shaped each run's spectrum, check by check against counting statistics; afterpulsing per PMT; the run's systematic inputs; nothing is ever cut |
@@ -72,7 +72,7 @@ The suite (about 430 tests) runs headless on Windows and macOS, and CI runs it o
 
 ## Known limits
 
-Nothing has yet run on the beamline. The settle model should be measured there; the settle gate (an AND unit on PulseBlaster channel 18) is not wired; the DAC's 0.305 V codes leave up to ±0.15 V of rounding on a 1 V step; the corrected tagger wrapper is not yet built on the rack. See the manual's Appendix B.
+No run has yet been taken on the beamline. The settle model should be measured there; the settle gate (an AND unit on PulseBlaster channel 18) is not wired; the DAC's 0.305 V codes leave up to ±0.15 V of rounding on a 1 V step. See the manual's Appendix B.
 
 ## License
 

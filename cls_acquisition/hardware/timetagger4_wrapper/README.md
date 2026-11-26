@@ -26,4 +26,4 @@ instruments:
   tagger_driver: <this folder>
 ```
 
-The source compiles cleanly with `clang++ -std=c++17 -Wall -Wextra '-D__int64=long long'` against the driver's headers and pybind11; it has not yet been built or run on the rack.
+The source compiles cleanly with `clang++ -std=c++17 -Wall -Wextra '-D__int64=long long'` against the driver's headers and pybind11. On the rack PC it was built on 26 November 2026 with the Visual C++ 2022 build tools and Python 3.13 against cronologic's driver 1.13, and opens, configures and reads the card; that driver refuses a threshold outside -1.32 to +1.18 V, which the wrapper raises.

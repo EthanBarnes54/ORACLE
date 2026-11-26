@@ -92,3 +92,10 @@ from the voltage already there. Spin boxes and the slider take the mouse wheel o
 clicked, so scrolling past them never moves the platform. Below, the cooler and readback
 voltages, the wavenumber, run and scan numbers, the buncher mode, and \app{Shown}: the run
 every tab is showing, live, saved or opened.
+
+Beside them are the tagger's thresholds: \app{Tagger trigger} for its Start input (the
+PulseBlaster's channel 18, rising edge) and \app{PMT thresholds} for channels 1--4 (inputs
+A--D on the card; a negative threshold counts falling edges, a positive one rising). Each is
+put to the card as it is entered, saved in the settings and recorded with every run; the
+card takes $-1.32$ to $+1.18$\,V and a channel's threshold cannot be 0\,V. They are locked
+while a scan, the triggers or a calibration runs.

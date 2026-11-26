@@ -29,7 +29,7 @@ from cls_acquisition import triggers
 from cls_acquisition.calibration import DIVIDER
 from cls_acquisition.hardware.keysight import COOLER_DIVIDER, MAINS_HZ, OVERLOAD, RANGE_V
 from cls_acquisition.hardware.mcc_dac import AMPLIFIER_GAIN, CH_NEG, CH_POS
-from cls_acquisition.hardware.timetagger import BIN_US, MARK, Check_Window
+from cls_acquisition.hardware.timetagger import BIN_US, MARK, Check_Levels, Check_Window
 
 # the step response, fitted to the bench's 1 kV and 2 kV steps
 TAU_RISE_S = 0.00018
@@ -322,10 +322,15 @@ class Tagger():
         self._Reading = False
         self._Bunch = 0
         self.Gated = False
+        self.Levels = None              # (inputs, trigger) once set; the hits ignore them
 
     def Configure(self, start_us, stop_us):
         Check_Window(start_us, stop_us)
         self._Window = (start_us, stop_us)
+
+    def Set_Levels(self, levels, trigger_level):
+        Check_Levels(levels, trigger_level)
+        self.Levels = (list(levels), trigger_level)
 
     def Start(self):
         self._Packets = queue.Queue()

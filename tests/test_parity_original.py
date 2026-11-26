@@ -155,7 +155,10 @@ def test_The_Meters_Are_Set_Up_As_The_Old_Daq_Set_Them():
 def test_The_Tagger_Is_Opened_As_The_Old_Daq_Opened_It():
     """The keywords the compiled wrapper takes, and their values for the
     rack's thresholds and a 0 to 200 us window, exactly as the old Tagger
-    passed them."""
+    passed them; but for the trigger's threshold, a fault mended: the old
+    2.5 V is past the card's range, which driver 1.13 refuses and the old
+    wrapper never said, so ORACLE asks for the range's top."""
+    from cls_acquisition.hardware.timetagger import LEVEL_RANGE_V
     loop = _Tree(DAQ, 'util', 'collinear_loop.py')
     setup = _Node(loop, 'setup_tagger')
     levels = ast.literal_eval(next(node.value for node in ast.walk(setup)
@@ -163,13 +166,15 @@ def test_The_Tagger_Is_Opened_As_The_Old_Daq_Opened_It():
                                    and getattr(node.targets[0], 'id', '') == 'channels'))
     instruments = settings.DEFAULTS['instruments']
     assert [levels[i] for i in range(4)] == instruments['tagger_levels']
-    assert _Strings(setup, 'set_trigger_level') == [instruments['tagger_trigger_level']]
+    [old_trigger] = _Strings(setup, 'set_trigger_level')
+    assert old_trigger > LEVEL_RANGE_V[1] == instruments['tagger_trigger_level']
 
     old_kwargs = {}
     init_card = _Original(_Tree(DAQ, 'util', 'timetagger', 'tagger.py'), 'init_card',
                           tg=lambda **kwargs: old_kwargs.update(kwargs))
     init_card(types.SimpleNamespace(
-        trigger_level=2.5, trigger_type=True, channels=[True] * 4,
+        trigger_level=instruments['tagger_trigger_level'], trigger_type=True,
+        channels=[True] * 4,
         levels=[levels[i] for i in range(4)], type=[levels[i] > 0 for i in range(4)],
         starts=[0] * 4, stops=[200 * 2000] * 4, card=None))
 

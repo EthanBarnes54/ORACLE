@@ -143,7 +143,7 @@ def test_Elsewhere_Nothing_Is_Asked():
     ('spinapi', lambda: __import__('cls_acquisition.hardware.pulseblaster',
                                    fromlist=['x']).Pulse_Blaster(), "SpinCore's SpinAPI"),
     ('timetagger4', lambda: __import__('cls_acquisition.hardware.timetagger',
-                                       fromlist=['x']).Time_Tagger([0.1] * 4, 2.5),
+                                       fromlist=['x']).Time_Tagger([0.1] * 4, 1.18),
      "it is a Windows module"),
 ])
 def test_A_Library_This_System_Cannot_Load_Is_Named_With_The_Fix(monkeypatch, module,

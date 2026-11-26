@@ -10,7 +10,10 @@ None if none came in time. The old DAQ's wrapper has four faults (inputs 3
 and 4 take input 2's edge, hit flags go unread, a failed open is only
 printed, no trigger is marked, which this module rebuilds); the corrected
 wrapper (timetagger4_wrapper, ORACLE_WRAPPER 2) mends all four. Each run
-records its wrapper (:attr:`Time_Tagger.Identity`).
+records its wrapper (:attr:`Time_Tagger.Identity`). Every threshold is
+held to the card's range (:func:`Check_Levels`), which the old DAQ's
+2.5 V trigger was past: driver 1.13 refuses it, and the old wrapper never
+said so.
 
 Depends on: numpy; timetagger4, from the settings' folder
 (instruments: tagger_driver) or the import path.
@@ -30,6 +33,9 @@ TIMESTAMP_BITS = 24                 # a hit's timestamp; past it the card marks 
 MAX_WINDOW_US = (2 ** TIMESTAMP_BITS - 1) * BIN_US
 POLL_S = 0.00005                    # between polls of the card while waiting
 WINDOW_US = (0.0, 5000.0)           # until Configure says otherwise
+# the thresholds (dc_offset) the card's inputs take, as cronologic's driver 1.13
+# refuses anything else; the trigger's TTL sits at the top
+LEVEL_RANGE_V = (-1.32, 1.18)
 
 log = logging.getLogger('oracle.tagger')
 
@@ -40,6 +46,25 @@ def Check_Window(start_us, stop_us):
         raise ValueError(f"The tagger's window from {start_us:g} to {stop_us:g} us does not "
                          f"fit its {MAX_WINDOW_US:.1f} us timestamp range; past it the card "
                          f"marks rollovers the wrapper would record as hits.")
+
+
+def Check_Levels(levels, trigger_level):
+    """Raises ValueError unless the trigger's threshold and each input's are
+    numbers inside the card's range; an input's must not be 0 V, which has no
+    edge (a negative one times falling edges, a positive one rising)."""
+    low, high = LEVEL_RANGE_V
+    for name, level, signed in (('trigger', trigger_level, False),
+                                *((f"input {i}", level, True)
+                                  for i, level in enumerate(levels, start=1))):
+        if isinstance(level, bool) or not isinstance(level, (int, float)):
+            raise ValueError(f"The tagger's {name} threshold is {level!r}, not a number of "
+                             f"volts.")
+        if not low <= level <= high:
+            raise ValueError(f"The tagger's {name} threshold of {level:+.2f} V is outside the "
+                             f"{low:+.2f} to {high:+.2f} V its inputs take.")
+        if signed and level == 0:
+            raise ValueError(f"The tagger's {name} threshold is 0 V, which picks no edge: "
+                             f"give it the sign of the input's pulses.")
 
 
 def Edge_Fault(levels, corrected):
@@ -76,6 +101,7 @@ def Mark(rows, last):
 class Time_Tagger():
 
     def __init__(self, levels, trigger_level, driver_dir=''):
+        Check_Levels(levels, trigger_level)
         if driver_dir:
             sys.path.insert(0, driver_dir)
             if hasattr(os, 'add_dll_directory'):
@@ -98,17 +124,37 @@ class Time_Tagger():
         version = getattr(timetagger4, 'ORACLE_WRAPPER', 0)
         self.Identity = {'Wrapper': version, 'Serial': None}
         self._Marked = version >= MARKED_WRAPPER
-        fault = Edge_Fault(self._Levels, bool(version))
-        self.Warnings = [fault] if fault else []
-        if not self._Marked:
-            self.Warnings.append(Unmarked())
+        self.Warnings = self._Wrapper_Warnings()
         for warning in self.Warnings:
             log.warning("%s", warning)
         self._Open()                    # fails now, at start-up, if the card is absent
 
+    def _Wrapper_Warnings(self):
+        """What the loaded wrapper gets wrong with these thresholds."""
+        fault = Edge_Fault(self._Levels, bool(self.Identity['Wrapper']))
+        return ([fault] if fault else []) + ([] if self._Marked else [Unmarked()])
+
     def Configure(self, start_us, stop_us):
         Check_Window(start_us, stop_us)
         self._Window = (start_us, stop_us)
+
+    def Set_Levels(self, levels, trigger_level):
+        """The thresholds the card is opened with from now on, put to it at
+        once, so one it refuses is refused here and the last kept. Raises
+        ValueError for a threshold outside its range or a change of inputs."""
+        Check_Levels(levels, trigger_level)
+        if len(levels) != len(self._Levels):
+            raise ValueError(f"{len(levels)} input thresholds were given for the tagger's "
+                             f"{len(self._Levels)} inputs.")
+        kept = self._Levels, self._Trigger_Level
+        self._Levels, self._Trigger_Level = list(levels), trigger_level
+        try:
+            self._Open()
+        except Exception:
+            self._Levels, self._Trigger_Level = kept
+            self._Open()
+            raise
+        self.Warnings = self._Wrapper_Warnings()
 
     def _Open(self):
         self.Stop()

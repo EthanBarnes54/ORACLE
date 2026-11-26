@@ -131,6 +131,7 @@ class Acquisition_Loop():
             'Calibration_Step': self._Calibration_Step,
             'Stop_Calibration': self._Stop_Calibration,
             'Set_Correction': self._Set_Correction,
+            'Set_Levels': self._Set_Levels,
             'Shutdown': self._Shutdown,
         }
 
@@ -318,6 +319,16 @@ class Acquisition_Loop():
         self._Volts = None              # the next write goes through the new correction
         return {'Dac_Status': self._Dac.Calibration_Status(),
                 'Dac_Correction': self._Dac.Correction_Record()}
+
+    def _Set_Levels(self, levels, trigger_level):
+        """The tagger's thresholds, put to the card now so the next triggers
+        open it with them; only while nothing runs."""
+        self._Require_Idle("change the tagger's thresholds")
+        try:
+            self._Tagger.Set_Levels(levels, trigger_level)
+        except ValueError as e:
+            raise _Refused(f"{e} The thresholds were not changed.") from None
+        return {'Inputs': list(levels), 'Trigger': trigger_level}
 
     def _Shutdown(self):
         for flag in (self._State.Scanning, self._State.Triggering, self._State.Outputting,

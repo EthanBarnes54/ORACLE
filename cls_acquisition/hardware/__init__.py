@@ -7,10 +7,10 @@ Author:  Ethan Barnes <ethan.barnes@postgrad.manchester.ac.uk>
 The acquisition process owns the DAC, PulseBlaster and tagger
 (:func:`Open_Loop_Devices`); the GUI's owns the two meters
 (:meth:`Rack.Open_Meters`). Vendor libraries load only for the hardware
-rack, and bad limits, ratios, windows, dead times or NPLC are refused
-before anything opens. :meth:`Rack.Identity` and :meth:`Rack.Dividers`
-are recorded with every run and bench record; :func:`Changes` says what
-differs from the last session's rack.
+rack, and bad limits, ratios, windows, dead times, NPLC or tagger
+thresholds are refused before anything opens. :meth:`Rack.Identity` and
+:meth:`Rack.Dividers` are recorded with every run and bench record;
+:func:`Changes` says what differs from the last session's rack.
 
 Depends on: .keysight, .mcc_dac, .pulseblaster, .simulated, .timetagger,
 .visa_session.
@@ -53,6 +53,11 @@ class Rack():
                              f"line cycles; the 34465A takes "
                              f"{', '.join(f'{n:g}' for n in keysight.NPLC_CHOICES)} "
                              f"(calibration: nplc).")
+        try:
+            timetagger.Check_Levels(self._Instruments['tagger_levels'],
+                                    self._Instruments['tagger_trigger_level'])
+        except ValueError as e:
+            raise ValueError(f"{e} (instruments: tagger_levels, tagger_trigger_level)") from None
         self.Scan_Divider = float(self._Hardware['scan_divider']['ratio'])
         self.Cooler_Divider = float(self._Hardware['cooler_divider']['ratio'])
         self._Correction = settings['dac_correction'] or mcc_dac.CORRECTION
